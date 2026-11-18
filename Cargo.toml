@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tests/integration"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+todo = "deny"
+
+[workspace.dependencies]
+ofc-proto-sslvpn = { path = "crates/ofc-proto-sslvpn" }
+ofc-proto-ems = { path = "crates/ofc-proto-ems" }
+ofc-config = { path = "crates/ofc-config" }
+ofc-platform = { path = "crates/ofc-platform" }
+ofc-core = { path = "crates/ofc-core" }
+ofc-mock = { path = "crates/ofc-mock" }
+ofc-secret = { path = "crates/ofc-secret" }
+
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+zeroize = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+tokio = { version = "1", features = ["full"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pki-types = "1"
+webpki-roots = "0.26"
+rcgen = "0.13"
+sha2 = "0.10"
+hex = "0.4"
+bytes = "1"
+quick-xml = "0.37"
+base64 = "0.22"
+flate2 = "1"
+proptest = "1"
+clap = { version = "4", features = ["derive"] }
+rpassword = "7"
+serde_yaml = "0.9"
+url = "2"
+percent-encoding = "2"
+rand = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

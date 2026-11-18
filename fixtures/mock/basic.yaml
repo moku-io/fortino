@@ -1,0 +1,8 @@
+# Synthetic mock FortiGate scenario. No real deployment data.
+info:
+  encmethod: 0
+  salt: "0123abcd"
+  remoteauthtimeout: 600
+tls:
+  request_optional_client_cert: true
+  tls13_only: true
