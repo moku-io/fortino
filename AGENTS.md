@@ -24,6 +24,11 @@ Fortino is a independent, native reimplementation of FortiClient (macOS first): 
 
 - Modern, clean, native macOS: standard SwiftUI/AppKit controls and the Human Interface Guidelines, easy to use. Never copy FortiClient's interface; wire parity is for the protocol only. See [the design notes].
 
+## Portability
+
+- Linux will follow macOS. Keep platform code behind `NetPlatform`, `DeviceFactory` and `CredentialStore`; shared crates must not use macOS-only APIs ([the design notes]).
+- Saved passwords live in the user's secret store, handled by the CLI, never by the root daemon ([the design notes]).
+
 ## Code
 
 - Rust workspace, edition 2024. `unsafe` is denied; `unwrap`, `expect` and `panic` are denied outside tests (integration tests opt out with `#![allow(...)]`).
