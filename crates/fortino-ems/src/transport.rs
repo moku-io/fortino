@@ -1,8 +1,9 @@
 //! TLS to the EMS: one connection per exchange (`PERCON|0` in every reply); the reply is one
 //! line ending in CRLF.
 //!
-//! FortiClient also presents a client certificate built into its binary. Fortino has no such
-//! certificate and presents none; an EMS that insists on it is unsupported.
+//! FortiClient holds an EMS-issued per-device certificate (`data/ems_cert.pem`) for ZTNA; the
+//! EMS does not request a client certificate at its own TLS handshake,
+//! so Fortino presents none.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
