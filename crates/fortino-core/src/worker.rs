@@ -43,6 +43,10 @@ pub struct WorkerConfig {
     pub ip_policy: IpPolicy,
     /// EMS registration for this profile's EMS, if any.
     pub ems: Option<EmsIdentity>,
+    /// This device's `FCTUID` (platform UUID without dashes, upper-case). Sent on the tunnel
+    /// request only when `/remote/info` asks for it (`f` bit `0x80`), the same value the EMS
+    /// knows for this device.
+    pub fct_uid: Option<String>,
 }
 
 /// Worker progress stages.
@@ -405,6 +409,7 @@ mod tests {
             trust_id: "system".into(),
             ip_policy: IpPolicy::SplitIpv4,
             ems: None,
+            fct_uid: None,
         }
     }
 

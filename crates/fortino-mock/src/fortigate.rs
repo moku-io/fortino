@@ -101,6 +101,9 @@ pub struct TunnelCfg {
     pub split_dns: Vec<SplitDnsCfg>,
     /// Split routes as `a.b.c.d/m.m.m.m`.
     pub routes: Vec<String>,
+    /// Reject the tunnel request unless it carries `?uuid=<this value>` (the gateway's
+    /// `FortiClient UID flag`, `/remote/info` bit `0x80`).
+    pub require_uid: Option<String>,
 }
 
 /// One split-DNS rule.
@@ -126,6 +129,7 @@ impl Default for TunnelCfg {
                 servers: vec![Ipv4Addr::new(10, 0, 0, 54)],
             }],
             routes: vec!["10.0.0.0/255.0.0.0".into()],
+            require_uid: None,
         }
     }
 }
@@ -301,6 +305,11 @@ pub fn router(sc: &Scenario) -> Router {
         .route("GET", "/remote/sslvpn-tunnel", move |req| {
             if !admitted(&s4, &c4, req) {
                 return Response::status(403).into();
+            }
+            if let Some(want) = &c4.tunnel.require_uid {
+                if req.query != format!("uuid={want}") {
+                    return Response::status(403).into();
+                }
             }
             let t = c4.tunnel.clone();
             Reply::Takeover(Box::new(move |s, _| Box::pin(ppp_peer(s, t))))

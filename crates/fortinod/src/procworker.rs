@@ -164,6 +164,7 @@ impl ProcessWorker {
             ca_file: ca_file.display().to_string(),
             ems_serial: cfg.ems.as_ref().map(|e| e.serial.clone()),
             ems_tenant: cfg.ems.as_ref().map(|e| e.tenant.clone()),
+            fct_uid: cfg.fct_uid.clone(),
         };
         if !send(&mut wr, &start).await {
             reap(&mut child, pgid, false).await;

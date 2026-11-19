@@ -22,6 +22,11 @@ struct Rig {
 }
 
 async fn start(sc: Scenario) -> Rig {
+    start_with_uid(sc, None).await
+}
+
+/// Starts the worker with the endpoint UID the gateway may ask for (`0x80`).
+async fn start_with_uid(sc: Scenario, uid: Option<&str>) -> Rig {
     let mock = fortigate::start(&sc).await.unwrap();
     let devices = MemoryDevices::default();
     let w = NativeWorker {
@@ -42,6 +47,7 @@ async fn start(sc: Scenario) -> Rig {
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
+        fct_uid: uid.map(Into::into),
     });
     Rig {
         _mock: mock,
@@ -162,6 +168,42 @@ async fn connects_pings_and_disconnects() {
 }
 
 #[tokio::test]
+async fn tunnel_request_carries_the_endpoint_uid_when_asked() {
+    const UID: &str = "0A1B2C3D4E5F60718293A4B5C6D7E8F9";
+    let mut sc = scenario();
+    sc.info.flag = "3cdf".into(); // includes 0x80, the FortiClient UID
+    sc.tunnel.require_uid = Some(UID.into());
+    let mut r = start_with_uid(sc, Some("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9")).await;
+    let ev = drive(
+        &mut r.h,
+        &[
+            (ChallengeKind::Password, "hunter2"),
+            (ChallengeKind::Otp, "123456"),
+        ],
+    )
+    .await;
+    assert!(matches!(ev, WorkerEvent::Up(_)), "{ev:?}");
+
+    // The same gateway refuses a client that sends no UID.
+    let mut sc = scenario();
+    sc.info.flag = "3cdf".into();
+    sc.tunnel.require_uid = Some(UID.into());
+    let mut r = start_with_uid(sc, None).await;
+    let ev = drive(
+        &mut r.h,
+        &[
+            (ChallengeKind::Password, "hunter2"),
+            (ChallengeKind::Otp, "123456"),
+        ],
+    )
+    .await;
+    let WorkerEvent::Terminated(t) = ev else {
+        panic!("{ev:?}")
+    };
+    assert_eq!(t.code, Some(ErrorCode::UnsupportedPolicy));
+}
+
+#[tokio::test]
 async fn wrong_password_is_auth_denied() {
     let mut r = start(scenario()).await;
     let ev = drive(&mut r.h, &[(ChallengeKind::Password, "nope")]).await;
@@ -213,6 +255,7 @@ async fn untrusted_certificate_fails_before_credentials() {
         trust_id: "t".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
+        fct_uid: None,
     });
     loop {
         match next(&mut h).await {

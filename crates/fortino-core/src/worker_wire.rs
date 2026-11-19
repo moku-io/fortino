@@ -64,6 +64,9 @@ pub enum DaemonMsg {
         /// EMS tenant, with `ems_serial`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ems_tenant: Option<String>,
+        /// This device's `FCTUID`, sent to the gateway only if it asks (`0x80`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fct_uid: Option<String>,
     },
     /// Answer to a challenge. `value` is secret.
     Respond {

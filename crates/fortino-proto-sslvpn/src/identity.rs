@@ -154,10 +154,16 @@ pub fn build(
 }
 
 /// The request that switches the TLS connection into PPP tunnel mode.
-// UNVERIFIED: FortiClient also sends User-Agent and FSV_HOSTNAME and
-// may add `?uuid=<FCTUID>`. GATEWAY-2 accepted
-// Host + User-Agent + Cookie.
-pub fn tunnel_request(id: &ClientIdentity, cookie: &str) -> Request {
+///
+/// `fct_uid` is appended as `?uuid=` when the gateway's `/remote/info` sets `0x80`
+/// (`FortiClient UID flag`); FortiClient builds the same target (`GET /remote/sslvpn-tunnel?uuid=<uid>`).
+// UNVERIFIED: FortiClient also sends User-Agent and FSV_HOSTNAME;  GATEWAY-2 accepted Host + User-Agent + Cookie.
+pub fn tunnel_request(id: &ClientIdentity, cookie: &str, fct_uid: Option<&str>) -> Request {
+    let mut target = "/remote/sslvpn-tunnel".to_owned();
+    if let Some(uid) = fct_uid.and_then(uid_param) {
+        target.push_str("?uuid=");
+        target.push_str(&uid);
+    }
     let mut h = vec![("Host".to_owned(), TUNNEL_HOST.to_owned())];
     if id.profile == HeaderProfile::FortiClient74Mac {
         h.push(("User-Agent".into(), FORTICLIENT_MAC_UA.into()));
@@ -170,10 +176,20 @@ pub fn tunnel_request(id: &ClientIdentity, cookie: &str) -> Request {
     h.push(("Cookie".into(), format!("SVPNCOOKIE={}", sanitize(cookie))));
     Request {
         method: "GET",
-        target: "/remote/sslvpn-tunnel".into(),
+        target,
         headers: h,
         body: Zeroizing::default(),
     }
+}
+
+/// `?uuid=` takes the 32 hex digits of the endpoint UID in upper case; anything else is
+/// dropped rather than sent.
+fn uid_param(text: &str) -> Option<String> {
+    let hex: String = text.trim().chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(hex.to_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -237,7 +253,7 @@ mod tests {
             None,
         );
         assert_eq!(r.header("cookie").map(str::len), Some(cookie.len() + 11));
-        let t = tunnel_request(&id, &cookie);
+        let t = tunnel_request(&id, &cookie, None);
         assert_eq!(
             t.header("cookie"),
             Some(format!("SVPNCOOKIE={cookie}").as_str())
@@ -255,8 +271,28 @@ mod tests {
             None,
         );
         assert!(r.header("FSV_EMS_SN").is_none());
-        let t = tunnel_request(&ClientIdentity::forticlient("m"), "c");
+        let t = tunnel_request(&ClientIdentity::forticlient("m"), "c", None);
         assert_eq!(t.header("cookie"), Some("SVPNCOOKIE=c"));
         assert_eq!(t.header("host"), Some("sslvpn"));
+        assert_eq!(t.target, "/remote/sslvpn-tunnel");
+    }
+
+    #[test]
+    fn tunnel_request_carries_the_uid_when_asked() {
+        let id = ClientIdentity::forticlient("m");
+        let t = tunnel_request(&id, "c", Some("0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"));
+        assert_eq!(
+            t.target,
+            "/remote/sslvpn-tunnel?uuid=0A1B2C3D4E5F60718293A4B5C6D7E8F9"
+        );
+        // Anything that is not 32 hex digits is dropped, never sent.
+        assert_eq!(
+            tunnel_request(&id, "c", Some("not-a-uid")).target,
+            "/remote/sslvpn-tunnel"
+        );
+        assert_eq!(
+            tunnel_request(&id, "c", Some("0A1B2C3D\r\nX: 1")).target,
+            "/remote/sslvpn-tunnel"
+        );
     }
 }

@@ -131,6 +131,7 @@ async fn start_fc(
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
+        fct_uid: None,
     });
     Rig {
         _gw: gw,
@@ -393,4 +394,73 @@ async fn forticlient_taking_over_stops_the_keepalives() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(kas(&r), settled);
     stop(&mut r).await;
+}
+
+#[tokio::test]
+async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
+    let sc = Scenario {
+        users: vec![User {
+            username: "alice".into(),
+            password: "hunter2".into(),
+            otp: None,
+        }],
+        info: fortigate::InfoCfg {
+            flag: "80".into(),
+            ..Default::default()
+        },
+        tunnel: fortigate::TunnelCfg {
+            require_uid: Some("0A1B2C3D4E5F60718293A4B5C6D7E8F9".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let gw = fortigate::start(&sc).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let inner = NativeWorker {
+        trust: Trust::Roots(vec![gw.cert_der.clone()]),
+        identity: ClientIdentity::forticlient("mac-01"),
+        devices: Arc::new(MemoryDevices::default()),
+        connect_override: Some(gw.addr),
+    };
+    let workers = EmsWorkers::new(
+        Arc::new(inner),
+        Settings {
+            state_dir: dir.path().join("ems"),
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::new(),
+            settle: Duration::from_millis(50),
+            min_ka_interval: Duration::ZERO,
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    let h = workers.spawn(WorkerConfig {
+        attempt_id: "a-1".into(),
+        endpoint: Endpoint {
+            host: "sslvpn.test".parse().unwrap(),
+            port: gw.addr.port(),
+            realm: None,
+            ems: None,
+        },
+        username: Some("alice".into()),
+        trust_id: "test".into(),
+        ip_policy: IpPolicy::SplitIpv4,
+        ems: None,
+        fct_uid: None,
+    });
+    let ems = ems::start(&EmsScenario::default()).await.unwrap();
+    let mut r = Rig {
+        _gw: gw,
+        ems,
+        facts: Arc::new(Mutex::new(base_facts())),
+        h,
+        _dir: dir,
+        fc: Arc::new(Mutex::new(None)),
+    };
+    // The mock refuses the tunnel (403) unless `?uuid=` carries this device's UID.
+    let ev = until_up_or_end(&mut r).await;
+    assert!(matches!(ev, WorkerEvent::Up(_)), "{ev:?}");
+    stop(&mut r).await;
+    // No EMS was configured, so none was contacted.
+    assert!(r.ems.state.lock().unwrap().seen.is_empty());
 }

@@ -87,6 +87,9 @@ pub struct EmsWorkers {
     settings: Arc<Settings>,
     facts: FactsSource,
     forticlient: FortiClientSource,
+    /// This device's UID, for gateways that ask for it (`/remote/info` `0x80`) whether or not
+    /// the profile names an EMS, as FortiClient does.
+    device_uid: Option<String>,
     /// Connect EMS exchanges here instead of resolving (tests).
     pub connect_override: Option<std::net::SocketAddr>,
 }
@@ -102,12 +105,23 @@ impl std::fmt::Debug for EmsWorkers {
 
 impl EmsWorkers {
     /// Wraps `inner`.
+    /// Reads the device UID once, here: it does not change while the daemon runs.
     pub fn new(inner: Arc<dyn WorkerFactory>, settings: Settings, facts: FactsSource) -> Self {
+        let device_uid = settings
+            .uid
+            .clone()
+            .or_else(|| facts().and_then(|f| f.platform_uuid))
+            .and_then(|u| Uid::parse(&u).ok())
+            .map(|u| u.to_string());
+        if device_uid.is_none() {
+            tracing::warn!("no device UID; gateways that ask for one will not get it");
+        }
         Self {
             inner,
             settings: Arc::new(settings),
             facts,
             forticlient: crate::forticlient::source(None),
+            device_uid,
             connect_override: None,
         }
     }
@@ -214,8 +228,9 @@ impl Ctx {
         Ok(agent.probe(conn).await?.serial == *fc_serial)
     }
 
-    /// The identity to give the worker. `Err` ends the attempt.
-    async fn prepare(&self) -> Result<Prepared, Error> {
+    /// The identity to give the worker, and this device's UID for the gateway. `Err` ends the
+    /// attempt.
+    async fn prepare(&self) -> Result<(Prepared, Uid), Error> {
         let agent = self.agent().await?;
         let conn = self.connection()?;
         if let Some(fc) = self.forticlient_state().await {
@@ -225,15 +240,18 @@ impl Ctx {
                         ems = %self.server,
                         "FortiClient's EMS agent manages this device on this EMS; Fortino defers to it"
                     );
-                    return Ok(Prepared::Deferred(EmsIdentity {
-                        serial: serial.to_string(),
-                        tenant: fc
-                            .tenant
-                            .clone()
-                            .unwrap_or_else(fortino_proto_ems::ids::Tenant::on_premises)
-                            .as_str()
-                            .to_owned(),
-                    }));
+                    return Ok((
+                        Prepared::Deferred(EmsIdentity {
+                            serial: serial.to_string(),
+                            tenant: fc
+                                .tenant
+                                .clone()
+                                .unwrap_or_else(fortino_proto_ems::ids::Tenant::on_premises)
+                                .as_str()
+                                .to_owned(),
+                        }),
+                        agent.uid.clone(),
+                    ));
                 }
             }
         }
@@ -243,7 +261,7 @@ impl Ctx {
                     ems = %self.server,
                     "not registered to this EMS and registration is not enabled for it; connecting without EMS identity"
                 );
-                return Ok(Prepared::Agent(None));
+                return Ok((Prepared::Agent(None), agent.uid.clone()));
             }
             tracing::info!(ems = %self.server, "registering with EMS");
             let key = self.key()?;
@@ -251,12 +269,17 @@ impl Ctx {
                 .register(&conn, key.as_deref().map(String::as_str))
                 .await?;
         }
-        Ok(Prepared::Agent(agent.gateway_identity(&conn)?.map(
-            |(serial, tenant)| EmsIdentity {
-                serial: serial.to_string(),
-                tenant: tenant.as_str().to_owned(),
-            },
-        )))
+        Ok((
+            Prepared::Agent(
+                agent
+                    .gateway_identity(&conn)?
+                    .map(|(serial, tenant)| EmsIdentity {
+                        serial: serial.to_string(),
+                        tenant: tenant.as_str().to_owned(),
+                    }),
+            ),
+            agent.uid.clone(),
+        ))
     }
 
     /// Keepalives and host checks while the tunnel is up.
@@ -341,6 +364,9 @@ fn termination(e: &Error) -> Termination {
 
 impl WorkerFactory for EmsWorkers {
     fn spawn(&self, mut cfg: WorkerConfig) -> WorkerHandle {
+        if cfg.fct_uid.is_none() {
+            cfg.fct_uid = self.device_uid.clone();
+        }
         let Some(server) = cfg.endpoint.ems.clone() else {
             return self.inner.spawn(cfg);
         };
@@ -377,9 +403,13 @@ impl WorkerFactory for EmsWorkers {
             };
             let mut keep_alive = true;
             match prepared {
-                Ok(Prepared::Agent(identity)) => cfg.ems = identity,
-                Ok(Prepared::Deferred(identity)) => {
+                Ok((Prepared::Agent(identity), uid)) => {
+                    cfg.ems = identity;
+                    cfg.fct_uid = Some(uid.to_string());
+                }
+                Ok((Prepared::Deferred(identity), uid)) => {
                     cfg.ems = Some(identity);
+                    cfg.fct_uid = Some(uid.to_string());
                     keep_alive = false;
                 }
                 Err(e) => {

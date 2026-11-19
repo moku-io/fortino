@@ -113,6 +113,7 @@ async fn main() -> io::Result<()> {
         ca_file,
         ems_serial,
         ems_tenant,
+        fct_uid,
     } = &start
     else {
         return Err(io::Error::other("expected start"));
@@ -143,6 +144,7 @@ async fn main() -> io::Result<()> {
                 trust_id: String::new(),
                 ip_policy: IpPolicy::SplitIpv4,
                 ems: ems_identity(ems_serial.as_deref(), ems_tenant.as_deref()),
+                fct_uid: fct_uid.clone(),
             },
         ))
     })();

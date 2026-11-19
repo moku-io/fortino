@@ -109,6 +109,22 @@ pub(crate) struct Session {
     pub identity: ClientIdentity,
     pub cookie: Zeroizing<String>,
     pub settings: TunnelSettings,
+    /// `?uuid=` value for the tunnel request, only when `/remote/info` asks for it.
+    pub fct_uid: Option<String>,
+}
+
+/// The endpoint UID to send, if the gateway asked for it.
+fn uid_for_gateway(cfg: &WorkerConfig, wanted: bool) -> Option<String> {
+    if !wanted {
+        return None;
+    }
+    let uid = cfg.fct_uid.as_deref()?;
+    if uid.trim().chars().filter(|c| *c != '-').count() != 32 {
+        tracing::warn!("endpoint UID is not a UUID; not sent to the gateway");
+        return None;
+    }
+    tracing::debug!("tunnel request carries the endpoint UID (/remote/info 0x80)");
+    Some(uid.to_owned())
 }
 
 async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<(), Failure> {
@@ -135,6 +151,11 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
         r if r.status == 200 => info::parse(&r.text()).unwrap_or_default(),
         _ => ServerInfo::default(),
     };
+    tracing::info!(
+        fct_uid = info.wants_fct_uid(),
+        ems_sn = info.wants_ems_sn(),
+        "gateway info flags (0x80 endpoint UID, 0x100 EMS serial)"
+    );
     if info.encmethod.is_some_and(|m| m != 0) {
         return Err(Failure::Unsupported(
             "gateway encrypts credentials (encmethod)".into(),
@@ -318,6 +339,7 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
         identity,
         cookie: cookie.clone(),
         settings: TunnelSettings::default(),
+        fct_uid: uid_for_gateway(cfg, info.wants_fct_uid()),
     };
     if xml.status != 200 {
         let f = if xml.status == 403 && ems_required {

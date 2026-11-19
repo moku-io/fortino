@@ -431,6 +431,8 @@ impl Session {
             trust_id: profile.spec.trust_id.clone(),
             ip_policy: profile.spec.ip_policy,
             ems: None,
+            // Filled by the EMS workers once the device UID is known for this EMS.
+            fct_uid: None,
         });
         let wake = Arc::new(Notify::new());
         g.active = Some(Active {

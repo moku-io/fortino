@@ -4,6 +4,7 @@
 //! ```text
 //! fortino-sslvpn-probe <credentials-file> [--device memory|utun] [--ca FILE] [--pin SHA256] [--hold SECS]
 //! fortino-sslvpn-probe <credentials-file> --print-pin
+//! fortino-sslvpn-probe <credentials-file> --info [--pin SHA256]
 //! ```
 //!
 //! The credentials file has `key: value`
@@ -46,6 +47,13 @@ fn hostname() -> String {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "mac".into())
+}
+
+/// This device's UID (`FCTUID`), sent as `?uuid=` to a gateway that sets `/remote/info` `0x80`.
+fn device_uid() -> Option<String> {
+    fortino_platform::facts::collect()
+        .ok()
+        .and_then(|f| f.platform_uuid)
 }
 
 #[tokio::main]
@@ -414,6 +422,32 @@ async fn run() -> Result<(), String> {
         None => Trust::CaFile(ca.into()),
     };
 
+    if args.iter().any(|a| a == "--info") {
+        // Only the unauthenticated pre-flight: no credential is sent.
+        let mut gw = fortino_sslvpn::transport::Gateway::new(host_parsed.clone(), port, &trust)
+            .map_err(|e| e.message())?;
+        let req = fortino_proto_sslvpn::identity::build(
+            &ClientIdentity::forticlient(hostname()),
+            "GET",
+            "/remote/info",
+            &gw.host_header(),
+            &[],
+            None,
+        );
+        let r = gw.exchange(&req).await.map_err(|e| e.message())?;
+        println!("/remote/info status {}", r.status);
+        if r.status == 200 {
+            let i = fortino_proto_sslvpn::info::parse(&r.text()).unwrap_or_default();
+            println!(
+                "flags: endpoint UID (0x80) {}, EMS serial (0x100) {}, encmethod {:?}",
+                i.wants_fct_uid(),
+                i.wants_ems_sn(),
+                i.encmethod
+            );
+        }
+        return Ok(());
+    }
+
     let memory = MemoryDevices::default();
     let devices: Arc<dyn DeviceFactory> = match device.as_str() {
         "memory" => Arc::new(memory.clone()),
@@ -443,6 +477,7 @@ async fn run() -> Result<(), String> {
         trust_id: "probe".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
+        fct_uid: device_uid(),
     });
 
     let started = std::time::Instant::now();

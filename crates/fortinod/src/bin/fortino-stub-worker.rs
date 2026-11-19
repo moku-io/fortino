@@ -90,6 +90,7 @@ async fn main() -> io::Result<()> {
         trust_id: "stub".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
+        fct_uid: None,
     });
     let wire_attempt = if misbehave == "stale-attempt" {
         "someone-else".to_owned()

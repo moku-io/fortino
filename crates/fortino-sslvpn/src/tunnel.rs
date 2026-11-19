@@ -24,7 +24,7 @@ const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub(crate) async fn run(w: &NativeWorker, s: &mut Session, ctx: &mut Ctx) -> Result<(), Failure> {
     let mut tls = ctx.guard(s.gw.connect()).await?;
-    let req = identity::tunnel_request(&s.identity, &s.cookie);
+    let req = identity::tunnel_request(&s.identity, &s.cookie, s.fct_uid.as_deref());
     tls.write_all(&req.encode())
         .await
         .map_err(|e| Failure::Transport(format!("tunnel request: {e}")))?;
