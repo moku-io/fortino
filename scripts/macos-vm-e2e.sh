@@ -42,4 +42,4 @@ tart exec "$VM" sw_vers
 
 echo "==> running the full stack as root" >&2
 S="/Volumes/My Shared Files/fortino"
-tart exec "$VM" sudo /bin/bash "$S/vm-e2e-guest.sh" "$S"
+tart exec "$VM" sudo env PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/bash "$S/vm-e2e-guest.sh" "$S"

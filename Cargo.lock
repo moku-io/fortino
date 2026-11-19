@@ -399,6 +399,160 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
+name = "fortino-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "fortino-config",
+ "fortino-core",
+ "fortino-platform",
+ "fortino-secret",
+ "fortinod",
+ "nix 0.30.1",
+ "quick-xml",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "fortino-config"
+version = "0.1.0"
+dependencies = [
+ "quick-xml",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "unicode-normalization",
+ "uuid",
+]
+
+[[package]]
+name = "fortino-core"
+version = "0.1.0"
+dependencies = [
+ "fortino-config",
+ "fortino-platform",
+ "fortino-secret",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "fortino-integration"
+version = "0.1.0"
+
+[[package]]
+name = "fortino-mock"
+version = "0.1.0"
+dependencies = [
+ "fortino-proto-sslvpn",
+ "hex",
+ "rcgen",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_yaml",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+]
+
+[[package]]
+name = "fortino-platform"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "fortino-proto-ems"
+version = "0.1.0"
+
+[[package]]
+name = "fortino-proto-sslvpn"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "quick-xml",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
+name = "fortino-secret"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
+]
+
+[[package]]
+name = "fortino-sslvpn"
+version = "0.1.0"
+dependencies = [
+ "fortino-config",
+ "fortino-core",
+ "fortino-mock",
+ "fortino-platform",
+ "fortino-proto-sslvpn",
+ "fortino-secret",
+ "fortinod",
+ "rand 0.8.8",
+ "rustls",
+ "rustls-pki-types",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "tracing-subscriber",
+ "tun-rs",
+ "zeroize",
+]
+
+[[package]]
+name = "fortinod"
+version = "0.1.0"
+dependencies = [
+ "fortino-config",
+ "fortino-core",
+ "fortino-platform",
+ "fortino-secret",
+ "nix 0.30.1",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -771,160 +925,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "fortino-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "nix 0.30.1",
- "fortino-config",
- "fortino-core",
- "fortino-platform",
- "fortino-secret",
- "fortinod",
- "quick-xml",
- "rpassword",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
- "zeroize",
-]
-
-[[package]]
-name = "fortino-config"
-version = "0.1.0"
-dependencies = [
- "quick-xml",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "unicode-normalization",
- "uuid",
-]
-
-[[package]]
-name = "fortino-core"
-version = "0.1.0"
-dependencies = [
- "fortino-config",
- "fortino-platform",
- "fortino-secret",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "zeroize",
-]
-
-[[package]]
-name = "fortino-integration"
-version = "0.1.0"
-
-[[package]]
-name = "fortino-mock"
-version = "0.1.0"
-dependencies = [
- "hex",
- "fortino-proto-sslvpn",
- "rcgen",
- "rustls",
- "rustls-pki-types",
- "serde",
- "serde_yaml",
- "sha2",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tracing",
-]
-
-[[package]]
-name = "fortino-platform"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "fortino-proto-ems"
-version = "0.1.0"
-
-[[package]]
-name = "fortino-proto-sslvpn"
-version = "0.1.0"
-dependencies = [
- "proptest",
- "quick-xml",
- "thiserror",
- "zeroize",
-]
-
-[[package]]
-name = "fortino-secret"
-version = "0.1.0"
-dependencies = [
- "tracing",
- "tracing-subscriber",
- "zeroize",
-]
-
-[[package]]
-name = "fortino-sslvpn"
-version = "0.1.0"
-dependencies = [
- "fortino-config",
- "fortino-core",
- "fortino-mock",
- "fortino-platform",
- "fortino-proto-sslvpn",
- "fortino-secret",
- "fortinod",
- "rand 0.8.8",
- "rustls",
- "rustls-pki-types",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tracing",
- "tracing-subscriber",
- "tun-rs",
- "zeroize",
-]
-
-[[package]]
-name = "fortinod"
-version = "0.1.0"
-dependencies = [
- "nix 0.30.1",
- "fortino-config",
- "fortino-core",
- "fortino-platform",
- "fortino-secret",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "zeroize",
 ]
 
 [[package]]

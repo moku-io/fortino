@@ -232,7 +232,8 @@ async fn missing_executable_fails_cleanly() {
 #[test]
 fn executable_ownership_check() {
     // Test binaries are owned by the developer, not root.
-    let r = fortinod::procworker::check_executable(env!("CARGO_BIN_EXE_fortino-stub-worker").as_ref());
+    let r =
+        fortinod::procworker::check_executable(env!("CARGO_BIN_EXE_fortino-stub-worker").as_ref());
     if nix::unistd::getuid().is_root() {
         return;
     }

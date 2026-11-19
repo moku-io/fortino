@@ -49,5 +49,5 @@ done
 tart exec "$VM" sw_vers
 
 echo "==> running tests as root" >&2
-tart exec "$VM" sudo env FORTINO_VM_ROOT_TESTS=1 RUST_BACKTRACE=1 \
+tart exec "$VM" sudo env PATH=/usr/bin:/bin:/usr/sbin:/sbin FORTINO_VM_ROOT_TESTS=1 RUST_BACKTRACE=1 \
     "/Volumes/My Shared Files/fortino/macos_root" --test-threads=1 --nocapture "$@"

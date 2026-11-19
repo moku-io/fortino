@@ -11,7 +11,7 @@ check() { if eval "$2"; then echo "PASS  $1"; else echo "FAIL  $1"; fail=1; fi; 
 snapshot() {
     { netstat -rn -f inet | awk 'NR>4 && $3 !~ /[WL]/ && $2 !~ /^link#/ {print $1,$2,$3,$4}' | sort
       echo 'list State:/Network/Service/.*/DNS' | scutil
-      pfctl -s info 2>/dev/null | grep -E '^Status'
+      pfctl -s info 2>/dev/null | awk '/^Status:/ {print $1, $2}'
       pfctl -a com.apple/250.Fortino -s rules 2>/dev/null; } > "$1"
 }
 

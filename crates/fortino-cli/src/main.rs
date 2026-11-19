@@ -12,7 +12,9 @@ use std::process::ExitCode;
 use clap::{Args, Parser, Subcommand};
 use fortino_config::{EmsServer, Host, IpPolicy, Profile, ProfileSpec};
 use fortino_core::client::{Client, DEFAULT_SOCKET};
-use fortino_core::proto::{ChallengeKind, ConnectParams, Event, ProfileImportParams, State, Status};
+use fortino_core::proto::{
+    ChallengeKind, ConnectParams, Event, ProfileImportParams, State, Status,
+};
 use fortino_core::{ErrorCode, ProtoError};
 
 use crate::prompt::{SecretSource, TermGuard};

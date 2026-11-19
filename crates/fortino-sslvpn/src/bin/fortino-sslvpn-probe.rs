@@ -315,7 +315,8 @@ async fn run() -> Result<(), String> {
             .as_str(),
     );
     let otp = c.get("otp").map(|o| Secret::new(o.as_str()));
-    let host_parsed: fortino_config::Host = host.parse().map_err(|e| format!("gateway host: {e}"))?;
+    let host_parsed: fortino_config::Host =
+        host.parse().map_err(|e| format!("gateway host: {e}"))?;
 
     if args.iter().any(|a| a == "--print-pin") {
         let addr = tokio::net::lookup_host((host, port))

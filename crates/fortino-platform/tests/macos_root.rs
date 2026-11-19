@@ -113,8 +113,13 @@ fn pf_enabled() -> bool {
 }
 
 fn anchor_rules() -> String {
-    sh("pfctl", &["-a", PF_ANCHOR, "-s", "rules"])
-        .lines()
+    // A missing anchor makes pfctl fail ("DIOCGETRULES: Invalid argument"); an existing empty
+    // one prints nothing. Both mean "no rules".
+    let (ok, out) = run("pfctl", &["-a", PF_ANCHOR, "-s", "rules"], None);
+    if !ok || out.contains("DIOCGETRULES") {
+        return String::new();
+    }
+    out.lines()
         .filter(|l| !l.starts_with("No ALTQ") && !l.starts_with("ALTQ"))
         .collect::<Vec<_>>()
         .join("\n")
@@ -198,13 +203,6 @@ fn tunnel_changes() -> Vec<NetChange> {
             dest: "172.31.250.0/24".parse().unwrap(),
             via: RouteVia::Interface(IF_A.into()),
         }),
-        NetChange::SetDns {
-            ifname: IF_A.into(),
-            dns: DnsConfig {
-                servers: vec!["10.251.0.53".parse().unwrap()],
-                search_domains: vec!["corp.example".into()],
-            },
-        },
         NetChange::AddSplitDns {
             domain: "intra.example".into(),
             servers: vec!["10.251.0.54".parse().unwrap()],
@@ -228,9 +226,16 @@ fn check_applied() {
         "keys: {keys:?}"
     );
     let resolvers = sh("scutil", &["--dns"]);
-    assert!(resolvers.contains("10.251.0.53"), "{resolvers}");
     assert!(resolvers.contains("10.251.0.54"), "{resolvers}");
-    assert!(resolvers.contains("intra.example"), "{resolvers}");
+    assert!(
+        resolvers.contains("domain   : intra.example"),
+        "{resolvers}"
+    );
+    // The VPN domain must not leak into the default search list.
+    assert!(
+        !resolvers.contains("search domain[0] : intra.example"),
+        "{resolvers}"
+    );
 
     assert!(pf_enabled());
     let rules = anchor_rules();
@@ -281,6 +286,26 @@ fn crash_recovery_restores_everything() {
     assert_eq!(snapshot(), before);
     // A second recovery has nothing left to do.
     assert_eq!(j.recover().unwrap(), 0);
+}
+
+#[test]
+fn full_tunnel_dns_is_refused_without_changes() {
+    if !enabled() {
+        return;
+    }
+    let before = snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let mut j = Journaled::open(MacNet::system(), dir.path().join("j.json")).unwrap();
+    let r = j.apply(&NetChange::SetDns {
+        ifname: IF_A.into(),
+        dns: DnsConfig {
+            servers: vec!["10.251.0.53".parse().unwrap()],
+            search_domains: vec![],
+        },
+    });
+    assert!(r.is_err());
+    assert_eq!(j.pending(), 0);
+    assert_eq!(snapshot(), before);
 }
 
 #[test]

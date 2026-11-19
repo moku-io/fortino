@@ -228,6 +228,9 @@ pub fn scutil_set(
             "d.add SupplementalMatchDomains * {}\n",
             list(match_domains.to_vec())
         ));
+        // Without this, macOS also appends match domains to the default search list, so a
+        // bare name such as `wiki` would be tried as `wiki.<vpn domain>` (seen in the VM).
+        out.push_str("d.add SupplementalMatchDomainsNoSearch # 1\n");
     }
     if !search.is_empty() {
         out.push_str(&format!(
@@ -258,10 +261,15 @@ impl<R: Runner> NetPlatform for MacNet<R> {
     fn prepare(&mut self, change: &NetChange) -> Result<Undo> {
         Ok(match change {
             NetChange::AddRoute(r) => Undo::DelRoute(r.clone()),
-            NetChange::SetDns { ifname, .. } => Undo::RestoreDns {
-                ifname: ifname.clone(),
-                previous: dns_key("primary"),
-            },
+            // A dynamic-store DNS entry without match domains is ignored by macOS (verified in
+            // the VM), and scutil cannot express the empty match domain. Full-tunnel DNS needs
+            // the primary service's resolvers overridden and restored; until that exists it is
+            // refused here, before anything is journaled or changed.
+            NetChange::SetDns { .. } => {
+                return Err(PlatformError::Unsupported(
+                    "full-tunnel DNS is not implemented on macOS yet".into(),
+                ));
+            }
             NetChange::AddSplitDns { domain, .. } => Undo::DelSplitDns {
                 domain: domain.clone(),
                 previous: None,
@@ -280,16 +288,9 @@ impl<R: Runner> NetPlatform for MacNet<R> {
     fn apply(&mut self, change: &NetChange) -> Result<()> {
         match change {
             NetChange::AddRoute(r) => self.must(ROUTE, &route_add_args(r), None),
-            NetChange::SetDns { dns, .. } => {
-                // An empty supplemental match domain makes this the default resolver.
-                let script = scutil_set(
-                    &dns_key("primary"),
-                    &dns.servers,
-                    &[String::new()],
-                    &dns.search_domains,
-                );
-                self.must(SCUTIL, &[], Some(&script))
-            }
+            NetChange::SetDns { .. } => Err(PlatformError::Unsupported(
+                "full-tunnel DNS is not implemented on macOS yet".into(),
+            )),
             NetChange::AddSplitDns { domain, servers } => {
                 if !safe_token(domain) {
                     return Err(PlatformError::Other("invalid DNS domain".into()));
@@ -501,7 +502,7 @@ mod tests {
         assert_eq!(
             m.runner().calls,
             vec![
-                "/usr/sbin/scutil <<< d.init; d.add ServerAddresses * 10.0.0.53; d.add SupplementalMatchDomains * corp.example; set State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
+                "/usr/sbin/scutil <<< d.init; d.add ServerAddresses * 10.0.0.53; d.add SupplementalMatchDomains * corp.example; d.add SupplementalMatchDomainsNoSearch # 1; set State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
                 "/usr/sbin/scutil <<< remove State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
             ]
         );

@@ -290,7 +290,10 @@ impl Conn {
                 let _: Empty = parse_params(params)?;
                 let (store_revision, profiles) = s
                     .with_store(|st| {
-                        Ok::<_, fortino_config::StoreError>((st.store_revision(uid)?, st.list(uid)?))
+                        Ok::<_, fortino_config::StoreError>((
+                            st.store_revision(uid)?,
+                            st.list(uid)?,
+                        ))
                     })
                     .map_err(store_err)?;
                 to_value(ProfileListResult {
