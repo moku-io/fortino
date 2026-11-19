@@ -220,6 +220,12 @@ pub enum Undo {
     },
     /// Remove the IPv6 block.
     UnblockIpv6,
+    /// Remove the IPv6 block installed as a pf anchor; disable pf again if this change
+    /// enabled it.
+    UnblockIpv6Pf {
+        /// pf was disabled before the block and must be disabled again.
+        disable_pf: bool,
+    },
 }
 
 #[cfg(test)]

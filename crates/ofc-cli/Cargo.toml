@@ -7,6 +7,23 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+ofc-config.workspace = true
+ofc-core.workspace = true
+ofc-secret.workspace = true
+clap = { workspace = true, features = ["env"] }
+rpassword.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+uuid.workspace = true
+zeroize.workspace = true
+nix = { workspace = true, features = ["term"] }
+quick-xml.workspace = true
+
+[dev-dependencies]
+ofcd = { path = "../ofcd" }
+ofc-platform.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

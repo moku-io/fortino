@@ -1,0 +1,14 @@
+# Development daemon: fake worker and fake network, runs unprivileged from the repo root.
+#   cargo run -p ofcd -- --config fixtures/dev/ofcd-fake.toml
+# Then point clients at the socket:
+#   export OFCTL_SOCKET=$PWD/target/dev/ofcd.sock        # ofctl
+#   export OFC_SOCKET=$PWD/target/dev/ofcd.sock          # desktop app
+# Replace 501 with your UID (`id -u`).
+socket_path = "target/dev/ofcd.sock"
+state_dir = "target/dev/state"
+allowed_uids = [501]
+
+[fake]
+password = "hunter2"      # accepted password
+otp = "123456"            # required one-time code (remove the line for password-only)
+step_delay_ms = 300

@@ -7,6 +7,7 @@
 
 pub mod fake;
 pub mod journal;
+pub mod macos;
 mod types;
 
 use std::future::Future;
