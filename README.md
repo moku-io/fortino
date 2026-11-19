@@ -82,6 +82,6 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 
 Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. Fortino will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.
 
-Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port), [PassTunnel](https://sourceforge.net/app/vpn-enabler/mac/) and LivConnect (multi-protocol desktop wrappers around openfortivpn and OpenConnect).
+Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port) and LivConnect (a multi-protocol desktop wrapper around openfortivpn and OpenConnect).
 
 Project code is licensed under [GPL-3.0-or-later](LICENSE).
