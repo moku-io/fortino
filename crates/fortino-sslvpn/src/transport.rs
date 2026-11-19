@@ -166,12 +166,37 @@ pub async fn fetch_leaf(addr: SocketAddr, name: &Host) -> Result<Vec<u8>, Failur
     got.ok_or_else(|| Failure::Transport("no certificate received".into()))
 }
 
-fn server_name(host: &Host) -> Result<ServerName<'static>, Failure> {
+/// The TLS server name for a configured host.
+pub fn server_name(host: &Host) -> Result<ServerName<'static>, Failure> {
     match host {
         Host::Dns(n) => ServerName::try_from(n.clone())
             .map_err(|_| Failure::Trust("invalid gateway name".into())),
         Host::Ipv4(ip) => Ok(ServerName::IpAddress(IpAddr::V4(*ip).into())),
     }
+}
+
+/// A TLS client configuration for `trust`. Also used for the EMS connection.
+pub fn client_config(trust: &Trust) -> Result<rustls::ClientConfig, Failure> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let algs = provider.signature_verification_algorithms;
+    let builder = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| Failure::Backend(format!("tls config: {e}")))?;
+    Ok(match trust {
+        Trust::Pinned(pins) if pins.is_empty() => {
+            return Err(Failure::Trust("no certificate pins configured".into()));
+        }
+        Trust::Pinned(pins) => builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(PinVerifier {
+                pins: pins.clone(),
+                algs,
+            }))
+            .with_no_client_auth(),
+        _ => builder
+            .with_root_certificates(load_roots(trust)?)
+            .with_no_client_auth(),
+    })
 }
 
 /// Where and how to connect.
@@ -228,26 +253,7 @@ fn read_pem(p: &Path) -> Result<Vec<CertificateDer<'static>>, Failure> {
 impl Gateway {
     /// Builds the TLS client. The trust store must load before anything is sent.
     pub fn new(host: Host, port: u16, trust: &Trust) -> Result<Self, Failure> {
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let algs = provider.signature_verification_algorithms;
-        let builder = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(|e| Failure::Backend(format!("tls config: {e}")))?;
-        let cfg = match trust {
-            Trust::Pinned(pins) if pins.is_empty() => {
-                return Err(Failure::Trust("no certificate pins configured".into()));
-            }
-            Trust::Pinned(pins) => builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(PinVerifier {
-                    pins: pins.clone(),
-                    algs,
-                }))
-                .with_no_client_auth(),
-            _ => builder
-                .with_root_certificates(load_roots(trust)?)
-                .with_no_client_auth(),
-        };
+        let cfg = client_config(trust)?;
         Ok(Self {
             host,
             port,

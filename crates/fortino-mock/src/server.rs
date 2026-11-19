@@ -198,12 +198,35 @@ pub async fn start_on(
     opts: TlsOptions,
     bind: std::net::SocketAddr,
 ) -> Result<MockHandle, MockError> {
-    let (cfg, cert_der) = tls_config(&opts, vec!["localhost".into(), "sslvpn.test".into()])?;
+    let router = Arc::new(router);
+    let names = vec!["localhost".into(), "sslvpn.test".into()];
+    start_raw(opts, names, bind, move |tls| {
+        let router = router.clone();
+        Box::pin(async move { serve(BufReader::new(tls), &router).await })
+    })
+    .await
+}
+
+/// The TLS stream handed to a raw handler.
+pub type RawStream = tokio_rustls::server::TlsStream<TcpStream>;
+
+/// Starts a TLS server whose connections go straight to `handler`, for protocols that are not
+/// HTTP (the mock EMS). The certificate is self-signed for `names`.
+pub async fn start_raw<F>(
+    opts: TlsOptions,
+    names: Vec<String>,
+    bind: std::net::SocketAddr,
+    handler: F,
+) -> Result<MockHandle, MockError>
+where
+    F: Fn(RawStream) -> BoxFut + Send + Sync + 'static,
+{
+    let (cfg, cert_der) = tls_config(&opts, names)?;
     let acceptor = TlsAcceptor::from(Arc::new(cfg));
     let listener = TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
     let (tx, mut rx) = watch::channel(false);
-    let router = Arc::new(router);
+    let handler = Arc::new(handler);
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -211,10 +234,10 @@ pub async fn start_on(
                 acc = listener.accept() => {
                     let Ok((sock, peer)) = acc else { continue };
                     let acceptor = acceptor.clone();
-                    let router = router.clone();
+                    let handler = handler.clone();
                     tokio::spawn(async move {
                         match acceptor.accept(sock).await {
-                            Ok(tls) => serve(BufReader::new(tls), &router).await,
+                            Ok(tls) => handler(tls).await,
                             Err(e) => tracing::debug!(%peer, error = %e, "mock tls accept failed"),
                         }
                     });

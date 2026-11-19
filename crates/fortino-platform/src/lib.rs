@@ -5,6 +5,7 @@
 //!   **before** it is applied, and can be undone after a crash.
 //! - [`fake::FakeNet`] is an in-memory implementation for tests.
 
+pub mod facts;
 pub mod fake;
 pub mod journal;
 pub mod macos;

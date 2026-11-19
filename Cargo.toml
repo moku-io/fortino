@@ -29,6 +29,7 @@ fortino-core = { path = "crates/fortino-core" }
 fortino-mock = { path = "crates/fortino-mock" }
 fortino-secret = { path = "crates/fortino-secret" }
 fortino-sslvpn = { path = "crates/fortino-sslvpn" }
+fortino-ems = { path = "crates/fortino-ems" }
 
 thiserror = "2"
 tracing = "0.1"

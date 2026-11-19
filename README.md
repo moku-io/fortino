@@ -21,6 +21,8 @@ Fortino is an open-source, independent reimplementation of FortiClient, starting
 | Who owns the tunnel, network state, credentials, CLI and menu? | [Client contracts] |
 | How do we integrate PPP and test a real connection? | [Worker and macOS networking] |
 | What must a worker speak to the daemon? | [Worker channel protocol] |
+| How does the EMS agent register, report and stay truthful? | [EMS agent] |
+| How does Fortino differ from FortiClient on the wire (debugging a real deployment)? | [Differences from FortiClient] |
 | Rules for coding agents | [AGENTS.md](AGENTS.md) |
 | How does profile import work? | [XML import contract and fixtures] |
 | How do I run and test the daemon, CLI and app locally? | [Development] |
@@ -73,8 +75,8 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | PPP tunnel | Working on one live gateway (in-process, no pppd); not yet in a release | Yes (pppd) | Yes (built-in PPP) | Yes |
 | Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
 | DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |
-| EMS registration (needed by some gateways) | Planned, truthful posture only | No | No | Yes |
-| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **Planned, by design** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
+| EMS registration (needed by some gateways) | In development: agent works against the mock EMS; truthful posture only | No | No | Yes |
+| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **By design; registration store and agent in place, daemon wiring next** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
 | FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
 | Per-domain split DNS | Yes (macOS controller, not yet live-tested) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
 | IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |

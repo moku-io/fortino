@@ -19,6 +19,7 @@ serde_yaml.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 fortino-proto-sslvpn.workspace = true
+fortino-proto-ems.workspace = true
 
 [lints]
 workspace = true
