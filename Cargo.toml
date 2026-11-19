@@ -28,6 +28,7 @@ ofc-platform = { path = "crates/ofc-platform" }
 ofc-core = { path = "crates/ofc-core" }
 ofc-mock = { path = "crates/ofc-mock" }
 ofc-secret = { path = "crates/ofc-secret" }
+ofc-sslvpn = { path = "crates/ofc-sslvpn" }
 
 thiserror = "2"
 tracing = "0.1"
