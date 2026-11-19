@@ -23,9 +23,12 @@ tracing-subscriber.workspace = true
 zeroize.workspace = true
 rand.workspace = true
 sha2.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 ofc-mock.workspace = true
+ofcd = { path = "../ofcd" }
+tempfile = "3"
 tokio.workspace = true
 
 [lints]

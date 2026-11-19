@@ -35,7 +35,7 @@ pub struct DaemonConfig {
     /// External tunnel worker (the openfortivpn adapter).
     pub worker: Option<WorkerSection>,
     /// Apply network changes to an in-memory fake instead of the host. Implied by `[fake]`.
-    /// Required with `[worker]` until the macOS network controller exists.
+    /// Use the in-memory fake network instead of the platform controller (development).
     pub fake_network: bool,
 }
 

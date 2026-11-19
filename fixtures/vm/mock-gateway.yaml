@@ -1,0 +1,14 @@
+# Synthetic mock gateway for the full-stack VM test (scripts/macos-vm-e2e.sh).
+users:
+  - username: alice
+    password: hunter2
+    otp: "123456"
+tunnel:
+  method: ppp
+  assigned_ip: 10.212.134.200
+  gateway_ip: 203.0.113.10
+  dns: [10.0.0.53]
+  split_dns:
+    - domains: intra.example
+      servers: [10.0.0.54]
+  routes: ["10.99.0.0/255.255.0.0"]

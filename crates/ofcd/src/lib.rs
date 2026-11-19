@@ -87,23 +87,34 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
             return Err("no tunnel backend: configure [worker] (or [fake] for development)".into());
         }
     };
-    if cfg.fake.is_none() && !cfg.fake_network {
-        return Err(
-            "the macOS network controller is not implemented yet; set fake_network = true for \
-             development"
-                .into(),
-        );
-    }
-    tracing::warn!("using the FAKE network; routes and DNS on this host are not changed");
-    let net = FakeNet::new(Arc::new(Mutex::new(FakeState::typical_host())));
-    let journal = Journaled::open(net, cfg.state_dir.join("net-journal.json"))
+    let journal_path = cfg.state_dir.join("net-journal.json");
+    let net: Box<dyn crate::netctl::NetController> = if cfg.fake.is_some() || cfg.fake_network {
+        tracing::warn!("using the FAKE network; routes and DNS on this host are not changed");
+        let net = FakeNet::new(Arc::new(Mutex::new(FakeState::typical_host())));
+        Box::new(JournaledController::new(
+            Journaled::open(net, journal_path).map_err(|e| format!("network journal: {e}"))?,
+        ))
+    } else {
+        real_network(journal_path)?
+    };
+    Ok(Session::new(store, workers, net, cfg.timeouts()))
+}
+
+#[cfg(target_os = "macos")]
+fn real_network(
+    journal: std::path::PathBuf,
+) -> Result<Box<dyn crate::netctl::NetController>, String> {
+    tracing::info!("using the macOS network controller (route, scutil, pfctl)");
+    let j = Journaled::open(ofc_platform::macos::MacNet::system(), journal)
         .map_err(|e| format!("network journal: {e}"))?;
-    Ok(Session::new(
-        store,
-        workers,
-        Box::new(JournaledController::new(journal)),
-        cfg.timeouts(),
-    ))
+    Ok(Box::new(JournaledController::new(j)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn real_network(
+    _journal: std::path::PathBuf,
+) -> Result<Box<dyn crate::netctl::NetController>, String> {
+    Err("no network controller for this platform yet; set fake_network = true".into())
 }
 
 /// Builds the authorizer from configuration.

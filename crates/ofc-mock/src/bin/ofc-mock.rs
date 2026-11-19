@@ -6,7 +6,7 @@ use std::process::ExitCode;
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let (Some(kind), Some(path)) = (args.get(1), args.get(2)) else {
-        eprintln!("usage: ofc-mock fortigate <scenario.yaml>");
+        eprintln!("usage: ofc-mock fortigate <scenario.yaml> [--bind ADDR:PORT]");
         return ExitCode::from(2);
     };
     if kind != "fortigate" {
@@ -27,7 +27,16 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let h = match ofc_mock::fortigate::start(&sc).await {
+    let bind = args
+        .iter()
+        .position(|a| a == "--bind")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|b| b.parse::<std::net::SocketAddr>().ok());
+    let started = match bind {
+        Some(b) => ofc_mock::fortigate::start_on(&sc, b).await,
+        None => ofc_mock::fortigate::start(&sc).await,
+    };
+    let h = match started {
         Ok(h) => h,
         Err(e) => {
             eprintln!("{e}");

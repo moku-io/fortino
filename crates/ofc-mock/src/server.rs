@@ -182,9 +182,25 @@ fn tls_config(
 /// Starts a TLS server on 127.0.0.1 (random port) serving `router`. The certificate is
 /// self-signed for `localhost` and `sslvpn.test`.
 pub async fn start(router: Router, opts: TlsOptions) -> Result<MockHandle, MockError> {
+    start_on(
+        router,
+        opts,
+        "127.0.0.1:0"
+            .parse()
+            .map_err(|_| MockError::Other("addr".into()))?,
+    )
+    .await
+}
+
+/// Like [`start`], listening on `bind` (port 0 picks one).
+pub async fn start_on(
+    router: Router,
+    opts: TlsOptions,
+    bind: std::net::SocketAddr,
+) -> Result<MockHandle, MockError> {
     let (cfg, cert_der) = tls_config(&opts, vec!["localhost".into(), "sslvpn.test".into()])?;
     let acceptor = TlsAcceptor::from(Arc::new(cfg));
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener = TcpListener::bind(bind).await?;
     let addr = listener.local_addr()?;
     let (tx, mut rx) = watch::channel(false);
     let router = Arc::new(router);

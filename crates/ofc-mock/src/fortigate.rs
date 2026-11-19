@@ -576,13 +576,21 @@ pub fn checksum(b: &[u8]) -> u16 {
     !(u16::try_from(sum).unwrap_or(0))
 }
 
-/// Starts a mock FortiGate for `sc`.
-pub async fn start(sc: &Scenario) -> Result<MockHandle, MockError> {
-    let opts = TlsOptions {
+fn tls_opts(sc: &Scenario) -> TlsOptions {
+    TlsOptions {
         request_optional_client_cert: sc.tls.request_optional_client_cert,
         tls13_only: sc.tls.tls13_only,
-    };
-    server::start(router(sc), opts).await
+    }
+}
+
+/// Starts a mock FortiGate for `sc` on 127.0.0.1.
+pub async fn start(sc: &Scenario) -> Result<MockHandle, MockError> {
+    server::start(router(sc), tls_opts(sc)).await
+}
+
+/// Starts a mock FortiGate for `sc` listening on `bind`.
+pub async fn start_on(sc: &Scenario, bind: std::net::SocketAddr) -> Result<MockHandle, MockError> {
+    server::start_on(router(sc), tls_opts(sc), bind).await
 }
 
 #[cfg(test)]
