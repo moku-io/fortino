@@ -1,8 +1,14 @@
 # OpenFortiClient
 
-OpenFortiClient is an open-source reimplementation of FortiClient, starting with its macOS VPN client. The first release will let users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see connection status, and disconnect using either the desktop app or the headless command-line client (`ofctl`). Both use the same background service. A headless installation needs only the CLI and service, and the VPN stays connected after the terminal closes. The maintainer is authorized to use both target gateways, GATEWAY-1 and GATEWAY-2. Both deployments will officially support OpenFortiClient. Each gateway has its own FortiClient Enterprise Management Server (EMS). Users will be able to set its address directly in the gateway’s profile.
+OpenFortiClient is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
 
-**Build status:** milestone 2 runs against a fake tunnel. The daemon (`ofcd`) owns a SQLite profile store, authenticates local peers by kernel credentials, serializes the single VPN session and applies journaled network changes to a fake platform. `ofctl` and the macOS menu-bar app (`apps/macos`) create, import, connect, answer password/OTP prompts, show status and disconnect through the same socket protocol. The production worker adapter (openfortivpn) and the macOS network controller are not implemented, so the daemon does not create a real tunnel yet. Milestone 1 ran the pinned stock openfortivpn by hand against one gateway (GATEWAY-3): PPP completed IPCP and carried HTTPS to a private host. See [the backlog].
+**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`ofctl`). Both drive the same root service (`ofcd`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support OpenFortiClient. Each gateway has its own EMS, whose address is set in the gateway's profile.
+
+**Build status.**
+
+- The daemon, CLI and app work end to end against a fake tunnel (milestone 2): profile store, kernel-credential peer checks, one serialized session, journaled network changes, password/OTP prompts.
+- The native SSL VPN worker (`crates/ofc-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM. See [the backlog].
+- Not started: TUN tunnel mode, DTLS, the EMS agent and packaging.
 
 ## Start here
 
@@ -12,13 +18,14 @@ OpenFortiClient is an open-source reimplementation of FortiClient, starting with
 | Which work comes first and what counts as success? | [Delivery and verification queue] |
 | Who owns the tunnel, network state, credentials, CLI and menu? | [Client contracts] |
 | How do we integrate PPP and test a real connection? | [Worker and macOS networking] |
-| What must the worker adapter speak to the daemon? | [Worker channel protocol] |
+| What must a worker speak to the daemon? | [Worker channel protocol] |
+| Rules for coding agents | [AGENTS.md](AGENTS.md) |
 | How does profile import work? | [XML import contract and fixtures] |
 | How do I run and test the daemon, CLI and app locally? | [Development] |
 | Which product observations can we reproduce offline? | [Desktop interface] and [native evidence ledger] |
 | Where did these decisions come from? | [Source revisions and integration decisions] |
 
-The first delivery target is GATEWAY-2 on Apple Silicon and macOS 15. An independent session reached PPP IPv4 negotiation there. Evaluate the pinned openfortivpn worker against that configuration before investing in a new wire implementation. On GATEWAY-1, the next step is to complete the device checks consistently, then test PPP. Both targets have separate acceptance records.
+The first delivery target is GATEWAY-2 on Apple Silicon and macOS 15. GATEWAY-1 additionally requires the client's own EMS registration before it admits a tunnel, so the EMS agent follows the native SSL VPN worker. openfortivpn is kept only as a lab reference for comparing behaviour.
 
 ## Build and try it
 
@@ -40,5 +47,41 @@ OFC_SOCKET=$OFCTL_SOCKET swift run --package-path apps/macos OpenFortiClient
 ```
 
 The synthetic TLS gateway still runs with `cargo run --locked -p ofc-mock -- fortigate fixtures/mock/basic.yaml`.
+
+## Thanks
+
+OpenFortiClient stands on the shoulders of the open-source clients that made FortiGate SSL VPNs usable without the vendor client. Thank you to:
+
+- **[openfortivpn](https://github.com/adrienverge/openfortivpn)** (Adrien Vergé and contributors). Its clear implementation of the SSL VPN login and PPP tunnel was our reference for early debugging, and its pinned build proved the PPP path on a real gateway (milestone 1).
+- **[OpenConnect](https://www.infradead.org/openconnect/fortinet.html)** (David Woodhouse, Daniel Lenski and contributors), whose Fortinet support documents the protocol, PPP-over-DTLS and the challenge forms.
+- The projects around them: **[openfortivpn-webview](https://github.com/gm-vm/openfortivpn-webview)** for SAML login, **[NetworkManager-fortisslvpn](https://gitlab.gnome.org/GNOME/NetworkManager-fortisslvpn)** for Linux desktop integration, and GUIs such as **OpenFortiGUI**, **[OpenFortiVPN GUI](https://e1z0.net/software/openfortivpn-gui)** and **[fcovpn](https://github.com/jiriteach/fcovpn)**.
+
+## How OpenFortiClient compares
+
+OpenFortiClient is still in development: the table shows **target** behaviour for OpenFortiClient, and its status column says what works today. Entries for the other clients come from their documentation (November 2026); corrections are welcome.
+
+| | OpenFortiClient (status) | openfortivpn | OpenConnect `--protocol=fortinet` | FortiClient VPN (vendor) |
+| --- | --- | --- | --- | --- |
+| License | GPL-3.0-or-later | GPL-3.0 + OpenSSL exception | LGPL-2.1 | Proprietary |
+| Language | Rust daemon, Swift app | C | C | — |
+| Password + token code | Yes (fake worker today) | Yes | Yes (tokeninfo and HTML forms) | Yes |
+| FortiToken Mobile push | Planned | Yes | Not documented | Yes |
+| SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
+| Client certificate | Planned | Yes | Yes | Yes |
+| PPP tunnel | In development (in-process, no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
+| Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
+| DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |
+| EMS registration (needed by some gateways) | In development, truthful posture only | No | No | Yes |
+| FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
+| Per-domain split DNS | Yes (macOS controller, not yet live-tested) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
+| IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
+| Network rollback after crash | Yes (write-ahead journal) | Partial | Script-dependent | Yes |
+| macOS app | Native SwiftUI menu bar | Third-party GUIs | OpenConnect-GUI | Yes |
+| Headless CLI | Yes (`ofctl`) | Yes | Yes | Limited |
+| Security suite (AV, web filter, ZTNA…) | No (out of scope) | No | No | Paid editions |
+
+Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. OpenFortiClient will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.
+
+Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port), [PassTunnel](https://sourceforge.net/app/vpn-enabler/mac/) and LivConnect (multi-protocol desktop wrappers around openfortivpn and OpenConnect).
 
 Project code is licensed under [GPL-3.0-or-later](LICENSE).
