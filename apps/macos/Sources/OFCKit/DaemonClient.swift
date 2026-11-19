@@ -3,7 +3,7 @@
 import Darwin
 import Foundation
 
-public let defaultSocketPath = "/var/run/openforticlient/ofcd.sock"
+public let defaultSocketPath = "/var/run/fortino/ofcd.sock"
 public let maxFrame = 256 * 1024
 
 /// Encodes a frame: 4-byte big-endian length followed by the payload.
@@ -185,7 +185,7 @@ public final class DaemonClient: @unchecked Sendable {
     // MARK: Convenience
 
     public func hello() async throws -> HelloResult {
-        try await call("hello", HelloParams(versions: [protocolVersion], client: "OpenFortiClient.app"))
+        try await call("hello", HelloParams(versions: [protocolVersion], client: "Fortino.app"))
     }
 
     public func status() async throws -> Status { try await call("status", Empty()) }

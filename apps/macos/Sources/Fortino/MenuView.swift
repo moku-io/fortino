@@ -100,7 +100,7 @@ struct MenuView: View {
                 NSApp.activate(ignoringOtherApps: true)
             }
             Divider().padding(.vertical, 2)
-            MenuRow(title: "Quit OpenFortiClient", help: "The VPN stays connected after quitting") {
+            MenuRow(title: "Quit Fortino", help: "The VPN stays connected after quitting") {
                 NSApp.terminate(nil)
             }
         }

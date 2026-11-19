@@ -270,7 +270,7 @@ async fn data_plane(
         .collect();
     for (label, dst) in targets {
         let mut icmp = vec![8, 0, 0, 0, 0x4f, 0x43, 0, 1];
-        icmp.extend_from_slice(b"openforticlient-probe");
+        icmp.extend_from_slice(b"fortino-probe");
         let c = csum(&icmp);
         icmp[2..4].copy_from_slice(&c.to_be_bytes());
         let _ = peer.to_tunnel.send(ipv4(1, me, dst, &icmp)).await;

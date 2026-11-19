@@ -1,8 +1,8 @@
-# OpenFortiClient
+# Fortino
 
-OpenFortiClient is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
+Fortino is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
 
-**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`ofctl`). Both drive the same root service (`ofcd`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support OpenFortiClient. Each gateway has its own EMS, whose address is set in the gateway's profile.
+**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`ofctl`). Both drive the same root service (`ofcd`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support Fortino. Each gateway has its own EMS, whose address is set in the gateway's profile.
 
 **Build status.**
 
@@ -43,24 +43,24 @@ cargo run -p ofcd -- --config fixtures/dev/ofcd-fake.toml   # allowed_uids must 
 export OFCTL_SOCKET=$PWD/target/dev/ofcd.sock
 cargo run -p ofc-cli -- profile add GATEWAY-2 --host vpn.example.org --ems-server ems.example.org:9016
 cargo run -p ofc-cli -- connect GATEWAY-2        # password hunter2, code 123456
-OFC_SOCKET=$OFCTL_SOCKET swift run --package-path apps/macos OpenFortiClient
+OFC_SOCKET=$OFCTL_SOCKET swift run --package-path apps/macos Fortino
 ```
 
 The synthetic TLS gateway still runs with `cargo run --locked -p ofc-mock -- fortigate fixtures/mock/basic.yaml`.
 
 ## Thanks
 
-OpenFortiClient stands on the shoulders of the open-source clients that made FortiGate SSL VPNs usable without the vendor client. Thank you to:
+Fortino stands on the shoulders of the open-source clients that made FortiGate SSL VPNs usable without the vendor client. Thank you to:
 
 - **[openfortivpn](https://github.com/adrienverge/openfortivpn)** (Adrien Vergé and contributors). Its clear implementation of the SSL VPN login and PPP tunnel was our reference for early debugging, and its pinned build proved the PPP path on a real gateway (milestone 1).
 - **[OpenConnect](https://www.infradead.org/openconnect/fortinet.html)** (David Woodhouse, Daniel Lenski and contributors), whose Fortinet support documents the protocol, PPP-over-DTLS and the challenge forms.
 - The projects around them: **[openfortivpn-webview](https://github.com/gm-vm/openfortivpn-webview)** for SAML login, **[NetworkManager-fortisslvpn](https://gitlab.gnome.org/GNOME/NetworkManager-fortisslvpn)** for Linux desktop integration, and GUIs such as **OpenFortiGUI**, **[OpenFortiVPN GUI](https://e1z0.net/software/openfortivpn-gui)** and **[fcovpn](https://github.com/jiriteach/fcovpn)**.
 
-## How OpenFortiClient compares
+## How Fortino compares
 
-OpenFortiClient is still in development: the table shows **target** behaviour for OpenFortiClient, and its status column says what works today. Entries for the other clients come from their documentation (November 2026); corrections are welcome.
+Fortino is still in development: the table shows **target** behaviour for Fortino, and its status column says what works today. Entries for the other clients come from their documentation (November 2026); corrections are welcome.
 
-| | OpenFortiClient (status) | openfortivpn | OpenConnect `--protocol=fortinet` | FortiClient VPN (vendor) |
+| | Fortino (status) | openfortivpn | OpenConnect `--protocol=fortinet` | FortiClient VPN (vendor) |
 | --- | --- | --- | --- | --- |
 | License | GPL-3.0-or-later | GPL-3.0 + OpenSSL exception | LGPL-2.1 | Proprietary |
 | Language | Rust daemon, Swift app | C | C | — |
@@ -80,7 +80,7 @@ OpenFortiClient is still in development: the table shows **target** behaviour fo
 | Headless CLI | Yes (`ofctl`) | Yes | Yes | Limited |
 | Security suite (AV, web filter, ZTNA…) | No (out of scope) | No | No | Paid editions |
 
-Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. OpenFortiClient will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.
+Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. Fortino will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.
 
 Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port), [PassTunnel](https://sourceforge.net/app/vpn-enabler/mac/) and LivConnect (multi-protocol desktop wrappers around openfortivpn and OpenConnect).
 

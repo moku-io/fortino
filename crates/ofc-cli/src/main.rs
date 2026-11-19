@@ -1,4 +1,4 @@
-//! `ofctl`: the OpenFortiClient command-line interface.
+//! `ofctl`: the Fortino command-line interface.
 //!
 //! Talks to `ofcd` over its control socket. Prompts go to the controlling terminal, results to
 //! stdout, diagnostics to stderr. Exit codes follow the design notes.
@@ -18,7 +18,7 @@ use ofc_core::{ErrorCode, ProtoError};
 use crate::prompt::{SecretSource, TermGuard};
 
 #[derive(Debug, Parser)]
-#[command(name = "ofctl", version, about = "OpenFortiClient VPN control")]
+#[command(name = "ofctl", version, about = "Fortino VPN control")]
 struct Cli {
     /// Daemon control socket.
     #[arg(long, global = true, env = "OFCTL_SOCKET", default_value = DEFAULT_SOCKET)]

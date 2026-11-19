@@ -8,7 +8,7 @@
 //!   compares the installed route with ours before deleting it, so a route that the user or a
 //!   network change replaced in the meantime is left alone.
 //! - DNS: one SystemConfiguration dynamic-store key per change under
-//!   `State:/Network/Service/org.openforticlient.*/DNS` (`ServerAddresses`,
+//!   `State:/Network/Service/org.fortino.*/DNS` (`ServerAddresses`,
 //!   `SupplementalMatchDomains`). Revert removes only that key.
 //! - IPv6 block: a pf anchor below `com.apple/` (evaluated by the stock `/etc/pf.conf`) with
 //!   `block drop quick inet6`, loopback excepted. pf is enabled only if it was off, and disabled
@@ -25,9 +25,9 @@ use crate::{
 };
 
 /// pf anchor holding the IPv6 block.
-pub const PF_ANCHOR: &str = "com.apple/250.OpenFortiClient";
+pub const PF_ANCHOR: &str = "com.apple/250.Fortino";
 /// Dynamic-store key prefix for resolver entries.
-pub const DNS_KEY_PREFIX: &str = "State:/Network/Service/org.openforticlient";
+pub const DNS_KEY_PREFIX: &str = "State:/Network/Service/org.fortino";
 
 /// Result of one command.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -501,8 +501,8 @@ mod tests {
         assert_eq!(
             m.runner().calls,
             vec![
-                "/usr/sbin/scutil <<< d.init; d.add ServerAddresses * 10.0.0.53; d.add SupplementalMatchDomains * corp.example; set State:/Network/Service/org.openforticlient.split.corp.example/DNS; quit;",
-                "/usr/sbin/scutil <<< remove State:/Network/Service/org.openforticlient.split.corp.example/DNS; quit;",
+                "/usr/sbin/scutil <<< d.init; d.add ServerAddresses * 10.0.0.53; d.add SupplementalMatchDomains * corp.example; set State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
+                "/usr/sbin/scutil <<< remove State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
             ]
         );
 
@@ -519,7 +519,7 @@ mod tests {
         assert!(calls.contains(&"/sbin/pfctl -e".to_owned()));
         assert_eq!(
             calls[calls.len() - 2],
-            "/sbin/pfctl -a com.apple/250.OpenFortiClient -F rules"
+            "/sbin/pfctl -a com.apple/250.Fortino -F rules"
         );
         assert_eq!(calls[calls.len() - 1], "/sbin/pfctl -d");
     }

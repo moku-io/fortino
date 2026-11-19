@@ -1,10 +1,10 @@
-// OpenFortiClient menu-bar app. Unprivileged: all VPN work happens in ofcd.
+// Fortino menu-bar app. Unprivileged: all VPN work happens in ofcd.
 
 import AppKit
 import OFCKit
 import SwiftUI
 
-struct OpenFortiClientApp: App {
+struct FortinoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
 
@@ -56,4 +56,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-OpenFortiClientApp.main()
+FortinoApp.main()

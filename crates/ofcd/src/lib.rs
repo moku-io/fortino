@@ -1,4 +1,4 @@
-//! `ofcd`: the OpenFortiClient daemon.
+//! `ofcd`: the Fortino daemon.
 //!
 //! Owns the profile store, the single machine-wide session slot, the tunnel worker and all
 //! network changes. Clients (`ofctl`, the desktop app) talk to it over a Unix socket; see

@@ -7,7 +7,7 @@ use ofc_core::worker::FakeWorkerConfig;
 use serde::Deserialize;
 
 /// Default configuration file.
-pub const DEFAULT_CONFIG: &str = "/Library/Application Support/OpenFortiClient/ofcd.toml";
+pub const DEFAULT_CONFIG: &str = "/Library/Application Support/Fortino/ofcd.toml";
 
 /// Daemon settings.
 #[derive(Debug, Clone, Deserialize)]
@@ -56,7 +56,7 @@ impl Default for DaemonConfig {
     fn default() -> Self {
         Self {
             socket_path: PathBuf::from(ofc_core::client::DEFAULT_SOCKET),
-            state_dir: PathBuf::from("/Library/Application Support/OpenFortiClient/state"),
+            state_dir: PathBuf::from("/Library/Application Support/Fortino/state"),
             socket_group: None,
             allowed_uids: Vec::new(),
             admin_uids: Vec::new(),

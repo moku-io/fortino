@@ -1,6 +1,6 @@
 # Notes for coding agents
 
-OpenFortiClient is a independent, native reimplementation of FortiClient (macOS first): SSL VPN, then EMS. Read [README.md](README.md) for the goal and status and [the design notes] for what comes next. These rules are the ones that are easy to break without knowing the history.
+Fortino is a independent, native reimplementation of FortiClient (macOS first): SSL VPN, then EMS. Read [README.md](README.md) for the goal and status and [the design notes] for what comes next. These rules are the ones that are easy to break without knowing the history.
 
 ## Truthfulness and truthfulness
 

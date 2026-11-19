@@ -20,7 +20,7 @@ use crate::proto::{self, *};
 type Pending = Arc<std::sync::Mutex<HashMap<String, oneshot::Sender<Response>>>>;
 
 /// Default control socket path.
-pub const DEFAULT_SOCKET: &str = "/var/run/openforticlient/ofcd.sock";
+pub const DEFAULT_SOCKET: &str = "/var/run/fortino/ofcd.sock";
 
 /// A connection to the daemon.
 #[derive(Debug)]
