@@ -67,7 +67,14 @@ struct ChallengeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\(profileName) — \(gateway)").font(.headline)
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profileName).font(.headline)
+                    Text(verbatim: gateway).font(.caption).foregroundStyle(.secondary)
+                }
+            } icon: {
+                Image(systemName: "lock.shield").font(.title2).foregroundStyle(.tint)
+            }
             Text(challenge.prompt).foregroundStyle(.secondary)
             Group {
                 if challenge.kind.isSecret {
@@ -84,10 +91,12 @@ struct ChallengeView: View {
                 Text(error).foregroundStyle(.red).font(.callout)
             }
             HStack {
-                Button("Cancel connection", role: .cancel) { model.disconnect() }
                 Spacer()
+                Button("Cancel Connection", role: .cancel) { model.disconnect() }
+                    .keyboardShortcut(.cancelAction)
                 Button("Continue", action: submit)
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                     .disabled(value.isEmpty || busy)
             }
         }

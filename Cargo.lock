@@ -563,10 +563,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-tray"
-version = "0.1.0"
-
-[[package]]
 name = "ofcd"
 version = "0.1.0"
 dependencies = [

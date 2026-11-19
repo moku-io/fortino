@@ -1,4 +1,6 @@
-// Menu-bar extra: state, profile selection, Connect/Cancel/Disconnect, address and duration.
+// Menu-bar extra, laid out like the system's Wi-Fi/VPN menus in Control Center: a header,
+// one row per VPN profile with a switch, then menu-style actions. Only standard controls, so
+// macOS supplies the material (Liquid Glass on macOS 26, vibrancy before).
 
 import OFCKit
 import SwiftUI
@@ -11,7 +13,7 @@ struct StatusIcon: View {
             .accessibilityLabel("VPN: \(state.label)")
     }
 
-    private var symbol: String {
+    var symbol: String {
         switch state {
         case .connected: return "lock.shield.fill"
         case .idle: return "lock.shield"
@@ -29,106 +31,190 @@ func formatDuration(_ secs: Int) -> String {
     return "\(s)s"
 }
 
+/// Connection details for the active attempt, e.g. "10.212.134.200 · 4m 12s".
+struct ConnectionSummary: View {
+    let status: Status
+
+    var body: some View {
+        switch status.state {
+        case .connected:
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                Text(verbatim: detail(now: ctx.date))
+            }
+        case .awaitingInput:
+            Text("Waiting for sign-in")
+        default:
+            Text(status.state.label)
+        }
+    }
+
+    private func detail(now: Date) -> String {
+        var parts: [String] = []
+        if let ip = status.assignedIp { parts.append(ip) }
+        if let since = status.connectedSince {
+            parts.append(formatDuration(max(0, Int(now.timeIntervalSince1970) - since)))
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                StatusIcon(state: model.state).font(.title2)
-                VStack(alignment: .leading) {
-                    Text(model.state.label).font(.headline)
-                    if let n = model.status?.profileName, model.state != .idle {
-                        Text(n).font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-            }
-
+        VStack(alignment: .leading, spacing: 6) {
+            header
             if let e = model.serviceError {
-                Text(e).foregroundStyle(.red).font(.callout)
+                notice(e, symbol: "exclamationmark.triangle.fill", tint: .orange)
+            } else if model.state == .inUse {
+                notice("Another user on this Mac is connected.", symbol: "person.fill", tint: .secondary)
+            } else if model.state == .recoveryRequired {
+                notice("Network settings from the last session could not be restored. Connecting retries the cleanup.",
+                       symbol: "exclamationmark.shield.fill", tint: .orange)
             }
 
-            if model.state == .connected, let st = model.status {
-                details(st)
-            }
-
-            if model.state == .idle || model.state == .recoveryRequired {
-                if model.profiles.isEmpty {
-                    Text("No profiles yet.").foregroundStyle(.secondary)
-                } else {
-                    Picker("Profile", selection: Binding(
-                        get: { model.selectedProfile?.id ?? "" },
-                        set: { model.select($0) })) {
-                        ForEach(model.profiles) { p in
-                            Text(p.spec.name).tag(p.id)
-                        }
-                    }
-                    if let p = model.selectedProfile {
-                        Text(verbatim: "\(p.spec.endpoint.host):\(String(p.spec.endpoint.port)) · \(p.spec.ipPolicy.label)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                if let r = model.status?.lastResult, let code = r.code {
-                    Text("Last attempt: \(r.message)")
-                        .font(.caption)
-                        .foregroundStyle(code == "cancelled" ? Color.secondary : Color.red)
+            if !model.profiles.isEmpty {
+                Divider().padding(.vertical, 2)
+                Text("Profiles").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                ForEach(model.profiles) { p in
+                    ProfileRow(model: model, profile: p)
                 }
             }
 
             if let e = model.actionError {
-                Text(e).foregroundStyle(.red).font(.callout)
+                notice(e, symbol: "xmark.octagon.fill", tint: .red)
+            } else if model.state == .idle, let r = model.status?.lastResult,
+                      let code = r.code, code != "cancelled" {
+                notice("Last attempt: \(r.message)", symbol: "exclamationmark.circle", tint: .secondary)
             }
 
-            primaryButton
-
-            Divider()
-            Button("Profiles…") {
+            Divider().padding(.vertical, 2)
+            MenuRow(title: model.profiles.isEmpty ? "Add a VPN Profile…" : "Profiles…") {
                 openWindow(id: "profiles")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            Button("Import…") {
+            MenuRow(title: "Import from FortiClient…") {
                 openWindow(id: "import")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            Divider()
-            Button("Quit OpenFortiClient") { NSApp.terminate(nil) }
-                .help("Quitting leaves the VPN connected")
+            Divider().padding(.vertical, 2)
+            MenuRow(title: "Quit OpenFortiClient", help: "The VPN stays connected after quitting") {
+                NSApp.terminate(nil)
+            }
         }
-        .padding(14)
+        .padding(8)
         .frame(width: 300)
         .task { await model.refreshProfiles() }
     }
 
-    @ViewBuilder private func details(_ st: Status) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let ip = st.assignedIp { Text("Address: \(ip)") }
-            if let i = st.interface { Text("Interface: \(i)") }
-            if let p = st.ipPolicy { Text(p.label) }
-            if let since = st.connectedSince {
-                TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                    let secs = max(0, Int(ctx.date.timeIntervalSince1970) - since)
-                    Text("Connected for \(formatDuration(secs))")
-                }
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text("VPN").font(.headline)
+            Spacer()
+            if model.state.isActive && model.state != .connected {
+                ProgressView().controlSize(.small)
             }
+            Text(model.state.label).foregroundStyle(.secondary)
         }
-        .font(.callout)
+        .padding(.horizontal, 8)
+        .padding(.top, 4)
     }
 
-    @ViewBuilder private var primaryButton: some View {
-        switch model.state {
-        case .connected:
-            Button("Disconnect") { model.disconnect() }.keyboardShortcut(.defaultAction)
-        case .starting, .authenticating, .awaitingInput, .configuring:
-            Button("Cancel") { model.disconnect() }
-        case .stopping:
-            Button("Disconnecting…") {}.disabled(true)
-        case .inUse:
-            Text("Another user is connected.").foregroundStyle(.secondary)
-        case .idle, .recoveryRequired:
-            Button("Connect") { model.connect() }
-                .keyboardShortcut(.defaultAction)
-                .disabled(model.selectedProfile == nil || model.serviceError != nil)
+    private func notice(_ text: String, symbol: String, tint: Color) -> some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
         }
+        .font(.callout)
+        .padding(.horizontal, 8)
+    }
+}
+
+/// One profile with a switch, like a VPN configuration in Control Center.
+struct ProfileRow: View {
+    @ObservedObject var model: AppModel
+    let profile: Profile
+
+    private var isCurrent: Bool { model.status?.profileId == profile.id && model.state.isActive }
+
+    private var isOn: Binding<Bool> {
+        Binding(
+            get: { isCurrent },
+            set: { on in
+                if on {
+                    model.select(profile.id)
+                    model.connect()
+                } else {
+                    model.disconnect()
+                }
+            })
+    }
+
+    /// Another attempt (ours or another user's) holds the single VPN slot.
+    private var blocked: Bool {
+        (model.state.isActive && !isCurrent) || model.state == .inUse || model.state == .stopping
+            || model.serviceError != nil
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(isCurrent && model.state == .connected ? Color.accentColor : Color.secondary.opacity(0.2))
+                Image(systemName: "network.badge.shield.half.filled")
+                    .foregroundStyle(isCurrent && model.state == .connected ? Color.white : Color.primary)
+                    .font(.system(size: 13))
+            }
+            .frame(width: 26, height: 26)
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(profile.spec.name)
+                Group {
+                    if isCurrent, let st = model.status {
+                        ConnectionSummary(status: st)
+                    } else {
+                        Text(verbatim: profile.spec.endpoint.host)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Toggle(profile.spec.name, isOn: isOn)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+                .disabled(blocked)
+                .accessibilityLabel("Connect \(profile.spec.name)")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+    }
+}
+
+/// A full-width row that highlights on hover, like a menu item.
+struct MenuRow: View {
+    let title: String
+    var help: String?
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(hovering ? Color.primary.opacity(0.1) : .clear)
+        )
+        .onHover { hovering = $0 }
+        .help(help ?? "")
     }
 }
