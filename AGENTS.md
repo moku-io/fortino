@@ -6,6 +6,7 @@ Fortino is a independent, native reimplementation of FortiClient (macOS first): 
 
 - Code comments explain what goes on the wire and why. Never copy vendor code, Fortinet binaries, keys, certificates, assets or long vendor strings into the repository. Protocol tokens (paths, header and field names) are fine.
 - Anything inferred rather than observed carries an `UNVERIFIED` comment in code and an `(UNVERIFIED)` tag in docs, and must match the mock's assumption.
+- Each VPN profile names its own EMS server; registrations are kept per EMS and the one used follows the profile being connected. Never design an EMS flow that requires unregistering to switch gateways ([the design notes]).
 - Wire identity may match FortiClient (headers, order, frame layouts). Posture never lies: no claimed AV, firewall, host-check result or EMS feature the client doesn't have. Don't present an EMS serial unless this client is registered to that EMS.
 
 ## Secrets and deployment data
@@ -18,6 +19,10 @@ Fortino is a independent, native reimplementation of FortiClient (macOS first): 
 
 - Never run anything that changes routes, DNS, pf or interfaces as root on the development Mac. Use the disposable Tart VM (`scripts/macos-vm-test.sh`, [the design notes]).
 - `fortino-sslvpn-probe` with its default in-memory device needs no root and changes nothing on the host; prefer it for live gateway checks.
+
+## Desktop app
+
+- Modern, clean, native macOS: standard SwiftUI/AppKit controls and the Human Interface Guidelines, easy to use. Never copy FortiClient's interface; wire parity is for the protocol only. See [the design notes].
 
 ## Code
 

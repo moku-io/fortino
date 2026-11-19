@@ -2,6 +2,8 @@
 
 Fortino is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
 
+**Built for people who use more than one organization's VPN.** Each VPN profile names its own EMS server, and Fortino keeps a separate EMS registration for each. Connecting to a gateway uses that gateway's EMS, so switching between organizations needs no unregistering and re-registering, unlike FortiClient, which holds one EMS registration per machine.
+
 **Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`fortino`). Both drive the same root service (`fortinod`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support Fortino. Each gateway has its own EMS, whose address is set in the gateway's profile.
 
 **Build status.**
@@ -64,14 +66,15 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | --- | --- | --- | --- | --- |
 | License | GPL-3.0-or-later | GPL-3.0 + OpenSSL exception | LGPL-2.1 | Proprietary |
 | Language | Rust daemon, Swift app | C | C | — |
-| Password + token code | Yes (fake worker today) | Yes | Yes (tokeninfo and HTML forms) | Yes |
+| Password + token code | Yes (password live on one gateway; codes tested against the mock) | Yes | Yes (tokeninfo and HTML forms) | Yes |
 | FortiToken Mobile push | Planned | Yes | Not documented | Yes |
 | SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
 | Client certificate | Planned | Yes | Yes | Yes |
-| PPP tunnel | In development (in-process, no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
+| PPP tunnel | Working on one live gateway (in-process, no pppd); not yet in a release | Yes (pppd) | Yes (built-in PPP) | Yes |
 | Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
 | DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |
-| EMS registration (needed by some gateways) | In development, truthful posture only | No | No | Yes |
+| EMS registration (needed by some gateways) | Planned, truthful posture only | No | No | Yes |
+| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **Planned, by design** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
 | FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
 | Per-domain split DNS | Yes (macOS controller, not yet live-tested) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
 | IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
