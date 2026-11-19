@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 fortino-config.workspace = true
 fortino-core.workspace = true
+fortino-ems.workspace = true
+fortino-proto-ems.workspace = true
+fortino-tls.workspace = true
 fortino-platform.workspace = true
 fortino-secret.workspace = true
 nix = { workspace = true, features = ["user", "fs", "signal"] }

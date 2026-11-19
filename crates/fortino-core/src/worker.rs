@@ -18,6 +18,16 @@ use tokio::sync::mpsc;
 use crate::error::ErrorCode;
 use crate::proto::ChallengeKind;
 
+/// The EMS registration a gateway may ask for (`FSV_EMS_SN` and the tenant header). Present
+/// only when this client is registered to the EMS named by the profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmsIdentity {
+    /// EMS server serial (`FCTEMS…`).
+    pub serial: String,
+    /// Tenant (32 digits; all zero on premises).
+    pub tenant: String,
+}
+
 /// Settings for one attempt, pinned at connect time.
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
@@ -31,6 +41,8 @@ pub struct WorkerConfig {
     pub trust_id: String,
     /// IP policy.
     pub ip_policy: IpPolicy,
+    /// EMS registration for this profile's EMS, if any.
+    pub ems: Option<EmsIdentity>,
 }
 
 /// Worker progress stages.
@@ -392,6 +404,7 @@ mod tests {
             username: username.map(Into::into),
             trust_id: "system".into(),
             ip_policy: IpPolicy::SplitIpv4,
+            ems: None,
         }
     }
 

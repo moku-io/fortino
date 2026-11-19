@@ -31,6 +31,11 @@ impl Default for Compat {
     }
 }
 
+/// Feature bits Fortino has: 0x10 VPN, and
+/// 0x8, which FortiClient always sets (UNVERIFIED). Antivirus (0x1), firewall (0x2), web
+/// filter (0x4), vulnerability scan (0x20), sandbox, ZTNA (0x40000) and the rest stay clear.
+pub const FEATURES: u32 = 0x8 | 0x10;
+
 /// `FCTOS` for this platform.
 pub fn fctos() -> &'static str {
     // UNVERIFIED: the Linux value is not observed.
@@ -96,8 +101,8 @@ fn now() -> u64 {
 }
 
 /// Full SYSINFO, for REGISTER and full keepalives.
-// UNVERIFIED: key order and the feature bitmaps. Fortino reports no AV, web filter,
-// firewall, sandbox or vulnerability scanning, so those fields are empty.
+// Fortino reports no AV, web filter, firewall, sandbox or vulnerability scanning: those
+// signature fields are empty and their feature bits clear.
 pub fn full(
     f: &Facts,
     compat: &Compat,
@@ -129,6 +134,10 @@ pub fn full(
     for k in ["AVSIG_VER", "AVENG_VER", "VULSIG_VER", "VULENG_VER"] {
         s.push(k, "")?;
     }
+    // UNVERIFIED: decimal is assumed for the value format.
+    s.push("INSTALLED_FEATURE_BITMAP", FEATURES.to_string())?;
+    s.push("ENABLED_FEATURE_BITMAP", FEATURES.to_string())?;
+    s.push("HIDDEN_FEATURE_BITMAP", "0")?;
     s.push("UTC", now().to_string())?;
     Ok(s)
 }
@@ -168,7 +177,8 @@ mod tests {
                 assert_eq!(v, "", "{k} must be empty");
             }
         }
-        assert!(s.get("ENABLED_FEATURE_BITMAP").is_none());
+        assert_eq!(s.get("ENABLED_FEATURE_BITMAP"), Some("24"));
+        assert_eq!(s.get("INSTALLED_FEATURE_BITMAP"), Some("24"));
         assert_eq!(s.get("EP_CHKSUM"), Some("0"));
     }
 

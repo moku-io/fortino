@@ -37,6 +37,41 @@ pub struct DaemonConfig {
     /// Apply network changes to an in-memory fake instead of the host. Implied by `[fake]`.
     /// Use the in-memory fake network instead of the platform controller (development).
     pub fake_network: bool,
+    /// EMS servers the daemon may talk to.
+    pub ems: EmsSection,
+}
+
+/// EMS settings. A profile's EMS server is contacted only if it is listed here with a trust
+/// setting, and registered with only if `register = true`.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct EmsSection {
+    /// Registration store; default `<state_dir>/ems`.
+    pub state_dir: Option<PathBuf>,
+    /// Endpoint UID override (32 hex digits); default is the platform UUID.
+    pub uid: Option<String>,
+    /// Servers by `host:port`.
+    pub servers: std::collections::HashMap<String, EmsServerSection>,
+    /// Seconds to wait after the tunnel is up before the first keepalive.
+    pub settle_secs: Option<u64>,
+    /// Defer to an installed FortiClient whose EMS agent manages this device on the same EMS
+    /// (default true).
+    pub defer_to_forticlient: Option<bool>,
+}
+
+/// One EMS server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmsServerSection {
+    /// SHA-256 pin of the server's certificate (`sha256:…`).
+    pub pin: Option<String>,
+    /// CA bundle that verifies the server.
+    pub ca_file: Option<PathBuf>,
+    /// File holding the connection key (root-owned, 0600).
+    pub key_file: Option<PathBuf>,
+    /// Allow creating a registration (a device record on the EMS) on first connect.
+    #[serde(default)]
+    pub register: bool,
 }
 
 /// External worker settings.
@@ -66,6 +101,7 @@ impl Default for DaemonConfig {
             fake: None,
             worker: None,
             fake_network: false,
+            ems: EmsSection::default(),
         }
     }
 }
@@ -124,6 +160,21 @@ mod tests {
         assert_eq!(c.fake.unwrap().otp.as_deref(), Some("654321"));
         assert_eq!(c.challenge_timeout_secs, 120);
         assert!(toml::from_str::<DaemonConfig>("bogus = 1").is_err());
+    }
+
+    #[test]
+    fn parses_ems_servers() {
+        let c: DaemonConfig = toml::from_str(
+            r#"
+            [ems.servers."ems.example.org:8013"]
+            pin = "sha256:00"
+            register = true
+            "#,
+        )
+        .unwrap();
+        let s = &c.ems.servers["ems.example.org:8013"];
+        assert!(s.register && s.key_file.is_none());
+        assert!(toml::from_str::<DaemonConfig>("[ems.servers.x]\nbogus = 1").is_err());
     }
 
     #[test]

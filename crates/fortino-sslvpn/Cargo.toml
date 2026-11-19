@@ -12,6 +12,7 @@ fortino-config.workspace = true
 fortino-core.workspace = true
 fortino-platform.workspace = true
 fortino-proto-sslvpn.workspace = true
+fortino-tls.workspace = true
 fortino-secret.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true

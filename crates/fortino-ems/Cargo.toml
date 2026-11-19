@@ -11,7 +11,8 @@ description = "EMS agent: registration per EMS server, keepalives, host-verifica
 fortino-config.workspace = true
 fortino-platform.workspace = true
 fortino-proto-ems.workspace = true
-fortino-sslvpn.workspace = true
+fortino-tls.workspace = true
+fortino-core.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 rustls-pki-types = { workspace = true, features = ["std"] }
@@ -28,6 +29,9 @@ zeroize.workspace = true
 
 [dev-dependencies]
 fortino-mock.workspace = true
+fortino-sslvpn.workspace = true
+fortino-proto-sslvpn.workspace = true
+fortino-secret.workspace = true
 tempfile = "3"
 tokio.workspace = true
 

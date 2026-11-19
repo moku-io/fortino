@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use fortino_config::{Endpoint, IpPolicy};
 use fortino_core::framing::{read_frame, write_frame};
+use fortino_core::worker::EmsIdentity;
 use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
 use fortino_core::worker_wire::{
     DaemonMsg, MAX_WORKER_FRAME, WORKER_PROTOCOL_VERSION, WireReason, WorkerMsg,
@@ -110,6 +111,8 @@ async fn main() -> io::Result<()> {
         realm,
         username,
         ca_file,
+        ems_serial,
+        ems_tenant,
     } = &start
     else {
         return Err(io::Error::other("expected start"));
@@ -139,6 +142,7 @@ async fn main() -> io::Result<()> {
                 username: username.clone(),
                 trust_id: String::new(),
                 ip_policy: IpPolicy::SplitIpv4,
+                ems: ems_identity(ems_serial.as_deref(), ems_tenant.as_deref()),
             },
         ))
     })();
@@ -217,4 +221,20 @@ async fn main() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The EMS identity from the start frame. Bounded and plain so that nothing odd reaches a
+/// header; anything else is dropped.
+fn ems_identity(serial: Option<&str>, tenant: Option<&str>) -> Option<EmsIdentity> {
+    let ok = |s: &str, max: usize| {
+        !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_alphanumeric())
+    };
+    let serial = serial.filter(|s| ok(s, 32))?;
+    let tenant = tenant
+        .filter(|t| ok(t, 64))
+        .unwrap_or("00000000000000000000000000000000");
+    Some(EmsIdentity {
+        serial: serial.to_owned(),
+        tenant: tenant.to_owned(),
+    })
 }

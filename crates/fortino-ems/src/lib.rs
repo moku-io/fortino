@@ -6,10 +6,14 @@
 //! - [`report`]: SYSINFO from real host facts; nothing claimed that Fortino does not have.
 //! - [`hostcheck`]: host-verification rules evaluated truthfully into `RULES`.
 //! - [`agent`]: probe, register, keepalive, tag report, deregister.
+//! - [`service`]: the connect-flow wrapper around the tunnel worker.
+//! - [`forticlient`]: deferring to an installed FortiClient that manages the same device.
 
 pub mod agent;
+pub mod forticlient;
 pub mod hostcheck;
 pub mod report;
+pub mod service;
 pub mod store;
 pub mod transport;
 

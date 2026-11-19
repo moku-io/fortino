@@ -48,10 +48,32 @@ pub struct Facts {
     pub memory_mib: Option<u64>,
     /// Size of the system volume in GiB.
     pub disk_gib: Option<u64>,
-    /// `ARM` or `X86`.
+    /// `ARM` on Apple silicon, `AMD` otherwise (FortiClient's values).
     pub arch: &'static str,
     /// Interfaces with an IPv4 address, the default-route interface first.
     pub interfaces: Vec<Interface>,
+}
+
+/// The OS description as FortiClient builds it: the product name (letters and
+/// spaces only), a space, then the version (digits and dots only), with `.0` appended to a
+/// two-part version (`26.1` → `26.1.0`). Just the name when the version is unknown.
+pub fn os_version(name: &str, version: &str) -> String {
+    let name: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic() || *c == ' ')
+        .collect();
+    let name = name.trim();
+    let mut v: String = version
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if v.is_empty() {
+        return name.to_owned();
+    }
+    if v.matches('.').count() == 1 {
+        v.push_str(".0");
+    }
+    format!("{name} {v}")
 }
 
 /// Parses `aa:bb:cc:dd:ee:ff`.
@@ -191,9 +213,9 @@ mod macos {
             platform_uuid: ioreg_value(&ioreg, "IOPlatformUUID"),
             hostname: out("/bin/hostname", &["-s"]).unwrap_or_default(),
             user: out("/usr/bin/stat", &["-f%Su", "/dev/console"]).filter(|u| u != "root"),
-            os_version: format!(
-                "macOS {}",
-                out("/usr/bin/sw_vers", &["-productVersion"]).unwrap_or_default()
+            os_version: os_version(
+                &out("/usr/bin/sw_vers", &["-productName"]).unwrap_or_default(),
+                &out("/usr/bin/sw_vers", &["-productVersion"]).unwrap_or_default(),
             ),
             manufacturer: ioreg_value(&ioreg, "manufacturer"),
             model: sysctl("hw.model"),
@@ -206,7 +228,7 @@ mod macos {
             arch: if cfg!(target_arch = "aarch64") {
                 "ARM"
             } else {
-                "X86"
+                "AMD"
             },
             interfaces,
         }
@@ -254,6 +276,14 @@ utun3: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1300\n\tinet 10.0.0.2 --
         assert_eq!(ifs[0].mac, [0xaa, 0xbb, 0xcc, 0, 0, 1]);
         assert!(ifs[0].up && !ifs[0].is_vpn);
         assert!(ifs[1].is_vpn);
+    }
+
+    #[test]
+    fn os_version_like_forticlient() {
+        assert_eq!(os_version("macOS\n", "15.7.7\n"), "macOS 15.7.7");
+        assert_eq!(os_version("macOS", "26.1"), "macOS 26.1.0");
+        assert_eq!(os_version("macOS", "15.0"), "macOS 15.0.0");
+        assert_eq!(os_version("macOS", ""), "macOS");
     }
 
     #[test]

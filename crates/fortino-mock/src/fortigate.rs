@@ -30,7 +30,7 @@ pub struct InfoCfg {
     pub salt: String,
     /// `remoteauthtimeout` in seconds.
     pub remoteauthtimeout: u32,
-    /// `f` flag field (decimal).
+    /// `f` flag field, hex as on the wire (`100` sets the EMS-serial bit).
     pub flag: String,
 }
 

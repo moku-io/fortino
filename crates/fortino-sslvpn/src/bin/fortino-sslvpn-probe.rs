@@ -402,7 +402,7 @@ async fn run() -> Result<(), String> {
             .ok_or("gateway does not resolve")?;
         let der = fortino_sslvpn::transport::fetch_leaf(addr, &host_parsed)
             .await
-            .map_err(|e| e.message())?;
+            .map_err(|e| e.to_string())?;
         println!("{}", fortino_sslvpn::transport::fingerprint(&der));
         return Ok(());
     }
@@ -442,6 +442,7 @@ async fn run() -> Result<(), String> {
         username: Some(username),
         trust_id: "probe".into(),
         ip_policy: IpPolicy::SplitIpv4,
+        ems: None,
     });
 
     let started = std::time::Instant::now();

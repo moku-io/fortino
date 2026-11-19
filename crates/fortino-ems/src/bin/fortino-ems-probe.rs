@@ -4,15 +4,18 @@
 //! fortino-ems-probe HOST[:PORT] --print-pin
 //! fortino-ems-probe HOST[:PORT] --pin SHA256 [--ca FILE] [--facts]
 //! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --register [--key-file FILE] --yes
-//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --keepalive [--full]
+//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --keepalive [--full] [--check-host] [--tag BITS|-]
 //! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --deregister --yes
+//! fortino-ems-probe HOST[:PORT] --forticlient
 //! ```
 //!
 //! Without `--register`, `--keepalive` or `--deregister` it only sends PROBE, which creates
 //! nothing on the server. `--register` creates a device record on the EMS and needs `--yes`;
 //! get the administrator's approval first. `--uid` overrides the endpoint UID (default: the
 //! platform UUID, which is also what an installed FortiClient uses). `--facts` prints what
-//! would be reported, without contacting anything. Secrets are never printed.
+//! would be reported, without contacting anything. `--forticlient` shows whether an installed
+//! FortiClient manages this device on that EMS (values masked; contacts nothing). Secrets are
+//! never printed. `--caps N` overrides the `CAPS` header for an experiment.
 
 use std::process::ExitCode;
 
@@ -20,8 +23,8 @@ use fortino_config::EmsServer;
 use fortino_ems::report::{self, Compat};
 use fortino_ems::{Agent, Connection, Keepalive, Store};
 use fortino_proto_ems::ids::Uid;
-use fortino_sslvpn::Trust;
-use fortino_sslvpn::transport::{fetch_leaf, fingerprint, parse_pin};
+use fortino_tls::Trust;
+use fortino_tls::{fetch_leaf, fingerprint, parse_pin};
 
 fn arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
     args.iter()
@@ -67,6 +70,28 @@ async fn run() -> Result<(), String> {
         return Ok(());
     }
 
+    let fc = fortino_ems::forticlient::source(Some(fortino_ems::forticlient::MACOS_ROOT.into()))();
+    if has(&args, "--forticlient") {
+        let Some(fc) = fc else {
+            println!("FortiClient: not installed");
+            return Ok(());
+        };
+        let ours = facts
+            .platform_uuid
+            .as_deref()
+            .and_then(|u| Uid::parse(u).ok());
+        println!(
+            "FortiClient: agent running={} registered={} same_uid={} ems_addresses={} this_ems={} tenant_known={}",
+            fc.running,
+            fc.serial.is_some(),
+            ours.is_some() && fc.uid == ours,
+            fc.addresses.len(),
+            fc.uses_address(&server),
+            fc.tenant.is_some(),
+        );
+        return Ok(());
+    }
+
     if has(&args, "--print-pin") {
         let addr = tokio::net::lookup_host((server.host.to_string(), server.port))
             .await
@@ -75,7 +100,7 @@ async fn run() -> Result<(), String> {
             .ok_or("no IPv4 address")?;
         let leaf = fetch_leaf(addr, &server.host)
             .await
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         println!("sha256:{}", fingerprint(&leaf));
         return Ok(());
     }
@@ -96,8 +121,12 @@ async fn run() -> Result<(), String> {
             .ok_or("no platform UUID; pass --uid")?,
     };
     let state = arg(&args, "--state").unwrap_or("target/ems-state");
+    let mut compat = Compat::default();
+    if let Some(c) = arg(&args, "--caps") {
+        compat.caps = c.parse().map_err(|_| "bad --caps")?;
+    }
     let agent = Agent {
-        compat: Compat::default(),
+        compat,
         facts,
         uid: Uid::parse(&uid).map_err(|e| e.to_string())?,
         store: Store::open(state).map_err(|e| e.to_string())?,
@@ -139,11 +168,49 @@ async fn run() -> Result<(), String> {
             Keepalive::Kept { tags, renew } => println!("kept tags={tags} renew={renew}"),
             Keepalive::Dropped => println!("dropped by the EMS; local registration removed"),
         }
+        if let Some(r) = agent.registration(&conn).map_err(|e| e.to_string())? {
+            println!(
+                "received: conf={} host_rules={} server_list={} on_net={} off_net={}",
+                r.conf.content.is_some(),
+                r.host_rules.content.is_some(),
+                r.server_list.content.is_some(),
+                r.on_net.content.is_some(),
+                r.off_net.content.is_some()
+            );
+        }
+        if let Some(bits) = arg(&args, "--tag") {
+            let bits = if bits == "-" {
+                String::new()
+            } else {
+                bits.to_owned()
+            };
+            let rules = fortino_proto_ems::tags::Bits::parse(&bits).map_err(|_| "bad --tag")?;
+            let tags = agent
+                .report_rules(&conn, &rules)
+                .await
+                .map_err(|e| e.to_string())?;
+            println!("tag message sent (rules={bits:?}); tags={tags}");
+        }
+        if has(&args, "--check-host") {
+            match agent.check_host(&conn).await.map_err(|e| e.to_string())? {
+                Some(tags) => println!("host verification reported; tags={tags}"),
+                None => println!("host verification: nothing to report"),
+            }
+        }
         return Ok(());
     }
     if has(&args, "--deregister") {
         if !has(&args, "--yes") {
             return Err("--deregister removes the device record; add --yes".into());
+        }
+        // The device record may be FortiClient's too: never remove it from under FortiClient.
+        if let (Some(fc), Some(reg)) = (&fc, agent.registration(&conn).map_err(|e| e.to_string())?)
+        {
+            if fc.active_with(&agent.uid)
+                && fc.serial.as_ref().is_some_and(|s| s.as_str() == reg.serial)
+            {
+                return Err("FortiClient is registered to this EMS with the same device UID; deregistering would remove its registration too. Deregister from FortiClient, or delete Fortino's local record only.".into());
+            }
         }
         agent.deregister(&conn).await.map_err(|e| e.to_string())?;
         println!("deregistered");

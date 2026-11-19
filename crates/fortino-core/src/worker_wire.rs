@@ -57,6 +57,13 @@ pub enum DaemonMsg {
         username: Option<String>,
         /// Administrator-provisioned CA bundle path for this profile's trust ID.
         ca_file: String,
+        /// EMS server serial, when this client is registered to the profile's EMS. Sent to the
+        /// gateway only if it asks for it (`/remote/info` flag `0x100`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ems_serial: Option<String>,
+        /// EMS tenant, with `ems_serial`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ems_tenant: Option<String>,
     },
     /// Answer to a challenge. `value` is secret.
     Respond {

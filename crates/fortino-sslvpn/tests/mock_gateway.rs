@@ -41,6 +41,7 @@ async fn start(sc: Scenario) -> Rig {
         username: Some("alice".into()),
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
+        ems: None,
     });
     Rig {
         _mock: mock,
@@ -211,6 +212,7 @@ async fn untrusted_certificate_fails_before_credentials() {
         username: Some("alice".into()),
         trust_id: "t".into(),
         ip_policy: IpPolicy::SplitIpv4,
+        ems: None,
     });
     loop {
         match next(&mut h).await {

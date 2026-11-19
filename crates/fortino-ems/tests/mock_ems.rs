@@ -8,7 +8,7 @@ use fortino_platform::facts::{Facts, Interface};
 use fortino_proto_ems::ids::Uid;
 use fortino_proto_ems::message::SIZE_DELTA;
 use fortino_proto_ems::tags::Bits;
-use fortino_sslvpn::Trust;
+use fortino_tls::Trust;
 
 /// Rule 1 matches the agent's synthetic macOS 15.6 and grants tag 8; rule 2 needs a sandbox
 /// Fortino doesn't have and must never match, even negated.

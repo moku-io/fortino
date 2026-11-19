@@ -116,7 +116,17 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     let ep = &cfg.endpoint;
     let mut gw = Gateway::new(ep.host.clone(), ep.port, &w.trust)?;
     gw.connect_override = w.connect_override;
-    let identity = w.identity.clone();
+    // Like FortiClient, present the EMS serial only once `/remote/info` asks for it.
+    let mut identity = w.identity.clone();
+    let registered = cfg
+        .ems
+        .as_ref()
+        .map(|e| identity::EmsIdentity {
+            serial: e.serial.clone(),
+            tenant: e.tenant.clone(),
+        })
+        .or_else(|| identity.ems.clone());
+    identity.ems = None;
     let host = gw.host_header();
 
     // Pre-flight. GATEWAY-3 and GATEWAY-4 answer 403 here; only a parsed answer is used.
@@ -129,6 +139,9 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
         return Err(Failure::Unsupported(
             "gateway encrypts credentials (encmethod)".into(),
         ));
+    }
+    if info.wants_ems_sn() {
+        identity.ems = registered;
     }
     let ems_required = info.wants_ems_sn() && identity.ems.is_none();
 

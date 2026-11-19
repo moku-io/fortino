@@ -11,8 +11,8 @@ use std::time::Duration;
 use fortino_config::EmsServer;
 use fortino_proto_ems::message::BuildError;
 use fortino_proto_ems::reply::{self, MAX_REPLY, Reply};
-use fortino_sslvpn::Trust;
-use fortino_sslvpn::transport::{client_config, server_name};
+use fortino_tls::Trust;
+use fortino_tls::{client_config, server_name};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
@@ -40,7 +40,7 @@ impl Connection {
     /// Builds the TLS client. `trust` is a CA bundle or a pinned leaf; EMS servers often use
     /// self-signed certificates, so a pin confirmed by the user is the usual case.
     pub fn new(server: EmsServer, trust: &Trust) -> Result<Self, Error> {
-        let cfg = client_config(trust).map_err(|e| Error::Trust(format!("{e:?}")))?;
+        let cfg = client_config(trust).map_err(|e| Error::Trust(e.to_string()))?;
         Ok(Self {
             server,
             tls: TlsConnector::from(Arc::new(cfg)),

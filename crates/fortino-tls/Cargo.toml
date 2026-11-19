@@ -1,0 +1,20 @@
+[package]
+name = "fortino-tls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "TLS trust (CA bundles, leaf pins) shared by the SSL VPN worker and the EMS agent"
+
+[dependencies]
+fortino-config.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+rustls-pki-types = { workspace = true, features = ["std"] }
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+[lints]
+workspace = true

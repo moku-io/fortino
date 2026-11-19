@@ -430,6 +430,7 @@ impl Session {
             username,
             trust_id: profile.spec.trust_id.clone(),
             ip_policy: profile.spec.ip_policy,
+            ems: None,
         });
         let wake = Arc::new(Notify::new());
         g.active = Some(Active {

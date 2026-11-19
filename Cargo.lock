@@ -480,10 +480,14 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "fortino-config",
+ "fortino-core",
  "fortino-mock",
  "fortino-platform",
  "fortino-proto-ems",
+ "fortino-proto-sslvpn",
+ "fortino-secret",
  "fortino-sslvpn",
+ "fortino-tls",
  "hex",
  "rustls",
  "rustls-pki-types",
@@ -575,6 +579,7 @@ dependencies = [
  "fortino-platform",
  "fortino-proto-sslvpn",
  "fortino-secret",
+ "fortino-tls",
  "fortinod",
  "rand 0.8.8",
  "rustls",
@@ -592,13 +597,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "fortino-tls"
+version = "0.1.0"
+dependencies = [
+ "fortino-config",
+ "rustls",
+ "rustls-pki-types",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+]
+
+[[package]]
 name = "fortinod"
 version = "0.1.0"
 dependencies = [
  "fortino-config",
  "fortino-core",
+ "fortino-ems",
  "fortino-platform",
+ "fortino-proto-ems",
  "fortino-secret",
+ "fortino-tls",
  "nix 0.30.1",
  "serde",
  "serde_json",

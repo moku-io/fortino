@@ -46,6 +46,16 @@ pub enum Failure {
     Backend(String),
 }
 
+impl From<fortino_tls::Failure> for Failure {
+    fn from(e: fortino_tls::Failure) -> Self {
+        match e {
+            fortino_tls::Failure::Trust(m) => Self::Trust(m),
+            fortino_tls::Failure::Transport(m) => Self::Transport(m),
+            fortino_tls::Failure::Backend(m) => Self::Backend(m),
+        }
+    }
+}
+
 impl Failure {
     /// The daemon-facing error code.
     pub fn code(&self) -> ErrorCode {
