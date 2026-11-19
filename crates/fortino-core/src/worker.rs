@@ -45,6 +45,16 @@ pub enum WorkerStage {
     Negotiating,
 }
 
+/// One per-domain DNS rule from the gateway: these domains resolve through these servers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SplitDnsRule {
+    /// Match domains.
+    pub domains: Vec<String>,
+    /// Resolvers for them.
+    pub servers: Vec<Ipv4Addr>,
+}
+
 /// Network settings negotiated with the gateway. Untrusted input: the daemon validates them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TunnelConfig {
@@ -56,8 +66,10 @@ pub struct TunnelConfig {
     pub routes: Vec<IpNet>,
     /// DNS servers.
     pub dns_servers: Vec<Ipv4Addr>,
-    /// DNS match domains, if supplied by explicit policy.
+    /// DNS match domains resolved by `dns_servers`, if supplied by explicit policy.
     pub dns_domains: Vec<String>,
+    /// Per-domain rules with their own resolvers (gateways with several server sets).
+    pub split_dns: Vec<SplitDnsRule>,
     /// Resolved gateway address (kept on the physical uplink).
     pub gateway_ip: Ipv4Addr,
     /// The gateway requires IPv6 to be blocked while connected.
@@ -342,6 +354,7 @@ impl FakeRun {
             routes,
             dns_servers: s.dns_servers.clone(),
             dns_domains: s.dns_domains.clone(),
+            split_dns: Vec::new(),
             gateway_ip: s.gateway_ip,
             block_ipv6: s.block_ipv6,
         }))

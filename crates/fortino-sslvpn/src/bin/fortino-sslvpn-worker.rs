@@ -181,6 +181,7 @@ async fn main() -> io::Result<()> {
                             routes: tc.routes.iter().map(ToString::to_string).collect(),
                             dns: tc.dns_servers,
                             dns_domains: tc.dns_domains,
+                            split_dns: tc.split_dns,
                             block_ipv6: tc.block_ipv6,
                         },
                         false,

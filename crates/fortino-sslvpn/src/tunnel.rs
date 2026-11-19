@@ -3,7 +3,7 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Instant;
 
-use fortino_core::worker::{TunnelConfig, WorkerCommand, WorkerEvent};
+use fortino_core::worker::{SplitDnsRule, TunnelConfig, WorkerCommand, WorkerEvent};
 use fortino_platform::IpNet;
 use fortino_proto_sslvpn::config::TunnelSettings;
 use fortino_proto_sslvpn::frame;
@@ -204,7 +204,7 @@ fn up_config(
             tracing::warn!("IPCP address differs from the settings XML; using IPCP");
         }
     }
-    let (dns_servers, dns_domains) = dns_policy(st, link)?;
+    let (dns_servers, split_dns) = dns_policy(st, link);
 
     let params = LinkParams {
         local: link.local,
@@ -232,18 +232,17 @@ fn up_config(
             })
             .collect(),
         dns_servers,
-        dns_domains,
+        dns_domains: Vec::new(),
+        split_dns,
         gateway_ip,
         // FortiClient blocks IPv6 on an IPv4-only tunnel.
         block_ipv6: st.assigned_v6.is_none(),
     })
 }
 
-/// Flattens the gateway's DNS policy for the daemon, refusing it when that would lose rules.
-fn dns_policy(
-    st: &TunnelSettings,
-    link: &Ipv4Link,
-) -> Result<(Vec<Ipv4Addr>, Vec<String>), Failure> {
+/// The gateway's DNS policy for the daemon: global resolvers, and each split-DNS rule with
+/// its own servers (a rule without servers uses the global ones).
+fn dns_policy(st: &TunnelSettings, link: &Ipv4Link) -> (Vec<Ipv4Addr>, Vec<SplitDnsRule>) {
     let mut servers: Vec<Ipv4Addr> = st
         .dns
         .iter()
@@ -252,28 +251,24 @@ fn dns_policy(
             IpAddr::V6(_) => None,
         })
         .collect();
-    let mut domains = Vec::new();
-    if !st.split_dns.is_empty() {
-        // The daemon's model has one resolver set for all match domains. Different server
-        // sets per domain cannot be expressed; refuse rather than misroute names.
-        let first = &st.split_dns[0].servers;
-        if st.split_dns.iter().any(|r| &r.servers != first) {
-            return Err(Failure::Unsupported(
-                "split DNS with different servers per domain is not supported yet".into(),
-            ));
-        }
-        if !first.is_empty() {
-            servers = first.clone();
-        }
-        for r in &st.split_dns {
-            domains.extend(r.domains.iter().cloned());
-        }
-    }
     if servers.is_empty() {
         servers = link.dns.clone();
     }
     servers.dedup();
-    Ok((servers, domains))
+    let rules = st
+        .split_dns
+        .iter()
+        .map(|r| SplitDnsRule {
+            domains: r.domains.clone(),
+            servers: if r.servers.is_empty() {
+                servers.clone()
+            } else {
+                r.servers.clone()
+            },
+        })
+        .filter(|r| !r.servers.is_empty())
+        .collect();
+    (servers, rules)
 }
 
 /// Moves packets between the device and the tunnel task.

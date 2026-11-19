@@ -187,8 +187,42 @@ async fn data_plane(
 ) {
     let me = tc.assigned_ip;
     let mut target = None;
+    // Resolvers to ask, best first: the split rule matching the name, then the other rules,
+    // then the global servers. Labels avoid printing addresses.
+    let mut resolvers: Vec<(String, Ipv4Addr)> = Vec::new();
+    if let Some(name) = host {
+        let lname = name.to_ascii_lowercase();
+        let mut rules: Vec<(usize, &fortino_core::worker::SplitDnsRule)> =
+            tc.split_dns.iter().enumerate().collect();
+        rules.sort_by_key(|(_, r)| {
+            !r.domains
+                .iter()
+                .any(|d| lname == *d || lname.ends_with(&format!(".{d}")))
+        });
+        for (i, r) in rules {
+            let matches = r
+                .domains
+                .iter()
+                .any(|d| lname == *d || lname.ends_with(&format!(".{d}")));
+            for (k, a) in r.servers.iter().enumerate() {
+                if !resolvers.iter().any(|(_, x)| x == a) {
+                    let tag = if matches {
+                        " (matches the endpoint)"
+                    } else {
+                        ""
+                    };
+                    resolvers.push((format!("split rule #{i} server #{k}{tag}"), *a));
+                }
+            }
+        }
+    }
+    for (k, a) in tc.dns_servers.iter().enumerate() {
+        if !resolvers.iter().any(|(_, x)| x == a) {
+            resolvers.push((format!("global server #{k}"), *a));
+        }
+    }
     if let Some(name) = host.filter(|h| h.parse::<Ipv4Addr>().is_err()) {
-        for (n, dns) in tc.dns_servers.iter().enumerate() {
+        for (n, (label, dns)) in resolvers.iter().enumerate() {
             let q = dns_query(0x4f43 + n as u16, name);
             let mut udp = 40000u16.to_be_bytes().to_vec();
             udp.extend_from_slice(&53u16.to_be_bytes());
@@ -204,20 +238,51 @@ async fn data_plane(
                 Some(p) => {
                     let (rcode, a) = dns_answer(&p[28..]);
                     println!(
-                        "          dns server #{n}: answered (rcode {rcode}, A record {})",
+                        "          dns {label}: answered (rcode {rcode}, A record {})",
                         if a.is_some() { "found" } else { "none" }
                     );
                     if target.is_none() {
                         target = a;
                     }
                 }
-                None => println!("          dns server #{n}: no answer in 3 s"),
+                None => println!("          dns {label}: no answer in 3 s"),
             }
         }
     } else if let Some(ip) = host.and_then(|h| h.parse().ok()) {
         target = Some(ip);
     }
+    if target.is_none() {
+        if let Some(name) = host {
+            // Read-only fallback: this Mac's own resolver (outside the tunnel).
+            let a = tokio::net::lookup_host((name, port))
+                .await
+                .ok()
+                .and_then(|mut it| {
+                    it.find_map(|a| match a.ip() {
+                        std::net::IpAddr::V4(v) => Some(v),
+                        std::net::IpAddr::V6(_) => None,
+                    })
+                });
+            println!(
+                "          endpoint via this Mac's DNS: {}",
+                if a.is_some() {
+                    "resolved"
+                } else {
+                    "not resolved"
+                }
+            );
+            target = a;
+        }
+    }
     if let Some(dst) = target {
+        let inside = tc
+            .routes
+            .iter()
+            .any(|r| r.contains(std::net::IpAddr::V4(dst)));
+        println!(
+            "          endpoint address is {} the tunnel's routes",
+            if inside { "inside" } else { "OUTSIDE" }
+        );
         // TCP SYN to the endpoint's port; a SYN-ACK or RST proves two-way TCP reachability.
         let mut tcp = 40001u16.to_be_bytes().to_vec();
         tcp.extend_from_slice(&port.to_be_bytes());
@@ -261,12 +326,7 @@ async fn data_plane(
     let targets: Vec<(String, Ipv4Addr)> = target
         .map(|t| ("test endpoint".to_owned(), t))
         .into_iter()
-        .chain(
-            tc.dns_servers
-                .iter()
-                .enumerate()
-                .map(|(n, d)| (format!("dns server #{n}"), *d)),
-        )
+        .chain(resolvers.iter().map(|(l, d)| (format!("dns {l}"), *d)))
         .collect();
     for (label, dst) in targets {
         let mut icmp = vec![8, 0, 0, 0, 0x4f, 0x43, 0, 1];
@@ -289,6 +349,21 @@ async fn data_plane(
     }
 }
 
+/// Waits up to 5 minutes for `path`, reads the code from it and deletes the file.
+async fn wait_for_otp(path: &str) -> Option<Secret> {
+    for _ in 0..600 {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            let _ = std::fs::remove_file(path);
+            let code = text.trim().to_owned();
+            if !code.is_empty() {
+                return Some(Secret::new(code));
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    None
+}
+
 async fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     let path = args.get(1).ok_or("usage: fortino-sslvpn-probe <credentials-file> [--device memory|utun] [--ca FILE] [--hold SECS]")?;
@@ -300,6 +375,7 @@ async fn run() -> Result<(), String> {
     };
     let device = opt("--device").unwrap_or_else(|| "memory".into());
     let ca = opt("--ca").unwrap_or_else(|| "/etc/ssl/cert.pem".into());
+    let otp_file = opt("--otp-file");
     let hold: u64 = opt("--hold").and_then(|h| h.parse().ok()).unwrap_or(5);
 
     let c = read_creds(path)?;
@@ -396,9 +472,22 @@ async fn run() -> Result<(), String> {
                 println!("[{t:>5.1}s] challenge {kind:?}: {prompt}");
                 let value = match kind {
                     ChallengeKind::Password => Secret::new(password.expose()),
-                    ChallengeKind::Otp => match &otp {
-                        Some(o) => Secret::new(o.expose()),
-                        None => {
+                    ChallengeKind::Otp => match (&otp, &otp_file) {
+                        (Some(o), _) => Secret::new(o.expose()),
+                        (None, Some(path)) => {
+                            println!(
+                                "          waiting for a code in {path} (read once, then deleted)"
+                            );
+                            match wait_for_otp(path).await {
+                                Some(code) => code,
+                                None => {
+                                    println!("          no code arrived in time");
+                                    let _ = h.commands.send(WorkerCommand::Stop).await;
+                                    continue;
+                                }
+                            }
+                        }
+                        (None, None) => {
                             println!(
                                 "          gateway asks for a one-time code; none in the credentials file"
                             );
@@ -425,10 +514,10 @@ async fn run() -> Result<(), String> {
                     tc.interface, tc.assigned_ip, tc.gateway_ip
                 );
                 println!(
-                    "          routes={} dns={} domains={} block_ipv6={}",
+                    "          routes={} dns={} split_rules={} block_ipv6={}",
                     tc.routes.len(),
                     tc.dns_servers.len(),
-                    tc.dns_domains.len(),
+                    tc.split_dns.len(),
                     tc.block_ipv6
                 );
                 up_at = Some(started.elapsed());

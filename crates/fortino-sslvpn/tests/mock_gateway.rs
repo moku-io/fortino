@@ -131,9 +131,12 @@ async fn connects_pings_and_disconnects() {
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
-        ["10.0.0.54"]
+        ["10.0.0.53"]
     );
-    assert_eq!(tc.dns_domains, ["intra.example"]);
+    assert!(tc.dns_domains.is_empty());
+    assert_eq!(tc.split_dns.len(), 1);
+    assert_eq!(tc.split_dns[0].domains, ["intra.example"]);
+    assert_eq!(tc.split_dns[0].servers[0].to_string(), "10.0.0.54");
     assert!(tc.block_ipv6);
 
     let mut peer = r.devices.peers.lock().unwrap().pop().unwrap();

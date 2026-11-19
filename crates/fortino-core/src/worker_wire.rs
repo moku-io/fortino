@@ -18,7 +18,7 @@ use fortino_platform::IpNet;
 
 use crate::error::ErrorCode;
 use crate::proto::ChallengeKind;
-use crate::worker::{Termination, TunnelConfig, WorkerEvent, WorkerStage};
+use crate::worker::{SplitDnsRule, Termination, TunnelConfig, WorkerEvent, WorkerStage};
 
 /// Worker channel protocol version.
 pub const WORKER_PROTOCOL_VERSION: u32 = 1;
@@ -32,6 +32,8 @@ pub const MAX_DNS: usize = 8;
 pub const MAX_DOMAINS: usize = 64;
 /// Maximum length of short strings (IDs, prompts, interface names).
 pub const MAX_SHORT: usize = 128;
+/// Most split-DNS rules in an `up` frame.
+pub const MAX_SPLIT_RULES: usize = 32;
 
 /// Messages from the daemon.
 #[derive(Serialize, Deserialize)]
@@ -218,9 +220,12 @@ pub enum WorkerMsg {
         /// DNS servers.
         #[serde(default)]
         dns: Vec<Ipv4Addr>,
-        /// DNS match domains (complete per-domain policy).
+        /// DNS match domains resolved by `dns`.
         #[serde(default)]
         dns_domains: Vec<String>,
+        /// Per-domain rules with their own resolvers.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        split_dns: Vec<SplitDnsRule>,
         /// Gateway requires blocking IPv6.
         #[serde(default)]
         block_ipv6: bool,
@@ -304,6 +309,7 @@ impl WorkerMsg {
                 routes,
                 dns,
                 dns_domains,
+                split_dns,
                 block_ipv6,
                 ..
             } => {
@@ -319,6 +325,18 @@ impl WorkerMsg {
                 if dns_domains.iter().any(|d| !short(d)) {
                     return Err(Violation("dns domain"));
                 }
+                let rule_domains: usize = split_dns.iter().map(|r| r.domains.len()).sum();
+                if split_dns.len() > MAX_SPLIT_RULES
+                    || dns_domains.len() + rule_domains > MAX_DOMAINS
+                    || split_dns.iter().any(|r| {
+                        r.domains.is_empty()
+                            || r.servers.is_empty()
+                            || r.servers.len() > MAX_DNS
+                            || r.domains.iter().any(|d| !short(d))
+                    })
+                {
+                    return Err(Violation("split dns"));
+                }
                 let routes = routes
                     .iter()
                     .map(|r| r.parse::<IpNet>())
@@ -330,6 +348,7 @@ impl WorkerMsg {
                     routes,
                     dns_servers: dns,
                     dns_domains,
+                    split_dns,
                     gateway_ip,
                     block_ipv6,
                 })
@@ -399,6 +418,7 @@ mod tests {
             routes: vec!["10.0.0.0/8".into(); MAX_ROUTES + 1],
             dns: vec![],
             dns_domains: vec![],
+            split_dns: vec![],
             block_ipv6: false,
         };
         assert!(many.into_event("a", &mut last).is_err());

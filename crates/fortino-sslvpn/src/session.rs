@@ -333,6 +333,25 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
             return Err(Failure::Backend(e.to_string()));
         }
     };
+    {
+        let st = &session.settings;
+        // Shape only: no addresses or names.
+        tracing::debug!(
+            "settings: method={:?} include={} exclude={} dns={} suffixes={} split_rules={} split_server_sets={} split_domains={} distinct_dns={} ipv6={} unknown={:?} rejected={:?}",
+            st.tunnel_method,
+            st.include_v4.len(),
+            st.exclude_v4.len(),
+            st.dns.len(),
+            st.dns_suffixes.len(),
+            st.split_dns.len(),
+            st.split_server_sets(),
+            st.split_dns.iter().map(|r| r.domains.len()).sum::<usize>(),
+            st.dns_count(),
+            st.has_ipv6,
+            st.unknown,
+            st.rejected,
+        );
+    }
     if !session.settings.rejected.is_empty() {
         let why = session.settings.rejected.join("; ");
         logout(&mut session).await;

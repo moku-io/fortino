@@ -85,6 +85,38 @@ pub fn plan(tc: &TunnelConfig, policy: IpPolicy) -> Result<Vec<NetChange>, NetEr
     if tc.dns_domains.iter().any(|d| !valid_domain(d)) {
         return Err(NetError::Invalid("DNS domain"));
     }
+    let rule_domains: usize = tc.split_dns.iter().map(|r| r.domains.len()).sum();
+    if tc.dns_domains.len() + rule_domains > MAX_DNS_DOMAINS {
+        return Err(NetError::Invalid("too many resolver entries"));
+    }
+    for r in &tc.split_dns {
+        if r.servers.is_empty() || r.servers.len() > MAX_DNS_SERVERS {
+            return Err(NetError::Invalid("split DNS servers"));
+        }
+        if r.servers.iter().any(|a| !valid_unicast(*a)) {
+            return Err(NetError::Invalid("DNS server address"));
+        }
+        if r.domains.is_empty() || r.domains.iter().any(|d| !valid_domain(d)) {
+            return Err(NetError::Invalid("DNS domain"));
+        }
+    }
+    // A domain may be routed to one resolver set only.
+    let mut all: Vec<String> = tc
+        .dns_domains
+        .iter()
+        .map(|d| d.to_ascii_lowercase())
+        .collect();
+    all.extend(
+        tc.split_dns
+            .iter()
+            .flat_map(|r| r.domains.iter().map(|d| d.to_ascii_lowercase())),
+    );
+    let n = all.len();
+    all.sort();
+    all.dedup();
+    if all.len() != n {
+        return Err(NetError::Invalid("DNS domain listed twice"));
+    }
     for r in &tc.routes {
         if !r.is_ipv4() {
             return Err(NetError::Unsupported("IPv6 route on an IPv4-only tunnel"));
@@ -142,6 +174,15 @@ pub fn plan(tc: &TunnelConfig, policy: IpPolicy) -> Result<Vec<NetChange>, NetEr
             });
         }
         // Split mode without match domains: keep the original resolver.
+    }
+    for r in &tc.split_dns {
+        let servers: Vec<IpAddr> = r.servers.iter().map(|a| IpAddr::V4(*a)).collect();
+        for d in &r.domains {
+            out.push(NetChange::AddSplitDns {
+                domain: d.clone(),
+                servers: servers.clone(),
+            });
+        }
     }
     if tc.block_ipv6 {
         out.push(NetChange::BlockIpv6);
@@ -210,6 +251,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use fortino_core::worker::SplitDnsRule;
     use fortino_platform::fake::{FakeNet, FakeState};
 
     fn tc() -> TunnelConfig {
@@ -219,6 +261,7 @@ mod tests {
             routes: vec!["10.0.0.0/8".parse().unwrap()],
             dns_servers: vec![Ipv4Addr::new(10, 0, 0, 53)],
             dns_domains: vec!["corp.example".into()],
+            split_dns: vec![],
             gateway_ip: Ipv4Addr::new(203, 0, 113, 10),
             block_ipv6: true,
         }
@@ -244,6 +287,49 @@ mod tests {
         let mut t = tc();
         t.dns_domains = vec!["bad domain".into()];
         assert!(plan(&t, IpPolicy::SplitIpv4).is_err());
+        let mut t = tc();
+        t.split_dns = vec![SplitDnsRule {
+            domains: vec!["corp.example".into()],
+            servers: vec![Ipv4Addr::new(10, 1, 0, 53)],
+        }];
+        assert!(
+            plan(&t, IpPolicy::SplitIpv4).is_err(),
+            "same domain in two rules"
+        );
+    }
+
+    #[test]
+    fn split_rules_keep_their_own_servers() {
+        let mut t = tc();
+        t.dns_domains = vec![];
+        t.split_dns = vec![
+            SplitDnsRule {
+                domains: vec!["a.example".into(), "b.example".into()],
+                servers: vec![Ipv4Addr::new(10, 1, 0, 53)],
+            },
+            SplitDnsRule {
+                domains: vec!["c.example".into()],
+                servers: vec![Ipv4Addr::new(10, 2, 0, 53), Ipv4Addr::new(10, 2, 0, 54)],
+            },
+        ];
+        let changes = plan(&t, IpPolicy::SplitIpv4).unwrap();
+        let split: Vec<(String, usize, IpAddr)> = changes
+            .iter()
+            .filter_map(|c| match c {
+                NetChange::AddSplitDns { domain, servers } => {
+                    Some((domain.clone(), servers.len(), servers[0]))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            split,
+            [
+                ("a.example".to_owned(), 1, "10.1.0.53".parse().unwrap()),
+                ("b.example".to_owned(), 1, "10.1.0.53".parse().unwrap()),
+                ("c.example".to_owned(), 2, "10.2.0.53".parse().unwrap()),
+            ]
+        );
     }
 
     #[test]

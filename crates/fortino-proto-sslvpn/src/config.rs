@@ -109,13 +109,33 @@ pub struct TunnelSettings {
 
 impl TunnelSettings {
     /// Every DNS server named anywhere.
-    fn dns_count(&self) -> usize {
-        self.dns.len()
-            + self
-                .split_dns
-                .iter()
-                .map(|s| s.servers.len() + s.servers_v6.len())
-                .sum::<usize>()
+    /// Distinct DNS server addresses named anywhere. Gateways repeat the same servers in
+    /// every split-DNS rule, so a plain sum overstates them.
+    pub fn dns_count(&self) -> usize {
+        let mut all: Vec<IpAddr> = self.dns.clone();
+        for r in &self.split_dns {
+            all.extend(r.servers.iter().map(|a| IpAddr::V4(*a)));
+            all.extend(r.servers_v6.iter().map(|a| IpAddr::V6(*a)));
+        }
+        all.sort();
+        all.dedup();
+        all.len()
+    }
+
+    /// Distinct server sets across split-DNS rules (1 means every rule uses the same servers).
+    pub fn split_server_sets(&self) -> usize {
+        let mut sets: Vec<Vec<Ipv4Addr>> = self
+            .split_dns
+            .iter()
+            .map(|r| {
+                let mut v = r.servers.clone();
+                v.sort();
+                v
+            })
+            .collect();
+        sets.sort();
+        sets.dedup();
+        sets.len()
     }
 
     fn domain_count(&self) -> usize {
@@ -468,6 +488,21 @@ mod tests {
         assert_eq!(s.rejected.len(), 1);
         assert!(s.has_ipv6);
         assert_eq!(s.assigned_v6.map(|a| a.1), Some(64));
+    }
+
+    #[test]
+    fn repeated_split_servers_count_once() {
+        let mut x = String::from("<sslvpn-tunnel><ipv4><dns ip='10.0.0.1'/>");
+        for i in 0..20 {
+            x.push_str(&format!(
+                "<split-dns domains='d{i}.example' dnsserver1='10.0.0.1' dnsserver2='10.0.0.2'/>"
+            ));
+        }
+        x.push_str("</ipv4></sslvpn-tunnel>");
+        let s = parse(&x).unwrap();
+        assert!(s.rejected.is_empty(), "{:?}", s.rejected);
+        assert_eq!(s.dns_count(), 2);
+        assert_eq!(s.split_server_sets(), 1);
     }
 
     #[test]
