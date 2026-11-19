@@ -17,11 +17,11 @@ Fortino is a independent, native reimplementation of FortiClient (macOS first): 
 ## Root and the host network
 
 - Never run anything that changes routes, DNS, pf or interfaces as root on the development Mac. Use the disposable Tart VM (`scripts/macos-vm-test.sh`, [the design notes]).
-- `ofc-sslvpn-probe` with its default in-memory device needs no root and changes nothing on the host; prefer it for live gateway checks.
+- `fortino-sslvpn-probe` with its default in-memory device needs no root and changes nothing on the host; prefer it for live gateway checks.
 
 ## Code
 
 - Rust workspace, edition 2024. `unsafe` is denied; `unwrap`, `expect` and `panic` are denied outside tests (integration tests opt out with `#![allow(...)]`).
-- Protocol crates (`ofc-proto-*`) are sans-IO and fuzz-safe: every parser gets a property test that it never panics. Bound every collection and frame size from the network.
+- Protocol crates (`fortino-proto-*`) are sans-IO and fuzz-safe: every parser gets a property test that it never panics. Bound every collection and frame size from the network.
 - Before finishing: `cargo fmt --all`, `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`. The Swift app builds with `swift build --package-path apps/macos`.
 - When behaviour changes, update the doc that owns it (see the table in the README) and record live results in the backlog under gateway aliases.

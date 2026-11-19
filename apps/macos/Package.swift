@@ -9,10 +9,10 @@ let package = Package(
     ],
     targets: [
         // Protocol, socket client and validation; no UI.
-        .target(name: "OFCKit"),
+        .target(name: "FortinoKit"),
         // Menu-bar app and profile window.
-        .executableTarget(name: "Fortino", dependencies: ["OFCKit"]),
+        .executableTarget(name: "Fortino", dependencies: ["FortinoKit"]),
         // Self-checks (the Command Line Tools have no XCTest).
-        .executableTarget(name: "OFCKitSelfTest", dependencies: ["OFCKit"]),
+        .executableTarget(name: "FortinoKitSelfTest", dependencies: ["FortinoKit"]),
     ]
 )

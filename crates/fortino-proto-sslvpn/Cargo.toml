@@ -1,0 +1,19 @@
+[package]
+name = "fortino-proto-sslvpn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Sans-IO codecs for the FortiGate SSL VPN: HTTP login, tunnel configuration, 0x5050 framing and PPP"
+
+[dependencies]
+thiserror.workspace = true
+quick-xml.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

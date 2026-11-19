@@ -774,16 +774,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-cli"
+name = "fortino-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
  "nix 0.30.1",
- "ofc-config",
- "ofc-core",
- "ofc-platform",
- "ofc-secret",
- "ofcd",
+ "fortino-config",
+ "fortino-core",
+ "fortino-platform",
+ "fortino-secret",
+ "fortinod",
  "quick-xml",
  "rpassword",
  "serde",
@@ -795,7 +795,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-config"
+name = "fortino-config"
 version = "0.1.0"
 dependencies = [
  "quick-xml",
@@ -809,12 +809,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-core"
+name = "fortino-core"
 version = "0.1.0"
 dependencies = [
- "ofc-config",
- "ofc-platform",
- "ofc-secret",
+ "fortino-config",
+ "fortino-platform",
+ "fortino-secret",
  "serde",
  "serde_json",
  "thiserror",
@@ -824,15 +824,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-integration"
+name = "fortino-integration"
 version = "0.1.0"
 
 [[package]]
-name = "ofc-mock"
+name = "fortino-mock"
 version = "0.1.0"
 dependencies = [
  "hex",
- "ofc-proto-sslvpn",
+ "fortino-proto-sslvpn",
  "rcgen",
  "rustls",
  "rustls-pki-types",
@@ -846,7 +846,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-platform"
+name = "fortino-platform"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -858,11 +858,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-proto-ems"
+name = "fortino-proto-ems"
 version = "0.1.0"
 
 [[package]]
-name = "ofc-proto-sslvpn"
+name = "fortino-proto-sslvpn"
 version = "0.1.0"
 dependencies = [
  "proptest",
@@ -872,7 +872,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-secret"
+name = "fortino-secret"
 version = "0.1.0"
 dependencies = [
  "tracing",
@@ -881,16 +881,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofc-sslvpn"
+name = "fortino-sslvpn"
 version = "0.1.0"
 dependencies = [
- "ofc-config",
- "ofc-core",
- "ofc-mock",
- "ofc-platform",
- "ofc-proto-sslvpn",
- "ofc-secret",
- "ofcd",
+ "fortino-config",
+ "fortino-core",
+ "fortino-mock",
+ "fortino-platform",
+ "fortino-proto-sslvpn",
+ "fortino-secret",
+ "fortinod",
  "rand 0.8.8",
  "rustls",
  "rustls-pki-types",
@@ -907,14 +907,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "ofcd"
+name = "fortinod"
 version = "0.1.0"
 dependencies = [
  "nix 0.30.1",
- "ofc-config",
- "ofc-core",
- "ofc-platform",
- "ofc-secret",
+ "fortino-config",
+ "fortino-core",
+ "fortino-platform",
+ "fortino-secret",
  "serde",
  "serde_json",
  "tempfile",

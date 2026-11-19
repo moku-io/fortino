@@ -2,12 +2,12 @@
 
 Fortino is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
 
-**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`ofctl`). Both drive the same root service (`ofcd`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support Fortino. Each gateway has its own EMS, whose address is set in the gateway's profile.
+**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`fortino`). Both drive the same root service (`fortinod`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support Fortino. Each gateway has its own EMS, whose address is set in the gateway's profile.
 
 **Build status.**
 
 - The daemon, CLI and app work end to end against a fake tunnel (milestone 2): profile store, kernel-credential peer checks, one serialized session, journaled network changes, password/OTP prompts.
-- The native SSL VPN worker (`crates/ofc-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM. See [the backlog].
+- The native SSL VPN worker (`crates/fortino-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM. See [the backlog].
 - Not started: TUN tunnel mode, DTLS, the EMS agent and packaging.
 
 ## Start here
@@ -39,14 +39,14 @@ cargo test --locked --workspace
 Run the development daemon with the fake worker (unprivileged, no network changes) and drive it from the CLI or the app. See [development] for details.
 
 ```sh
-cargo run -p ofcd -- --config fixtures/dev/ofcd-fake.toml   # allowed_uids must list your UID
-export OFCTL_SOCKET=$PWD/target/dev/ofcd.sock
-cargo run -p ofc-cli -- profile add GATEWAY-2 --host vpn.example.org --ems-server ems.example.org:9016
-cargo run -p ofc-cli -- connect GATEWAY-2        # password hunter2, code 123456
-OFC_SOCKET=$OFCTL_SOCKET swift run --package-path apps/macos Fortino
+cargo run -p fortinod -- --config fixtures/dev/fortinod-fake.toml   # allowed_uids must list your UID
+export FORTINO_SOCKET=$PWD/target/dev/fortinod.sock
+cargo run -p fortino-cli -- profile add GATEWAY-2 --host vpn.example.org --ems-server ems.example.org:9016
+cargo run -p fortino-cli -- connect GATEWAY-2        # password hunter2, code 123456
+swift run --package-path apps/macos Fortino
 ```
 
-The synthetic TLS gateway still runs with `cargo run --locked -p ofc-mock -- fortigate fixtures/mock/basic.yaml`.
+The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock -- fortigate fixtures/mock/basic.yaml`.
 
 ## Thanks
 
@@ -77,7 +77,7 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
 | Network rollback after crash | Yes (write-ahead journal) | Partial | Script-dependent | Yes |
 | macOS app | Native SwiftUI menu bar | Third-party GUIs | OpenConnect-GUI | Yes |
-| Headless CLI | Yes (`ofctl`) | Yes | Yes | Limited |
+| Headless CLI | Yes (`fortino`) | Yes | Yes | Limited |
 | Security suite (AV, web filter, ZTNA…) | No (out of scope) | No | No | Paid editions |
 
 Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. Fortino will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.

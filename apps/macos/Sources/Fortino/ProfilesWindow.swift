@@ -1,7 +1,7 @@
 // Profile window: list, New/Edit Profile form (EMS server directly below VPN gateway),
 // connection state and Connect/Disconnect.
 
-import OFCKit
+import FortinoKit
 import SwiftUI
 
 struct ProfilesWindow: View {

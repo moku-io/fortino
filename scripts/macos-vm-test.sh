@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runs the root-only macOS controller tests (crates/ofc-platform/tests/macos_root.rs) inside a
+# Runs the root-only macOS controller tests (crates/fortino-platform/tests/macos_root.rs) inside a
 # disposable Tart VM, so no test ever changes this Mac's network settings.
 #
 #   scripts/macos-vm-test.sh            # clone, boot, test, delete
@@ -7,12 +7,12 @@
 #
 # Environment:
 #   TART_HOME  where Tart keeps VMs (default /Volumes/esterno1/tart)
-#   OFC_VM_BASE  base VM to clone (default ofc-sequoia-base)
+#   FORTINO_VM_BASE  base VM to clone (default ofc-sequoia-base)
 set -euo pipefail
 
 export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
-BASE="${OFC_VM_BASE:-ofc-sequoia-base}"
-VM="ofc-test-$$"
+BASE="${FORTINO_VM_BASE:-ofc-sequoia-base}"
+VM="fortino-test-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="$(mktemp -d)"
 
@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> building test binary" >&2
-bin="$(cd "$ROOT" && cargo test -p ofc-platform --test macos_root --no-run --message-format=json 2>/dev/null |
+bin="$(cd "$ROOT" && cargo test -p fortino-platform --test macos_root --no-run --message-format=json 2>/dev/null |
     python3 -c 'import json,sys
 for l in sys.stdin:
     m=json.loads(l)
@@ -39,7 +39,7 @@ cp "$bin" "$STAGE/macos_root"
 
 echo "==> cloning $BASE -> $VM" >&2
 tart clone "$BASE" "$VM"
-tart run --no-graphics --dir="ofc:$STAGE:ro" "$VM" >/dev/null 2>&1 &
+tart run --no-graphics --dir="fortino:$STAGE:ro" "$VM" >/dev/null 2>&1 &
 
 echo "==> waiting for the guest agent" >&2
 for _ in $(seq 1 120); do
@@ -49,5 +49,5 @@ done
 tart exec "$VM" sw_vers
 
 echo "==> running tests as root" >&2
-tart exec "$VM" sudo env OFC_VM_ROOT_TESTS=1 RUST_BACKTRACE=1 \
-    "/Volumes/My Shared Files/ofc/macos_root" --test-threads=1 --nocapture "$@"
+tart exec "$VM" sudo env FORTINO_VM_ROOT_TESTS=1 RUST_BACKTRACE=1 \
+    "/Volumes/My Shared Files/fortino/macos_root" --test-threads=1 --nocapture "$@"

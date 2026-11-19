@@ -1,0 +1,24 @@
+[package]
+name = "fortino-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fortino-config.workspace = true
+fortino-platform.workspace = true
+fortino-secret.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "sync", "time", "rt", "macros"] }
+zeroize.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

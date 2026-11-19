@@ -1,0 +1,13 @@
+# Development daemon: fake worker and fake network, runs unprivileged from the repo root.
+#   cargo run -p fortinod -- --config fixtures/dev/fortinod-fake.toml
+# Then point clients at the socket:
+#   export FORTINO_SOCKET=$PWD/target/dev/fortinod.sock   # read by the fortino CLI and the desktop app
+# Replace 501 with your UID (`id -u`).
+socket_path = "target/dev/fortinod.sock"
+state_dir = "target/dev/state"
+allowed_uids = [501]
+
+[fake]
+password = "hunter2"      # accepted password
+otp = "123456"            # required one-time code (remove the line for password-only)
+step_delay_ms = 300

@@ -21,14 +21,14 @@ dbg_macro = "deny"
 todo = "deny"
 
 [workspace.dependencies]
-ofc-proto-sslvpn = { path = "crates/ofc-proto-sslvpn" }
-ofc-proto-ems = { path = "crates/ofc-proto-ems" }
-ofc-config = { path = "crates/ofc-config" }
-ofc-platform = { path = "crates/ofc-platform" }
-ofc-core = { path = "crates/ofc-core" }
-ofc-mock = { path = "crates/ofc-mock" }
-ofc-secret = { path = "crates/ofc-secret" }
-ofc-sslvpn = { path = "crates/ofc-sslvpn" }
+fortino-proto-sslvpn = { path = "crates/fortino-proto-sslvpn" }
+fortino-proto-ems = { path = "crates/fortino-proto-ems" }
+fortino-config = { path = "crates/fortino-config" }
+fortino-platform = { path = "crates/fortino-platform" }
+fortino-core = { path = "crates/fortino-core" }
+fortino-mock = { path = "crates/fortino-mock" }
+fortino-secret = { path = "crates/fortino-secret" }
+fortino-sslvpn = { path = "crates/fortino-sslvpn" }
 
 thiserror = "2"
 tracing = "0.1"

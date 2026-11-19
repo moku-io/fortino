@@ -1,7 +1,7 @@
-// Fortino menu-bar app. Unprivileged: all VPN work happens in ofcd.
+// Fortino menu-bar app. Unprivileged: all VPN work happens in fortinod.
 
 import AppKit
-import OFCKit
+import FortinoKit
 import SwiftUI
 
 struct FortinoApp: App {
@@ -22,14 +22,14 @@ struct FortinoApp: App {
         Window("Import Profiles", id: "import") {
             ImportWindow(model: model)
         }
-        // Development aid: the menu content in a normal window (see OFC_DEBUG_OPEN).
+        // Development aid: the menu content in a normal window (see FORTINO_DEBUG_OPEN).
         Window("Menu Preview", id: "menu-preview") {
             MenuView(model: model)
         }
     }
 }
 
-/// Menu-bar icon. With `OFC_DEBUG_OPEN=profiles,menu-preview,import` set, also opens those
+/// Menu-bar icon. With `FORTINO_DEBUG_OPEN=profiles,menu-preview,import` set, also opens those
 /// windows at launch (for development and screenshots).
 struct MenuBarLabel: View {
     @ObservedObject var model: AppModel
@@ -38,7 +38,7 @@ struct MenuBarLabel: View {
     var body: some View {
         StatusIcon(state: model.state)
             .task {
-                let ids = ProcessInfo.processInfo.environment["OFC_DEBUG_OPEN"]?
+                let ids = ProcessInfo.processInfo.environment["FORTINO_DEBUG_OPEN"]?
                     .split(separator: ",").map(String.init) ?? []
                 for id in ids { openWindow(id: id) }
             }

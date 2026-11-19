@@ -1,0 +1,39 @@
+[package]
+name = "fortinod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+fortino-config.workspace = true
+fortino-core.workspace = true
+fortino-platform.workspace = true
+fortino-secret.workspace = true
+nix = { workspace = true, features = ["user", "fs", "signal"] }
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["full"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "fortinod"
+path = "src/main.rs"
+
+# Test double for the tunnel worker; not installed.
+[[bin]]
+name = "fortino-stub-worker"
+path = "src/bin/fortino-stub-worker.rs"

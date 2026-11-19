@@ -1,5 +1,5 @@
 [package]
-name = "ofc-integration"
+name = "fortino-integration"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

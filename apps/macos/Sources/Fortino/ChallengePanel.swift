@@ -1,7 +1,7 @@
 // Sign-in panel shown whenever the daemon has an outstanding challenge for this user.
 
 import AppKit
-import OFCKit
+import FortinoKit
 import SwiftUI
 
 @MainActor

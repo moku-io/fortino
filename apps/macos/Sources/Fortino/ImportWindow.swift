@@ -1,8 +1,8 @@
-// Import window: preview a FortiClient XML export (parsed by ofctl in this user's process),
+// Import window: preview a FortiClient XML export (parsed by fortino in this user's process),
 // choose entries and replacements, optionally set EMS servers, then commit in one transaction.
 
 import AppKit
-import OFCKit
+import FortinoKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -136,9 +136,9 @@ struct ImportWindow: View {
         defer { busy = false }
         message = nil
         preview = nil
-        let (code, out, err) = await model.runOfctl(["profile", "import", url.path, "--dry-run"])
+        let (code, out, err) = await model.runCLI(["profile", "import", url.path, "--dry-run"])
         guard let env = try? JSONDecoder().decode(Envelope<ImportPreview>.self, from: out) else {
-            message = code == 127 ? "ofctl is not installed: \(err)" : "Could not read the file."
+            message = code == 127 ? "fortino is not installed: \(err)" : "Could not read the file."
             return
         }
         if let e = env.error {
@@ -164,7 +164,7 @@ struct ImportWindow: View {
         busy = true
         Task {
             defer { busy = false }
-            let (_, out, _) = await model.runOfctl(args)
+            let (_, out, _) = await model.runCLI(args)
             struct R: Decodable { var results: [Res] }
             struct Res: Decodable { var name: String; var id: String; var action: String }
             guard let env = try? JSONDecoder().decode(Envelope<R>.self, from: out) else {

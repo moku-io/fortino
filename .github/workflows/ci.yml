@@ -44,4 +44,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: swift build --package-path apps/macos
-      - run: swift run --package-path apps/macos OFCKitSelfTest
+      - run: swift run --package-path apps/macos FortinoKitSelfTest

@@ -2,7 +2,7 @@
 // one row per VPN profile with a switch, then menu-style actions. Only standard controls, so
 // macOS supplies the material (Liquid Glass on macOS 26, vibrancy before).
 
-import OFCKit
+import FortinoKit
 import SwiftUI
 
 struct StatusIcon: View {

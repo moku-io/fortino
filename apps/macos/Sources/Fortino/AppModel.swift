@@ -2,7 +2,7 @@
 
 import AppKit
 import Foundation
-import OFCKit
+import FortinoKit
 
 @MainActor
 final class AppModel: ObservableObject {
@@ -21,7 +21,7 @@ final class AppModel: ObservableObject {
     private let challenges = ChallengePanelController()
 
     init() {
-        socketPath = ProcessInfo.processInfo.environment["OFC_SOCKET"]
+        socketPath = ProcessInfo.processInfo.environment["FORTINO_SOCKET"]
             ?? UserDefaults.standard.string(forKey: "socketPath")
             ?? defaultSocketPath
         selectedProfileId = UserDefaults.standard.string(forKey: "selectedProfileId")
@@ -202,20 +202,20 @@ final class AppModel: ObservableObject {
         focusEmsFor = id
     }
 
-    // MARK: Import (parsed by ofctl in this user's process)
+    // MARK: Import (parsed by fortino in this user's process)
 
-    var ofctlPath: String? {
+    var cliPath: String? {
         let candidates = [
-            Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ofctl").path,
-            ProcessInfo.processInfo.environment["OFCTL"],
-            "/usr/local/bin/ofctl",
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fortino").path,
+            ProcessInfo.processInfo.environment["FORTINO_CLI"],
+            "/usr/local/bin/fortino",
         ].compactMap { $0 }
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    func runOfctl(_ args: [String]) async -> (Int32, Data, String) {
-        guard let path = ofctlPath else {
-            return (127, Data(), "ofctl was not found")
+    func runCLI(_ args: [String]) async -> (Int32, Data, String) {
+        guard let path = cliPath else {
+            return (127, Data(), "fortino was not found")
         }
         let socket = socketPath
         return await Task.detached {
