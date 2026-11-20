@@ -6,6 +6,8 @@
 	<string>Fortino</string>
 	<key>CFBundleExecutable</key>
 	<string>Fortino</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>org.fortino.app</string>
 	<key>CFBundleName</key>

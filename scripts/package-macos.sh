@@ -48,8 +48,52 @@ fi
 
 echo "==> Building the disk image"
 DMG="$OUT/Fortino-$VERSION.dmg"
+ART="$ROOT/apps/macos/.build/art"
+VOL="Fortino"
 ln -s /Applications "$OUT/dmg/Applications"
-hdiutil create -quiet -volname "Fortino $VERSION" -srcfolder "$OUT/dmg" -fs HFS+ -format UDZO "$DMG"
+mkdir "$OUT/dmg/.background"
+tiffutil -cathidpicheck "$ART/bg.png" "$ART/bg@2x.png" -out "$OUT/dmg/.background/background.tiff" 2>/dev/null
+
+# A writable image first, so Finder can store the window layout, then compress it.
+RW="$OUT/rw.dmg"
+hdiutil create -quiet -volname "$VOL" -srcfolder "$OUT/dmg" -fs HFS+ -format UDRW -size 200m "$RW"
+for v in "/Volumes/$VOL"*; do [[ -d "$v" ]] && hdiutil detach -quiet "$v" -force; done
+MNT=$(hdiutil attach -nobrowse -noverify -noautoopen "$RW" | awk -F'\t' '/\/Volumes\// {print $NF}')
+# Window 640 x 400 (plus the title bar), no toolbar or sidebar, 128 px icons, centres as drawn
+# in make-art.swift. Finder asks once for permission to be controlled by the terminal.
+if ! osascript <<EOT
+tell application "Finder"
+    tell disk "$(basename "$MNT")"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 840, 548}
+        set opts to the icon view options of container window
+        set arrangement of opts to not arranged
+        set icon size of opts to 128
+        set text size of opts to 13
+        set background picture of opts to file ".background:background.tiff"
+        set position of item "Fortino.app" of container window to {170, 190}
+        set position of item "Applications" of container window to {470, 190}
+        update without registering applications
+        delay 1
+        close
+    end tell
+end tell
+EOT
+then
+    echo "warning: Finder layout not applied (allow the terminal to control Finder in Privacy & Security > Automation)" >&2
+fi
+chflags hidden "$MNT/.background" 2>/dev/null || true
+# The disk's own icon (after Finder's pass, which can drop it).
+cp "$APP/Contents/Resources/AppIcon.icns" "$MNT/.VolumeIcon.icns"
+SetFile -a V "$MNT/.VolumeIcon.icns"
+SetFile -a C "$MNT"
+sync
+hdiutil detach -quiet "$MNT"
+hdiutil convert -quiet "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+rm -f "$RW"
 [[ -n "${SIGN_APP:-}" ]] && codesign --force --timestamp --sign "$SIGN_APP" "$DMG"
 
 if [[ -n "${NOTARY_PROFILE:-}" ]]; then
