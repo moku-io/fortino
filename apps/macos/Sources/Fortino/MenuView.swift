@@ -99,6 +99,7 @@ struct MenuView: View {
                 openWindow(id: "import")
                 NSApp.activate(ignoringOtherApps: true)
             }
+            LogLevelRow(model: model)
             Divider().padding(.vertical, 2)
             MenuRow(title: "Quit Fortino", help: "The VPN stays connected after quitting") {
                 NSApp.terminate(nil)
@@ -191,6 +192,34 @@ struct ProfileRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
+    }
+}
+
+/// The daemon's log level. Debug logs protocol exchanges (status codes, cookie names, paths),
+/// never passwords, codes or cookie values.
+struct LogLevelRow: View {
+    @ObservedObject var model: AppModel
+    static let levels = ["error", "warn", "info", "debug", "trace"]
+
+    var body: some View {
+        HStack {
+            Text("Log Level")
+            Spacer()
+            Picker("Log Level", selection: Binding(
+                get: { model.logLevel ?? "" },
+                set: { model.setLogLevel($0) })
+            ) {
+                if model.logLevel == nil { Text("Custom").tag("") }
+                ForEach(Self.levels, id: \.self) { Text($0.capitalized).tag($0) }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 8)
+        .disabled(model.serviceError != nil)
+        .help("Daemon log verbosity. Secrets are never logged at any level.")
     }
 }
 

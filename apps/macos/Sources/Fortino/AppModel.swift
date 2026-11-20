@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published var selectedProfileId: String?
     /// Profile to show in the editor with the EMS field focused ("Set EMS server").
     @Published var focusEmsFor: String?
+    /// The daemon's log level; nil when unknown or a custom `RUST_LOG` filter.
+    @Published var logLevel: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -66,6 +68,7 @@ final class AppModel: ObservableObject {
             client = c
             serviceError = nil
             apply(st)
+            logLevel = try? await c.logLevel()
             await refreshProfiles()
         } catch let e as ProtoError {
             serviceError = e.message
@@ -107,6 +110,17 @@ final class AppModel: ObservableObject {
             }
         } catch {
             report(error)
+        }
+    }
+
+    func setLogLevel(_ level: String) {
+        Task {
+            do {
+                try await require().setLogLevel(level)
+                logLevel = level
+            } catch {
+                report(error)
+            }
         }
     }
 

@@ -3,14 +3,31 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use tracing_subscriber::EnvFilter;
+use fortino_core::proto::LogLevel;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, reload};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .with_writer(|| fortino_secret::RedactingWriter::new(std::io::stderr()))
+    let env = std::env::var("RUST_LOG").ok();
+    let initial = env.as_deref().map_or(Some(LogLevel::Info), LogLevel::parse);
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let (filter, handle) = reload::Layer::new(filter);
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(|| fortino_secret::RedactingWriter::new(std::io::stderr())),
+        )
         .init();
+    fortinod::logctl::install(
+        Box::new(move |level| {
+            handle
+                .reload(EnvFilter::new(level))
+                .map_err(|e| e.to_string())
+        }),
+        initial,
+    );
 
     let mut args = std::env::args().skip(1);
     let mut config = PathBuf::from(fortinod::config::DEFAULT_CONFIG);

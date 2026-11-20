@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod logctl;
 pub mod netctl;
 pub mod procworker;
 pub mod server;

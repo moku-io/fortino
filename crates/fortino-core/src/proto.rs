@@ -41,6 +41,10 @@ pub mod method {
     pub const RESPOND: &str = "respond";
     /// Stop an attempt.
     pub const DISCONNECT: &str = "disconnect";
+    /// Read the daemon's log level.
+    pub const LOG_GET_LEVEL: &str = "log.getLevel";
+    /// Change the daemon's log level at runtime.
+    pub const LOG_SET_LEVEL: &str = "log.setLevel";
 }
 
 /// A client request.
@@ -477,6 +481,64 @@ pub struct DisconnectParams {
     pub attempt_id: String,
 }
 
+/// Daemon log verbosity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    /// Errors only.
+    Error,
+    /// Warnings and errors.
+    Warn,
+    /// The default.
+    Info,
+    /// Protocol exchanges: status codes, cookie names and paths, never values.
+    Debug,
+    /// Debug plus small masked bodies.
+    Trace,
+}
+
+impl LogLevel {
+    /// The filter directive for this level.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
+
+    /// Parses a plain level name.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "error" => Some(Self::Error),
+            "warn" => Some(Self::Warn),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            "trace" => Some(Self::Trace),
+            _ => None,
+        }
+    }
+}
+
+/// `log.setLevel` parameters.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogSetLevelParams {
+    /// The new level.
+    pub level: LogLevel,
+}
+
+/// `log.getLevel` / `log.setLevel` result.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LogLevelResult {
+    /// The current level, absent when `RUST_LOG` set a per-target filter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<LogLevel>,
+}
+
 /// Parses `params` into `T`, mapping failures to `invalid_request`.
 pub fn parse_params<T: serde::de::DeserializeOwned>(
     params: Option<&RawValue>,
@@ -509,6 +571,15 @@ mod tests {
         assert!(serde_json::from_str::<Request>(unk).is_err());
         let dup_param = r#"{"profileId":"p1","profileId":"p2","revision":2,"requestKey":"k"}"#;
         assert!(serde_json::from_str::<ConnectParams>(dup_param).is_err());
+    }
+
+    #[test]
+    fn log_level_params() {
+        let p: LogSetLevelParams = serde_json::from_str(r#"{"level":"debug"}"#).unwrap();
+        assert_eq!(p.level, LogLevel::Debug);
+        assert!(serde_json::from_str::<LogSetLevelParams>(r#"{"level":"loud"}"#).is_err());
+        assert_eq!(LogLevel::parse(" TRACE"), Some(LogLevel::Trace));
+        assert_eq!(LogLevel::parse("fortino=debug"), None);
     }
 
     #[test]

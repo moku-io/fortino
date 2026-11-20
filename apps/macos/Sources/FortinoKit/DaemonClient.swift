@@ -197,6 +197,18 @@ public final class DaemonClient: @unchecked Sendable {
     struct DeleteParams: Encodable { let id: String; let revision: Int }
     struct RespondParams: Encodable { let attemptId: String; let challengeId: String; let value: String }
     struct DisconnectParams: Encodable { let attemptId: String }
+    struct LogLevelParams: Encodable { let level: String }
+    public struct LogLevelResult: Decodable { public let level: String? }
+
+    /// The daemon's log level, or nil when `RUST_LOG` set a per-target filter.
+    public func logLevel() async throws -> String? {
+        try await call("log.getLevel", Empty(), as: LogLevelResult.self).level
+    }
+
+    /// Changes the daemon's log level (error, warn, info, debug or trace).
+    public func setLogLevel(_ level: String) async throws {
+        let _: LogLevelResult = try await call("log.setLevel", LogLevelParams(level: level))
+    }
 
     public func create(_ spec: ProfileSpec) async throws -> Profile {
         try await call("profile.create", CreateParams(spec: spec))

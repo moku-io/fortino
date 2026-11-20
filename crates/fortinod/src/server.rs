@@ -352,6 +352,20 @@ impl Conn {
                 s.disconnect(self.peer, &p.attempt_id)?;
                 to_value(serde_json::json!({}))
             }
+            method::LOG_GET_LEVEL => {
+                let _: Empty = parse_params(params)?;
+                to_value(LogLevelResult {
+                    level: crate::logctl::current(),
+                })
+            }
+            method::LOG_SET_LEVEL => {
+                let p: LogSetLevelParams = parse_params(params)?;
+                crate::logctl::set(p.level)
+                    .map_err(|e| ProtoError::new(ErrorCode::InvalidRequest, e))?;
+                to_value(LogLevelResult {
+                    level: Some(p.level),
+                })
+            }
             _ => Err(ProtoError::new(ErrorCode::InvalidRequest, "unknown method")),
         }
     }

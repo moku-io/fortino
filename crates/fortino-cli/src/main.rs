@@ -13,7 +13,7 @@ use clap::{Args, Parser, Subcommand};
 use fortino_config::{EmsServer, Host, IpPolicy, Profile, ProfileSpec};
 use fortino_core::client::{Client, DEFAULT_SOCKET};
 use fortino_core::proto::{
-    ChallengeKind, ConnectParams, Event, ProfileImportParams, State, Status,
+    ChallengeKind, ConnectParams, Empty, Event, ProfileImportParams, State, Status,
 };
 use fortino_core::{ErrorCode, ProtoError};
 
@@ -47,6 +47,11 @@ enum Cmd {
     },
     /// Disconnect and wait until networking is restored.
     Disconnect,
+    /// Show or change the daemon's log level (error, warn, info, debug, trace).
+    LogLevel {
+        /// New level; omit to show the current one.
+        level: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -233,7 +238,31 @@ async fn run(cli: Cli) -> CmdResult {
         Cmd::Connect(a) => connect(&mut client, a, json).await,
         Cmd::Status { watch } => status(&mut client, watch, json).await,
         Cmd::Disconnect => disconnect(&mut client, json).await,
+        Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
     }
+}
+
+async fn log_level(c: &Client, level: Option<&str>, json: bool) -> CmdResult {
+    use fortino_core::proto::{LogLevel, LogLevelResult, LogSetLevelParams, method};
+    let r: LogLevelResult = match level {
+        None => c.call(method::LOG_GET_LEVEL, &Empty {}).await?,
+        Some(s) => {
+            let level = LogLevel::parse(s).ok_or_else(|| {
+                ProtoError::new(
+                    ErrorCode::InvalidRequest,
+                    "level must be error, warn, info, debug or trace",
+                )
+            })?;
+            c.call(method::LOG_SET_LEVEL, &LogSetLevelParams { level })
+                .await?
+        }
+    };
+    if json {
+        print_json(&r);
+    } else {
+        println!("{}", r.level.map_or("custom (RUST_LOG)", LogLevel::as_str));
+    }
+    Ok(())
 }
 
 fn parse_host(s: &str) -> Result<Host, Failure> {
