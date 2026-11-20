@@ -14,6 +14,7 @@ fortino-proto-ems.workspace = true
 fortino-tls.workspace = true
 fortino-platform.workspace = true
 fortino-secret.workspace = true
+fortino-sslvpn.workspace = true
 nix = { workspace = true, features = ["user", "fs", "signal"] }
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }

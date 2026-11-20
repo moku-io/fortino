@@ -80,12 +80,23 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
             }
             Box::new(crate::procworker::ProcessWorker {
                 path: w.path.clone(),
+                args: Vec::new(),
                 ca_dir: w.ca_dir.clone(),
                 env: Vec::new(),
             })
         }
         (None, None) => {
-            return Err("no tunnel backend: configure [worker] (or [fake] for development)".into());
+            // The daemon runs itself as the worker, from a root-owned copy (see `stage_worker`).
+            let path = crate::procworker::stage_worker(
+                std::path::Path::new(crate::config::DEFAULT_WORKER_DIR),
+                option_env!("FORTINO_TEAM_ID"),
+            )?;
+            Box::new(crate::procworker::ProcessWorker {
+                path,
+                args: vec!["--worker".into()],
+                ca_dir: crate::config::DEFAULT_CA_DIR.into(),
+                env: Vec::new(),
+            })
         }
     };
     let workers: Box<dyn fortino_core::worker::WorkerFactory> = Box::new(

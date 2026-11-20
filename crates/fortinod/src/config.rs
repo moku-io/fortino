@@ -9,6 +9,12 @@ use serde::Deserialize;
 /// Default configuration file.
 pub const DEFAULT_CONFIG: &str = "/Library/Application Support/Fortino/fortinod.toml";
 
+/// Administrator-provisioned CA bundles (`<trust-id>.pem`) when `[worker]` is not set.
+pub const DEFAULT_CA_DIR: &str = "/Library/Application Support/Fortino/ca";
+
+/// Root-owned copy of the daemon used as the worker when `[worker]` is not set.
+pub const DEFAULT_WORKER_DIR: &str = "/Library/Application Support/Fortino/libexec";
+
 /// Group allowed by default: every local user on macOS.
 pub const DEFAULT_ALLOWED_GROUP: &str = "staff";
 
@@ -39,7 +45,8 @@ pub struct DaemonConfig {
     pub shutdown_timeout_secs: u64,
     /// Use the fake worker and fake network (development and tests only).
     pub fake: Option<FakeWorkerConfig>,
-    /// External tunnel worker (the openfortivpn adapter).
+    /// Tunnel worker. Unset: the daemon runs itself as the worker (`fortinod --worker`) with
+    /// CA bundles in [`DEFAULT_CA_DIR`].
     pub worker: Option<WorkerSection>,
     /// Apply network changes to an in-memory fake instead of the host. Implied by `[fake]`.
     /// Use the in-memory fake network instead of the platform controller (development).
@@ -115,6 +122,29 @@ impl Default for DaemonConfig {
 }
 
 impl DaemonConfig {
+    /// Loads `path`, or without one the default file if it exists, otherwise the built-in
+    /// defaults (the installed app needs no configuration file).
+    pub fn load_or_default(path: Option<&Path>) -> Result<Self, String> {
+        match path {
+            Some(p) => Self::load(p),
+            None if Path::new(DEFAULT_CONFIG).exists() => Self::load(Path::new(DEFAULT_CONFIG)),
+            None => Ok(Self::builtin()),
+        }
+    }
+
+    /// Built-in defaults: every local user (group `staff`) may connect, the daemon is its own
+    /// worker, and gateways are checked against the system CA bundle.
+    pub fn builtin() -> Self {
+        let staff = nix::unistd::Group::from_name(DEFAULT_ALLOWED_GROUP)
+            .ok()
+            .flatten()
+            .is_some();
+        Self {
+            socket_group: staff.then(|| DEFAULT_ALLOWED_GROUP.to_owned()),
+            ..Self::default()
+        }
+    }
+
     /// Loads a TOML file.
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -177,6 +207,17 @@ mod tests {
         assert_eq!(c.fake.unwrap().otp.as_deref(), Some("654321"));
         assert_eq!(c.challenge_timeout_secs, 120);
         assert!(toml::from_str::<DaemonConfig>("bogus = 1").is_err());
+    }
+
+    #[test]
+    fn builtin_defaults_need_no_file() {
+        let c = DaemonConfig::builtin();
+        assert!(c.worker.is_none() && c.fake.is_none());
+        assert_eq!(c.effective_allowed_groups(), vec!["staff".to_owned()]);
+        #[cfg(target_os = "macos")]
+        assert_eq!(c.socket_group.as_deref(), Some("staff"));
+        let c = DaemonConfig::load_or_default(Some(Path::new("/nonexistent/fortinod.toml")));
+        assert!(c.is_err(), "an explicit --config must exist");
     }
 
     #[test]

@@ -1,10 +1,23 @@
 #!/bin/sh
-# Upgrade: end any VPN session cleanly, then stop the running daemon so its files can be replaced.
+# Removes the layout of installers before 0.2 (daemon in /usr/local/libexec/fortino with its own
+# launchd job). The service now lives in Fortino.app and is registered by the app. Profiles and
+# configuration in /Library/Application Support/Fortino are kept.
 LABEL=org.fortino.fortinod
-if launchctl print "system/$LABEL" >/dev/null 2>&1; then
-    if [ -x /usr/local/bin/fortino ]; then
+OLD=/Library/LaunchDaemons/$LABEL.plist
+if [ -f "$OLD" ]; then
+    if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+        # End a VPN session cleanly so routes and DNS are restored.
         FORTINO_SOCKET=/var/run/fortino/fortinod.sock /usr/local/bin/fortino disconnect >/dev/null 2>&1 || true
+        launchctl bootout "system/$LABEL" 2>/dev/null || true
     fi
-    launchctl bootout "system/$LABEL" 2>/dev/null || true
+    rm -f "$OLD"
+    rm -rf /usr/local/libexec/fortino
+    [ -L /usr/local/bin/fortino ] || rm -f /usr/local/bin/fortino
+fi
+# The old installer wrote a config naming the removed worker binary; the daemon's built-in
+# defaults now hold the same settings, so keep that file only as a backup.
+CONF="/Library/Application Support/Fortino/fortinod.toml"
+if grep -q /usr/local/libexec/fortino "$CONF" 2>/dev/null; then
+    mv "$CONF" "$CONF.pre-0.2"
 fi
 exit 0

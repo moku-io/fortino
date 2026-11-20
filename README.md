@@ -50,16 +50,17 @@ cargo run -p fortino-cli -- connect GATEWAY-2        # password hunter2, code 12
 swift run --package-path apps/macos Fortino
 ```
 
-### Build an installer package
+### Build the downloads
 
-After changing the source, rebuild everything (Rust binaries, app bundle, package) with one command:
+After changing the source, rebuild everything (Rust binaries, app bundle, DMG and package) with one command. The VPN service ships inside `Fortino.app`, and macOS only registers it from a Developer ID-signed app, so sign the build:
 
 ```sh
-scripts/package-macos.sh       # → target/package/Fortino-<version>.pkg, unsigned
-scripts/macos-vm-pkg-test.sh   # optional: install, upgrade and uninstall it in a disposable VM
+SIGN_APP="Developer ID Application: …" SIGN_PKG="Developer ID Installer: …" \
+  scripts/package-macos.sh     # → target/package/Fortino-<version>.dmg and .pkg
+scripts/macos-vm-pkg-test.sh   # optional: check the package in a disposable VM
 ```
 
-The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each package you hand out. Installing a new package over an old one keeps profiles and configuration. To sign and notarize with a Developer ID, and for what the package installs, see [development].
+Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [development].
 
 The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock -- fortigate fixtures/mock/basic.yaml`.
 

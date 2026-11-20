@@ -43,6 +43,7 @@ fn harness(misbehave: Option<&str>, f: impl FnOnce(&mut FakeWorkerConfig)) -> H 
         ProfileStore::in_memory().unwrap(),
         Box::new(ProcessWorker {
             path: env!("CARGO_BIN_EXE_fortino-stub-worker").into(),
+            args: vec![],
             ca_dir: dir.path().into(),
             env,
         }),
@@ -204,6 +205,7 @@ async fn missing_executable_fails_cleanly() {
         ProfileStore::in_memory().unwrap(),
         Box::new(ProcessWorker {
             path: dir.path().join("does-not-exist"),
+            args: vec![],
             ca_dir: dir.path().into(),
             env: vec![],
         }),

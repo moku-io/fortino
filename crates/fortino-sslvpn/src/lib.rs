@@ -13,6 +13,7 @@ pub mod transport;
 mod tunnel;
 #[cfg(target_os = "macos")]
 pub mod utun;
+pub mod worker_main;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

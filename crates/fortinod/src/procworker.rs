@@ -1,7 +1,7 @@
 //! Supervises one external worker process per attempt over a private socket pair.
 //!
-//! The worker executable has a fixed, administrator-configured path. It gets a minimal
-//! environment, no arguments, `/dev/null` for output, and its end of the socket pair as
+//! The worker executable has a fixed path: the daemon itself (`fortinod --worker`) or an
+//! administrator-configured binary. It gets a minimal environment, fixed arguments, `/dev/null` for output, and its end of the socket pair as
 //! standard input. It runs in its own process group so its PPP child is stopped with it.
 //! and
 //! [`fortino_core::worker_wire`].
@@ -32,10 +32,105 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 pub struct ProcessWorker {
     /// Fixed worker executable.
     pub path: PathBuf,
+    /// Fixed arguments (`--worker` when the daemon runs itself as the worker).
+    pub args: Vec<String>,
     /// Directory with `<trust-id>.pem` CA bundles.
     pub ca_dir: PathBuf,
     /// Extra environment (tests only; production passes none).
     pub env: Vec<(String, String)>,
+}
+
+/// Prepares the daemon's own executable for use as the worker (`fortinod --worker`).
+///
+/// An app installed by dragging is owned by the user, so its `Contents/MacOS/fortinod` could be
+/// replaced while the service runs. Unless the running executable is already root-owned and not
+/// writable by others, it is copied into `dir` (root-owned, 0755) and, when the build knows its
+/// signing team (`FORTINO_TEAM_ID`), the copy must pass `codesign --verify` for that team before
+/// it is used. launchd checked the original's signature when it started the service.
+pub fn stage_worker(dir: &std::path::Path, team: Option<&str>) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("own executable: {e}"))?;
+    if check_executable(&exe).is_ok() {
+        return Ok(exe);
+    }
+    stage_copy(&exe, dir, team)
+}
+
+fn stage_copy(
+    exe: &std::path::Path,
+    dir: &std::path::Path,
+    team: Option<&str>,
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let err = |what: &str, e: std::io::Error| format!("worker copy, {what}: {e}");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o755)
+        .create(dir)
+        .map_err(|e| err("directory", e))?;
+    let dst = dir.join("fortinod");
+    let tmp = dir.join(".fortinod.new");
+    let _ = std::fs::remove_file(&tmp);
+    // A new file written by this process, not `fs::copy`: on macOS that clones the file and,
+    // run as root, keeps the original (user) owner.
+    let bytes = std::fs::read(exe).map_err(|e| err("read", e))?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&tmp)
+        .map_err(|e| err("create", e))?;
+    f.write_all(&bytes).map_err(|e| err("write", e))?;
+    f.sync_all().map_err(|e| err("sync", e))?;
+    drop(f);
+    if let Some(team) = team {
+        verify_signature(&tmp, team)?;
+    }
+    std::fs::rename(&tmp, &dst).map_err(|e| err("rename", e))?;
+    // Root-owned when run as root (the service); tests run unprivileged.
+    if nix::unistd::geteuid().is_root() {
+        check_executable(&dst)?;
+    }
+    Ok(dst)
+}
+
+/// Requires `path` to carry a valid Developer ID signature from `team` as `org.fortino.fortinod`.
+fn verify_signature(path: &std::path::Path, team: &str) -> Result<(), String> {
+    if team.len() != 10 || !team.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err("invalid FORTINO_TEAM_ID in this build".into());
+    }
+    // `-R` takes the requirement as text prefixed with `=`.
+    let req = format!(
+        "=identifier \"org.fortino.fortinod\" and anchor apple generic \
+         and certificate leaf[subject.OU] = \"{team}\""
+    );
+    let ok = std::process::Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict", "-R"])
+        .arg(&req)
+        .arg(path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err("the daemon's executable is not signed by this build's team; reinstall Fortino".into())
+    }
+}
+
+/// The system CA bundle, used for the default trust when none is provisioned.
+pub const SYSTEM_CA_BUNDLE: &str = "/etc/ssl/cert.pem";
+
+/// The trust file for `trust_id`: `<ca_dir>/<trust_id>.pem`, or for the default `system` trust
+/// the system CA bundle when the administrator has not provisioned one.
+pub fn ca_file_for(ca_dir: &std::path::Path, trust_id: &str) -> PathBuf {
+    let f = ca_dir.join(format!("{trust_id}.pem"));
+    if trust_id == fortino_config::DEFAULT_TRUST_ID && !f.exists() {
+        return PathBuf::from(SYSTEM_CA_BUNDLE);
+    }
+    f
 }
 
 /// Checks that the worker executable is a root-owned regular file not writable by others.
@@ -122,6 +217,7 @@ impl ProcessWorker {
         };
         let mut command = Command::new(&self.path);
         command
+            .args(&self.args)
             .env_clear()
             .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
@@ -153,7 +249,7 @@ impl ProcessWorker {
             }
         };
         let (mut rd, mut wr) = stream.into_split();
-        let ca_file = self.ca_dir.join(format!("{}.pem", cfg.trust_id));
+        let ca_file = ca_file_for(&self.ca_dir, &cfg.trust_id);
         let start = DaemonMsg::Start {
             v: WORKER_PROTOCOL_VERSION,
             attempt: cfg.attempt_id.clone(),
@@ -245,5 +341,47 @@ impl ProcessWorker {
         let graceful = result.code.is_none() || stopping;
         reap(&mut child, pgid, graceful).await;
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_copy_is_private_and_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::write(&src, b"#!/bin/sh\n").unwrap();
+        let out = stage_copy(&src, &dir.path().join("libexec"), None).unwrap();
+        assert_eq!(out, dir.path().join("libexec/fortinod"));
+        let m = std::fs::metadata(&out).unwrap();
+        let mode = m.permissions().mode();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            m.uid(),
+            nix::unistd::geteuid().as_raw(),
+            "owned by the daemon's user"
+        );
+        assert_eq!(mode & 0o777, 0o755);
+        // A team requirement an unsigned file cannot meet.
+        assert!(stage_copy(&src, &dir.path().join("x"), Some("ABCDE12345")).is_err());
+        assert!(stage_copy(&src, &dir.path().join("y"), Some("bad team")).is_err());
+    }
+
+    #[test]
+    fn system_trust_falls_back_to_the_system_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            ca_file_for(dir.path(), "system"),
+            PathBuf::from(SYSTEM_CA_BUNDLE)
+        );
+        std::fs::write(dir.path().join("system.pem"), "x").unwrap();
+        assert_eq!(
+            ca_file_for(dir.path(), "system"),
+            dir.path().join("system.pem")
+        );
+        assert_eq!(ca_file_for(dir.path(), "tg2"), dir.path().join("tg2.pem"));
     }
 }

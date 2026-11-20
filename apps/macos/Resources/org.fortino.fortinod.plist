@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The VPN service, registered by Fortino.app with SMAppService (macOS 13+). launchd runs the
+     daemon from inside the app bundle; moving the app to the Trash removes the service. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>org.fortino.fortinod</string>
+    <key>BundleProgram</key><string>Contents/MacOS/fortinod</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array><string>org.fortino.app</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardErrorPath</key><string>/var/log/fortinod.log</string>
+    <key>StandardOutPath</key><string>/var/log/fortinod.log</string>
+</dict>
+</plist>

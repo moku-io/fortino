@@ -7,12 +7,13 @@ import SwiftUI
 struct FortinoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
+    @StateObject private var service = VPNService()
 
     var body: some Scene {
         MenuBarExtra {
-            MenuView(model: model)
+            MenuView(model: model, service: service)
         } label: {
-            MenuBarLabel(model: model)
+            MenuBarLabel(model: model, service: service)
         }
         .menuBarExtraStyle(.window)
 
@@ -24,7 +25,7 @@ struct FortinoApp: App {
         }
         // Development aid: the menu content in a normal window (see FORTINO_DEBUG_OPEN).
         Window("Menu Preview", id: "menu-preview") {
-            MenuView(model: model)
+            MenuView(model: model, service: service)
         }
     }
 }
@@ -33,11 +34,14 @@ struct FortinoApp: App {
 /// windows at launch (for development and screenshots).
 struct MenuBarLabel: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var service: VPNService
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         StatusIcon(state: model.state)
             .task {
+                // Registers the bundled VPN service on first launch (approval in Login Items).
+                service.ensureRegistered()
                 let ids = ProcessInfo.processInfo.environment["FORTINO_DEBUG_OPEN"]?
                     .split(separator: ",").map(String.init) ?? []
                 for id in ids { openWindow(id: id) }

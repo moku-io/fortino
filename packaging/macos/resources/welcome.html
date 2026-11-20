@@ -1,16 +1,11 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<style>body { font: -apple-system-body; font-family: -apple-system, sans-serif; }</style>
+<style>body { font-family: -apple-system, sans-serif; }</style>
 </head><body>
 <p><b>Fortino</b> is an open-source SSL VPN client for FortiGate gateways.</p>
-<p>This installs:</p>
-<ul>
-<li>the Fortino menu-bar app in Applications,</li>
-<li>the <code>fortinod</code> VPN service, which runs as root and is started by launchd,</li>
-<li>the <code>fortino</code> command-line tool in /usr/local/bin.</li>
-</ul>
-<p>Every user of this Mac can use the VPN, and each sees only their own profiles. An
-administrator can restrict it to a group in
-<code>/Library/Application Support/Fortino/fortinod.toml</code>.</p>
-<p>To remove it: <code>sudo /usr/local/libexec/fortino/uninstall.sh</code></p>
+<p>This installs Fortino in Applications and the <code>fortino</code> command-line tool.
+Fortino opens when the installation finishes: allow its VPN service when macOS asks, or later in
+System Settings &gt; General &gt; Login Items.</p>
+<p>Every user of this Mac can use the VPN, and each sees only their own profiles.</p>
+<p>To remove Fortino, move it from Applications to the Trash.</p>
 </body></html>

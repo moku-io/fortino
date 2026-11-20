@@ -60,12 +60,19 @@ struct ConnectionSummary: View {
 
 struct MenuView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var service: VPNService
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
-            if let e = model.serviceError {
+            if service.state == .requiresApproval {
+                notice("Allow Fortino's VPN service in System Settings to connect.",
+                       symbol: "lock.shield", tint: .orange)
+                MenuRow(title: "Open Login Items Settings…") { service.openLoginItemsSettings() }
+            } else if case .failed(let why) = service.state {
+                notice(why, symbol: "exclamationmark.triangle.fill", tint: .orange)
+            } else if let e = model.serviceError {
                 notice(e, symbol: "exclamationmark.triangle.fill", tint: .orange)
             } else if model.state == .inUse {
                 notice("Another user on this Mac is connected.", symbol: "person.fill", tint: .secondary)
@@ -99,6 +106,12 @@ struct MenuView: View {
                 openWindow(id: "import")
                 NSApp.activate(ignoringOtherApps: true)
             }
+            if service.isManaged && !service.cliInstalled {
+                MenuRow(title: "Install Command-Line Tool…",
+                        help: "Adds the fortino command to /usr/local/bin") {
+                    if let e = service.installCLI() { model.actionError = e }
+                }
+            }
             LogLevelRow(model: model)
             Divider().padding(.vertical, 2)
             MenuRow(title: "Quit Fortino", help: "The VPN stays connected after quitting") {
@@ -107,7 +120,11 @@ struct MenuView: View {
         }
         .padding(8)
         .frame(width: 300)
-        .task { await model.refreshProfiles() }
+        .task {
+            service.refresh()
+            service.refreshCLI()
+            await model.refreshProfiles()
+        }
     }
 
     private var header: some View {

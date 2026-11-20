@@ -7,8 +7,31 @@ use fortino_core::proto::LogLevel;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, reload};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
+    // `fortinod --worker`: one tunnel worker session, started by the daemon itself with the
+    // channel on stdin. The installed app ships one root binary, verified by launchd.
+    if std::env::args().nth(1).as_deref() == Some("--worker") {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build();
+        return match rt.map(|rt| rt.block_on(fortino_sslvpn::worker_main::run())) {
+            Ok(Ok(())) => ExitCode::SUCCESS,
+            _ => ExitCode::FAILURE,
+        };
+    }
+    match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt.block_on(daemon()),
+        Err(e) => {
+            eprintln!("fortinod: runtime: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn daemon() -> ExitCode {
     let env = std::env::var("RUST_LOG").ok();
     let initial = env.as_deref().map_or(Some(LogLevel::Info), LogLevel::parse);
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
@@ -30,18 +53,22 @@ async fn main() -> ExitCode {
     );
 
     let mut args = std::env::args().skip(1);
-    let mut config = PathBuf::from(fortinod::config::DEFAULT_CONFIG);
+    let mut config: Option<PathBuf> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--config" | "-c" => match args.next() {
-                Some(p) => config = PathBuf::from(p),
+                Some(p) => config = Some(PathBuf::from(p)),
                 None => {
                     eprintln!("--config needs a path");
                     return ExitCode::from(2);
                 }
             },
             "--help" | "-h" => {
-                println!("usage: fortinod [--config FILE]");
+                println!(
+                    "usage: fortinod [--config FILE]\n\
+                     Without --config, reads {} if present, otherwise built-in defaults.",
+                    fortinod::config::DEFAULT_CONFIG
+                );
                 return ExitCode::SUCCESS;
             }
             other => {
@@ -50,7 +77,7 @@ async fn main() -> ExitCode {
             }
         }
     }
-    let cfg = match fortinod::config::DaemonConfig::load(&config) {
+    let cfg = match fortinod::config::DaemonConfig::load_or_default(config.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("fortinod: {e}");

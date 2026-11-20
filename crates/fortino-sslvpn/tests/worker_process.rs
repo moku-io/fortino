@@ -56,6 +56,7 @@ async fn harness(pin_ok: bool) -> H {
         ProfileStore::in_memory().unwrap(),
         Box::new(ProcessWorker {
             path: env!("CARGO_BIN_EXE_fortino-sslvpn-worker").into(),
+            args: vec![],
             ca_dir: dir.path().into(),
             env: vec![("FORTINO_WORKER_MEMORY_DEVICE".into(), "1".into())],
         }),
