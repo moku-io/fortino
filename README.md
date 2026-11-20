@@ -50,6 +50,17 @@ cargo run -p fortino-cli -- connect GATEWAY-2        # password hunter2, code 12
 swift run --package-path apps/macos Fortino
 ```
 
+### Build an installer package
+
+After changing the source, rebuild everything (Rust binaries, app bundle, package) with one command:
+
+```sh
+scripts/package-macos.sh       # → target/package/Fortino-<version>.pkg, unsigned
+scripts/macos-vm-pkg-test.sh   # optional: install, upgrade and uninstall it in a disposable VM
+```
+
+The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each package you hand out. Installing a new package over an old one keeps profiles and configuration. To sign and notarize with a Developer ID, and for what the package installs, see [development].
+
 The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock -- fortigate fixtures/mock/basic.yaml`.
 
 ## Thanks

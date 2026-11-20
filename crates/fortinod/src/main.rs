@@ -62,9 +62,13 @@ async fn main() -> ExitCode {
         let session = fortinod::build_session(&cfg)?;
         let listener = fortinod::bind_socket(&cfg.socket_path, cfg.socket_group.as_deref())?;
         tracing::info!(socket = %cfg.socket_path.display(), "listening");
+        // launchd stops the service with SIGTERM.
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .map_err(|e| format!("SIGTERM handler: {e}"))?;
         tokio::select! {
             () = fortinod::server::serve(listener, session, auth) => {}
             _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
+            _ = term.recv() => tracing::info!("shutting down"),
         }
         Ok::<(), String>(())
     };

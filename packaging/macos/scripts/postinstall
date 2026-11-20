@@ -1,0 +1,43 @@
+#!/bin/sh
+# Writes the daemon configuration on first install (keeps an existing one), provisions the
+# system CA bundle and starts the launchd service.
+set -u
+LABEL=org.fortino.fortinod
+PLIST=/Library/LaunchDaemons/$LABEL.plist
+CONF_DIR="/Library/Application Support/Fortino"
+CONF="$CONF_DIR/fortinod.toml"
+LIBEXEC=/usr/local/libexec/fortino
+
+chown -R root:wheel "$LIBEXEC" /usr/local/bin/fortino "$PLIST"
+chmod 0755 "$LIBEXEC" "$LIBEXEC"/* /usr/local/bin/fortino
+chmod 0644 "$PLIST"
+install -d -o root -g wheel -m 0755 "$CONF_DIR" /Library/Logs/Fortino
+install -d -o root -g wheel -m 0755 "$CONF_DIR/ca"
+
+# The worker checks gateways against <trust-id>.pem; "system" is the default trust.
+[ -f "$CONF_DIR/ca/system.pem" ] || install -o root -g wheel -m 0644 /etc/ssl/cert.pem "$CONF_DIR/ca/system.pem"
+
+if [ ! -f "$CONF" ]; then
+    # Allow the user logged in at the console (the one running the installer).
+    uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
+    if [ "$uid" -ne 0 ] 2>/dev/null; then uids="[$uid]"; else uids="[]"; fi
+    umask 022
+    cat > "$CONF" <<EOT
+# Fortino daemon configuration. After editing:
+#   sudo launchctl kickstart -k system/$LABEL
+socket_path = "/var/run/fortino/fortinod.sock"
+state_dir = "$CONF_DIR/state"
+# Local users may reach the socket; only the UIDs below may use the VPN (root always can).
+socket_group = "staff"
+allowed_uids = $uids
+
+[worker]
+path = "$LIBEXEC/fortino-sslvpn-worker"
+ca_dir = "$CONF_DIR/ca"
+EOT
+    chown root:wheel "$CONF"
+    chmod 0644 "$CONF"
+fi
+
+launchctl bootstrap system "$PLIST" 2>/dev/null || launchctl kickstart -k "system/$LABEL"
+exit 0

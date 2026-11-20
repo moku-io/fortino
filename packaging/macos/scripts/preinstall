@@ -1,0 +1,10 @@
+#!/bin/sh
+# Upgrade: end any VPN session cleanly, then stop the running daemon so its files can be replaced.
+LABEL=org.fortino.fortinod
+if launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    if [ -x /usr/local/bin/fortino ]; then
+        FORTINO_SOCKET=/var/run/fortino/fortinod.sock /usr/local/bin/fortino disconnect >/dev/null 2>&1 || true
+    fi
+    launchctl bootout "system/$LABEL" 2>/dev/null || true
+fi
+exit 0
