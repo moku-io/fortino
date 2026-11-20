@@ -76,6 +76,34 @@ pub fn fct_sn(f: &Facts) -> Option<String> {
     Some(format!("FCT800{:010}", crc.sum()))
 }
 
+/// A stable synthetic `USER_SID` for this user on this machine. macOS has no SIDs; FortiClient
+/// fabricates an `S-1-5-21-…` value, and so does Fortino, derived from the platform UUID and the
+/// user so it stays the same across runs. Identity only; it claims no posture.
+// UNVERIFIED: FortiClient's exact derivation is not known; the shape and stability match.
+pub fn user_sid(f: &Facts) -> Option<String> {
+    let hex: String = f
+        .platform_uuid
+        .as_ref()?
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    if hex.len() < 24 {
+        return None;
+    }
+    let part = |i: usize| u32::from_str_radix(hex.get(i..i + 8).unwrap_or("0"), 16).unwrap_or(0);
+    let rid = f.uid.filter(|u| *u != 0).unwrap_or_else(|| {
+        let mut crc = flate2::Crc::new();
+        crc.update(f.user.as_deref().unwrap_or("").as_bytes());
+        1000 + (crc.sum() % 9000)
+    });
+    Some(format!(
+        "S-1-5-21-{}-{}-{}-{rid}",
+        part(0),
+        part(8),
+        part(16)
+    ))
+}
+
 /// Checksums of the objects received so far, echoed so the server sends only what changed.
 fn checksums(s: &mut SysInfo, reg: Option<&Registration>) -> Result<(), SysInfoError> {
     let sum = |pick: fn(&Registration) -> &str| {
@@ -112,8 +140,24 @@ pub fn full(
     checksums(&mut s, reg)?;
     s.push("HOSTNAME", f.hostname.as_str())?;
     s.push("USER", f.user.clone().unwrap_or_default())?;
+    s.push("USER_SID", user_sid(f).unwrap_or_default())?;
     s.push("DOMAIN", "")?;
     s.push("PC_DOMAIN", "")?;
+    // Identity fields FortiClient sends; Fortino has no values for them on macOS.
+    for k in [
+        "ADGUID",
+        "INSTALLUID",
+        "WORKGROUP",
+        "GROUP_TAG",
+        "FORTIEDR_VERSION",
+    ] {
+        s.push(k, "")?;
+    }
+    // No software inventory and a hardware form-factor Fortino does not detect.
+    s.push("INSTALLED_APPS", "0")?;
+    s.push("ENABLED_APPS", "0")?;
+    // UNVERIFIED: DESKTOP is a form-factor flag, not posture; FortiClient sent 0 here.
+    s.push("DESKTOP", "0")?;
     s.push("COM_SN", f.serial.clone().unwrap_or_default())?;
     s.push("COM_MAN", f.manufacturer.clone().unwrap_or_default())?;
     s.push("COM_MODEL", f.model.clone().unwrap_or_default())?;
@@ -147,6 +191,7 @@ pub fn mini(f: &Facts, reg: Option<&Registration>) -> Result<SysInfo, SysInfoErr
     let mut s = SysInfo::new();
     checksums(&mut s, reg)?;
     s.push("USER", f.user.clone().unwrap_or_default())?;
+    s.push("USER_SID", user_sid(f).unwrap_or_default())?;
     s.push("COM_SN", f.serial.clone().unwrap_or_default())?;
     s.push("CPU", f.cpu.clone().unwrap_or_default())?;
     s.push("COM_MODEL", f.model.clone().unwrap_or_default())?;
@@ -162,7 +207,10 @@ mod tests {
 
     fn facts() -> Facts {
         Facts {
+            platform_uuid: Some("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9".into()),
             hostname: "mac-01".into(),
+            user: Some("alice".into()),
+            uid: Some(501),
             os_version: "macOS 15.6".into(),
             arch: "ARM",
             ..Facts::default()
@@ -180,12 +228,32 @@ mod tests {
         assert_eq!(s.get("ENABLED_FEATURE_BITMAP"), Some("24"));
         assert_eq!(s.get("INSTALLED_FEATURE_BITMAP"), Some("24"));
         assert_eq!(s.get("EP_CHKSUM"), Some("0"));
+        // No inventory, no made-up app/EDR versions.
+        assert_eq!(s.get("INSTALLED_APPS"), Some("0"));
+        assert_eq!(s.get("FORTIEDR_VERSION"), Some(""));
+    }
+
+    #[test]
+    fn user_sid_is_stable_and_shaped() {
+        let f = facts();
+        let sid = user_sid(&f).unwrap();
+        assert!(sid.starts_with("S-1-5-21-") && sid.ends_with("-501"));
+        assert_eq!(user_sid(&f), user_sid(&f), "must be deterministic");
+        assert_eq!(
+            full(&f, &Compat::default(), None).unwrap().get("USER_SID"),
+            Some(sid.as_str())
+        );
+        // No platform UUID: no SID rather than a fake one.
+        let mut bare = f.clone();
+        bare.platform_uuid = None;
+        assert_eq!(user_sid(&bare), None);
     }
 
     #[test]
     fn fct_sn_format() {
         let mut f = facts();
-        assert_eq!(fct_sn(&f), None);
+        f.platform_uuid = None;
+        assert_eq!(fct_sn(&f), None, "no serial and no UUID: no FCT_SN");
         f.serial = Some("C02TEST0001".into());
         let sn = fct_sn(&f).unwrap();
         assert!(sn.starts_with("FCT800") && sn.len() == 16);

@@ -34,6 +34,8 @@ pub struct Facts {
     pub hostname: String,
     /// Logged-in console user, if any.
     pub user: Option<String>,
+    /// That user's numeric uid, if known.
+    pub uid: Option<u32>,
     /// OS name and version (`macOS 15.6.1`).
     pub os_version: String,
     /// Hardware vendor.
@@ -213,6 +215,7 @@ mod macos {
             platform_uuid: ioreg_value(&ioreg, "IOPlatformUUID"),
             hostname: out("/bin/hostname", &["-s"]).unwrap_or_default(),
             user: out("/usr/bin/stat", &["-f%Su", "/dev/console"]).filter(|u| u != "root"),
+            uid: out("/usr/bin/stat", &["-f%u", "/dev/console"]).and_then(|s| s.parse().ok()),
             os_version: os_version(
                 &out("/usr/bin/sw_vers", &["-productName"]).unwrap_or_default(),
                 &out("/usr/bin/sw_vers", &["-productVersion"]).unwrap_or_default(),
