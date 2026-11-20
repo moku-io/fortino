@@ -52,12 +52,11 @@ swift run --package-path apps/macos Fortino
 
 ### Build the downloads
 
-After changing the source, rebuild everything (Rust binaries, app bundle, DMG and package) with one command. The VPN service ships inside `Fortino.app`, and macOS only registers it from a Developer ID-signed app, so sign the build:
+After changing the source, rebuild everything (Rust binaries, app bundle and DMG) with one command. The VPN service ships inside `Fortino.app`, and macOS only registers it from a Developer ID-signed app, so sign the build:
 
 ```sh
-SIGN_APP="Developer ID Application: …" SIGN_PKG="Developer ID Installer: …" \
-  scripts/package-macos.sh     # → target/package/Fortino-<version>.dmg and .pkg
-scripts/macos-vm-pkg-test.sh   # optional: check the package in a disposable VM
+SIGN_APP="Developer ID Application: …" scripts/package-macos.sh   # → target/package/Fortino-<version>.dmg
+scripts/macos-vm-dmg-test.sh   # optional: install it from the DMG in a disposable VM and test it
 ```
 
 Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [development].

@@ -1,11 +1,10 @@
 #!/bin/bash
-# Installs the Fortino package in a disposable Tart VM and checks it.
+# Installs Fortino from the DMG in a disposable Tart VM, as a user would, and checks it.
 #
-#   scripts/package-macos.sh && scripts/macos-vm-pkg-test.sh [PKG]
-#   KEEP_VM=1 scripts/macos-vm-pkg-test.sh   # leave the clone running
+#   scripts/package-macos.sh && scripts/macos-vm-dmg-test.sh [DMG]
+#   KEEP_VM=1 scripts/macos-vm-dmg-test.sh   # leave the clone running
 #
-# Covers: removal of the pre-0.2 layout, the app bundle and its signature, the CLI link, the
-# daemon running from inside the app with built-in defaults (no config file), access by group,
+# Covers: the app bundle and its signature, the CLI link, the daemon running from inside the app with built-in defaults (no config file), access by group,
 # and a tunnel through the mock gateway with the daemon as its own worker (`fortinod --worker`).
 # Not covered (needs a logged-in GUI session): SMAppService registration and its approval in
 # Login Items, and removal by moving the app to the Trash. Here root starts the bundled daemon
@@ -16,9 +15,9 @@ set -euo pipefail
 
 export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
 BASE="${FORTINO_VM_BASE:-ofc-sequoia-base}"
-VM="fortino-pkg-$$"
+VM="fortino-dmg-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PKG="${1:-$(ls -t "$ROOT"/target/package/Fortino-*.pkg | head -1)}"
+DMG="${1:-$(ls -t "$ROOT"/target/package/Fortino-*.dmg | head -1)}"
 STAGE="$(mktemp -d)"
 
 cleanup() {
@@ -33,7 +32,7 @@ cleanup() {
 trap cleanup EXIT
 
 (cd "$ROOT" && cargo build --locked -q -p fortino-mock --bin fortino-mock)
-cp "$PKG" "$STAGE/Fortino.pkg"
+cp "$DMG" "$STAGE/Fortino.dmg"
 cp "$ROOT/target/debug/fortino-mock" "$ROOT/fixtures/vm/mock-gateway.yaml" "$STAGE/"
 cat > "$STAGE/guest.sh" <<'EOF'
 #!/bin/bash
@@ -54,23 +53,20 @@ start_daemon() {
 }
 stop_daemon() { kill "$DAEMON" 2>/dev/null; wait "$DAEMON" 2>/dev/null; rm -f "$FORTINO_SOCKET"; }
 
-# A pre-0.2 installation to be cleaned up.
-mkdir -p /usr/local/libexec/fortino "$SUP"
-touch /usr/local/libexec/fortino/fortinod /Library/LaunchDaemons/org.fortino.fortinod.plist
-printf '[worker]\npath = "/usr/local/libexec/fortino/fortino-sslvpn-worker"\nca_dir = "x"\n' > "$SUP/fortinod.toml"
-
-installer -pkg "$S/Fortino.pkg" -target / || fail=1
-check "legacy layout removed" "[[ ! -e /usr/local/libexec/fortino && ! -e /Library/LaunchDaemons/org.fortino.fortinod.plist ]]"
-check "legacy config kept as backup" "[[ ! -e '$SUP/fortinod.toml' && -f '$SUP/fortinod.toml.pre-0.2' ]]"
+# Install as a user would: copy the app out of the disk image into Applications, owned by the
+# user (here a fresh local account), and link the CLI as "Install Command-Line Tool..." does.
+sysadminctl -addUser fortinotest -password "$(uuidgen)" >/dev/null 2>&1
+M=$(hdiutil attach -nobrowse -readonly "$S/Fortino.dmg" | awk -F'\t' '/Volumes/ {print $NF}')
+ditto "$M/Fortino.app" "$APP" && chown -R fortinotest "$APP"
+hdiutil detach -quiet "$M"
+mkdir -p /usr/local/bin && ln -sfh "$APP/Contents/Helpers/fortino" /usr/local/bin/fortino
 check "app bundle complete" "[[ -x $APP/Contents/MacOS/Fortino && -x $APP/Contents/MacOS/fortinod && -f $APP/Contents/Library/LaunchDaemons/org.fortino.fortinod.plist ]]"
 check "app signature valid" "codesign --verify --strict --deep $APP"
-check "CLI linked into the app" "[[ \$(readlink /usr/local/bin/fortino) == $APP/Contents/Helpers/fortino ]]"
 
 start_daemon
 check "daemon runs from the app with built-in defaults" "fortino status"
 check "log level settable" "fortino log-level debug && [[ \$(fortino log-level) == debug ]]"
 fortino profile add PkgTest --host vpn.example.org >/dev/null
-sysadminctl -addUser fortinotest -password "$(uuidgen)" >/dev/null 2>&1
 check "staff user allowed" "as_user status"
 check "staff user sees own profiles only" "! as_user profile list | grep -q PkgTest"
 stop_daemon
@@ -84,9 +80,8 @@ stop_daemon
 rm -f "$SUP/fortinod.toml"
 
 # A tunnel through the mock gateway: the daemon runs itself as the worker and trusts the pin
-# provisioned as the default ("system") trust. The bundle is given to a user, as after a
-# drag-install, so the worker must run from the verified root-owned copy.
-chown -R fortinotest /Applications/Fortino.app
+# provisioned as the default ("system") trust. The bundle is user-owned, so the worker must run
+# from the verified root-owned copy.
 IP=$(ipconfig getifaddr en0)
 "$S/fortino-mock" fortigate "$S/mock-gateway.yaml" --bind "$IP:10443" > /tmp/mock.out 2>&1 &
 MOCK=$!

@@ -9,8 +9,8 @@ import ServiceManagement
 @MainActor
 final class VPNService: ObservableObject {
     enum State: Equatable {
-        /// Not managed by the app: development daemon (FORTINO_SOCKET), an app run outside a
-        /// bundle, or an older installation with its own launchd job.
+        /// Not managed by the app: development daemon (FORTINO_SOCKET) or an app run outside a
+        /// bundle.
         case external
         case enabled
         case requiresApproval
@@ -18,8 +18,6 @@ final class VPNService: ObservableObject {
     }
 
     static let plistName = "org.fortino.fortinod.plist"
-    /// The launchd job of installers before 0.2 (`/usr/local/libexec/fortino`).
-    static let legacyPlist = "/Library/LaunchDaemons/org.fortino.fortinod.plist"
     static let cliLink = "/usr/local/bin/fortino"
 
     @Published private(set) var state: State = .external
@@ -29,7 +27,6 @@ final class VPNService: ObservableObject {
     var isManaged: Bool {
         ProcessInfo.processInfo.environment["FORTINO_SOCKET"] == nil
             && Bundle.main.bundleURL.pathExtension == "app"
-            && !FileManager.default.fileExists(atPath: Self.legacyPlist)
     }
 
     var bundledCLI: String {
