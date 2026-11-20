@@ -48,6 +48,21 @@ check "CLI reaches daemon" "fortino status"
 check "log level settable" "fortino log-level debug && [[ \$(fortino log-level) == debug ]]"
 fortino profile add PkgTest --host vpn.example.org >/dev/null
 
+# A second local account (in staff, not root) is allowed by group and sees only its own profiles.
+sysadminctl -addUser fortinotest -password "$(uuidgen)" >/dev/null 2>&1
+check "staff user allowed" "sudo -u fortinotest env FORTINO_SOCKET=$FORTINO_SOCKET fortino status"
+check "staff user sees own profiles only" "! sudo -u fortinotest env FORTINO_SOCKET=$FORTINO_SOCKET fortino profile list | grep -q PkgTest"
+C="/Library/Application Support/Fortino/fortinod.toml"
+cp "$C" /tmp/fortinod.toml.bak
+dseditgroup -o create fortino
+sed -i '' 's/^allowed_groups = .*/allowed_groups = ["fortino"]/' "$C"
+launchctl kickstart -k system/org.fortino.fortinod; sleep 1; wait_sock
+check "restricted: non-member denied" "! sudo -u fortinotest env FORTINO_SOCKET=$FORTINO_SOCKET fortino status"
+dseditgroup -o edit -a fortinotest -t user fortino
+check "restricted: member allowed without restart" "sudo -u fortinotest env FORTINO_SOCKET=$FORTINO_SOCKET fortino status"
+cp /tmp/fortinod.toml.bak "$C"
+launchctl kickstart -k system/org.fortino.fortinod; sleep 1; wait_sock
+
 installer -pkg "$P" -target / >/dev/null || fail=1
 wait_sock
 check "upgrade: service running" running

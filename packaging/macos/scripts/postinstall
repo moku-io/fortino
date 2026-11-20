@@ -18,18 +18,20 @@ install -d -o root -g wheel -m 0755 "$CONF_DIR/ca"
 [ -f "$CONF_DIR/ca/system.pem" ] || install -o root -g wheel -m 0644 /etc/ssl/cert.pem "$CONF_DIR/ca/system.pem"
 
 if [ ! -f "$CONF" ]; then
-    # Allow the user logged in at the console (the one running the installer).
-    uid=$(stat -f %u /dev/console 2>/dev/null || echo 0)
-    if [ "$uid" -ne 0 ] 2>/dev/null; then uids="[$uid]"; else uids="[]"; fi
     umask 022
     cat > "$CONF" <<EOT
 # Fortino daemon configuration. After editing:
 #   sudo launchctl kickstart -k system/$LABEL
 socket_path = "/var/run/fortino/fortinod.sock"
 state_dir = "$CONF_DIR/state"
-# Local users may reach the socket; only the UIDs below may use the VPN (root always can).
+# Who may use the VPN (root always can). Each user sees only their own profiles.
+# Every local user is in "staff". To restrict, create a group and list it instead:
+#   sudo dseditgroup -o create fortino
+#   sudo dseditgroup -o edit -a USER -t user fortino
+# then set allowed_groups = ["fortino"]. Membership is checked at each connection.
+# allowed_uids = [501] allows single users in addition.
 socket_group = "staff"
-allowed_uids = $uids
+allowed_groups = ["staff"]
 
 [worker]
 path = "$LIBEXEC/fortino-sslvpn-worker"

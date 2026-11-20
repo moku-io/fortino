@@ -1,4 +1,5 @@
-//! Peer authorization: kernel peer credentials, socket group membership and the UID allowlist.
+//! Peer authorization: kernel peer credentials, socket group membership, and the UID and group
+//! allowlists.
 //!
 //! A UID in a message is never trusted; only the credentials of the connected socket count.
 
@@ -9,6 +10,8 @@ use nix::unistd::{Gid, Group, Uid, User};
 pub struct Authorizer {
     /// Allowed UIDs (root is implicit).
     pub allowed: Vec<u32>,
+    /// Groups whose members are allowed, checked at each connection.
+    pub allowed_groups: Vec<Gid>,
     /// Administrator UIDs (root is implicit).
     pub admins: Vec<u32>,
     /// Required group, by GID, if any.
@@ -38,6 +41,7 @@ impl Authorizer {
         };
         Ok(Self {
             allowed,
+            allowed_groups: Vec::new(),
             admins,
             group,
         })
@@ -48,7 +52,7 @@ impl Authorizer {
         if uid == 0 {
             return Some(Peer { uid, admin: true });
         }
-        if !self.allowed.contains(&uid) {
+        if !self.allowed.contains(&uid) && !self.allowed_groups.iter().any(|g| in_group(uid, *g)) {
             return None;
         }
         if let Some(gid) = self.group
@@ -61,6 +65,20 @@ impl Authorizer {
             admin: self.admins.contains(&uid),
         })
     }
+}
+
+/// Resolves group names, skipping (with a warning) groups that do not exist on this host.
+pub fn resolve_groups(names: &[String]) -> Vec<Gid> {
+    names
+        .iter()
+        .filter_map(|name| match Group::from_name(name) {
+            Ok(Some(g)) => Some(g.gid),
+            _ => {
+                tracing::warn!(group = %name, "allowed group not found; ignored");
+                None
+            }
+        })
+        .collect()
 }
 
 /// True when `uid` has `gid` as primary group or is listed as a member.
@@ -90,6 +108,22 @@ mod tests {
         );
         assert_eq!(a.authorize(502), None);
         assert!(a.authorize(0).unwrap().admin);
+    }
+
+    #[test]
+    fn allowed_groups() {
+        let me = nix::unistd::getuid();
+        if me.as_raw() == 0 {
+            return;
+        }
+        let user = User::from_uid(me).unwrap().unwrap();
+        let mut a = Authorizer::new(vec![], vec![], None).unwrap();
+        assert!(a.authorize(me.as_raw()).is_none());
+        a.allowed_groups = vec![Gid::from_raw(4_000_000_000), user.gid];
+        assert!(!a.authorize(me.as_raw()).unwrap().admin);
+        a.allowed_groups = vec![Gid::from_raw(4_000_000_000)];
+        assert!(a.authorize(me.as_raw()).is_none());
+        assert!(resolve_groups(&["no-such-group-fortino".into()]).is_empty());
     }
 
     #[test]

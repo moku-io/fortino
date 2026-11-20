@@ -9,6 +9,9 @@ use serde::Deserialize;
 /// Default configuration file.
 pub const DEFAULT_CONFIG: &str = "/Library/Application Support/Fortino/fortinod.toml";
 
+/// Group allowed by default: every local user on macOS.
+pub const DEFAULT_ALLOWED_GROUP: &str = "staff";
+
 /// Daemon settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
@@ -21,6 +24,10 @@ pub struct DaemonConfig {
     pub socket_group: Option<String>,
     /// UIDs allowed to use the VPN. Root is always allowed.
     pub allowed_uids: Vec<u32>,
+    /// Groups whose members may use the VPN, checked on every connection (so `dseditgroup`
+    /// changes apply without a restart). Unset means `["staff"]` (every local user on macOS),
+    /// unless `allowed_uids` lists users; then only those users. `[]` disables groups.
+    pub allowed_groups: Option<Vec<String>>,
     /// UIDs that may see and stop any user's attempt. Root is always an administrator.
     pub admin_uids: Vec<u32>,
     /// Seconds to establish the transport.
@@ -94,6 +101,7 @@ impl Default for DaemonConfig {
             state_dir: PathBuf::from("/Library/Application Support/Fortino/state"),
             socket_group: None,
             allowed_uids: Vec::new(),
+            allowed_groups: None,
             admin_uids: Vec::new(),
             transport_timeout_secs: 30,
             challenge_timeout_secs: 120,
@@ -111,6 +119,15 @@ impl DaemonConfig {
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// Groups allowed to use the VPN, with the default applied.
+    pub fn effective_allowed_groups(&self) -> Vec<String> {
+        match &self.allowed_groups {
+            Some(g) => g.clone(),
+            None if self.allowed_uids.is_empty() => vec![DEFAULT_ALLOWED_GROUP.to_owned()],
+            None => Vec::new(),
+        }
     }
 
     /// Deadlines.
@@ -160,6 +177,19 @@ mod tests {
         assert_eq!(c.fake.unwrap().otp.as_deref(), Some("654321"));
         assert_eq!(c.challenge_timeout_secs, 120);
         assert!(toml::from_str::<DaemonConfig>("bogus = 1").is_err());
+    }
+
+    #[test]
+    fn allowed_groups_default() {
+        let c: DaemonConfig = toml::from_str("").unwrap();
+        assert_eq!(c.effective_allowed_groups(), vec!["staff".to_owned()]);
+        let c: DaemonConfig = toml::from_str("allowed_uids = [501]").unwrap();
+        assert!(c.effective_allowed_groups().is_empty());
+        let c: DaemonConfig =
+            toml::from_str("allowed_uids = [501]\nallowed_groups = [\"vpn\"]").unwrap();
+        assert_eq!(c.effective_allowed_groups(), vec!["vpn".to_owned()]);
+        let c: DaemonConfig = toml::from_str("allowed_groups = []").unwrap();
+        assert!(c.effective_allowed_groups().is_empty());
     }
 
     #[test]

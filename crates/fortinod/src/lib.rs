@@ -177,10 +177,14 @@ pub fn ems_settings(cfg: &DaemonConfig) -> Result<fortino_ems::service::Settings
 
 /// Builds the authorizer from configuration.
 pub fn build_authorizer(cfg: &DaemonConfig) -> Result<Arc<Authorizer>, String> {
-    Authorizer::new(
+    let mut a = Authorizer::new(
         cfg.allowed_uids.clone(),
         cfg.admin_uids.clone(),
         cfg.socket_group.as_deref(),
-    )
-    .map(Arc::new)
+    )?;
+    a.allowed_groups = auth::resolve_groups(&cfg.effective_allowed_groups());
+    if a.allowed.is_empty() && a.allowed_groups.is_empty() {
+        tracing::warn!("no allowed_uids or allowed_groups: only root can use the VPN");
+    }
+    Ok(Arc::new(a))
 }
