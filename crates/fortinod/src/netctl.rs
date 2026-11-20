@@ -212,23 +212,37 @@ impl<P: NetPlatform> NetController for JournaledController<P> {
 
     fn apply(&mut self, tc: &TunnelConfig, policy: IpPolicy) -> Result<(), NetError> {
         let mut changes = plan(tc, policy)?;
-        // Keep the gateway on the physical uplink before any VPN route is installed.
+        // Pin the VPN server to the physical uplink before installing VPN routes. This is always
+        // needed: besides a pushed prefix, the tunnel interface's own point-to-point peer can be
+        // the server address, which would route the carrier into its own tunnel. route_to(gw) is
+        // unreliable once the carrier is up (its live connection leaves a cached host route), so
+        // read the uplink next-hop from a never-connected probe (TEST-NET-3, RFC 5737): before
+        // VPN routes it resolves via the default route, giving the real uplink gateway.
         let gw = IpAddr::V4(tc.gateway_ip);
-        let pin = self
+        const UPLINK_PROBE: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
+        let via = self
             .inner
             .platform()
-            .route_to(gw)
+            .route_to(UPLINK_PROBE)
             .map_err(|e| NetError::Apply(e.to_string()))?;
-        match pin {
-            Some(via @ RouteVia::Gateway { .. }) => changes.insert(
+        tracing::info!(
+            pin = match &via {
+                Some(RouteVia::Gateway { .. }) => "gateway",
+                Some(RouteVia::Interface(_)) => "interface",
+                None => "none",
+            },
+            "pinning VPN server to the physical uplink"
+        );
+        if let Some(via @ RouteVia::Gateway { .. }) = via {
+            // Only a gateway next-hop needs an explicit pin; a directly-connected server already
+            // stays on its interface, and no default route means nothing to pin to.
+            changes.insert(
                 0,
                 NetChange::AddRoute(Route {
                     dest: IpNet::host(gw),
                     via,
                 }),
-            ),
-            Some(RouteVia::Interface(_)) => {}
-            None => return Err(NetError::Apply("no route to gateway".into())),
+            );
         }
         self.inner.apply_all(&changes).map_err(|e| {
             if self.inner.pending() > 0 {
@@ -355,9 +369,36 @@ mod tests {
     }
 
     #[test]
+    fn pins_server_via_the_uplink_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = Arc::new(Mutex::new(FakeState::typical_host()));
+        let net = FakeNet::new(state.clone());
+        let mut c =
+            JournaledController::new(Journaled::open(net, dir.path().join("j.json")).unwrap());
+        // The server is pinned to the uplink's next-hop regardless of the pushed routes, because
+        // the tunnel interface itself can otherwise capture the carrier.
+        for policy in [IpPolicy::SplitIpv4, IpPolicy::FullIpv4] {
+            c.apply(&tc(), policy).unwrap();
+            assert!(
+                state
+                    .lock()
+                    .unwrap()
+                    .routes
+                    .iter()
+                    .any(|fortino_platform::fake::RouteKey(r)| r
+                        == "203.0.113.10/32 via 192.0.2.1 dev en0"),
+                "{policy:?}: server pinned via the uplink gateway"
+            );
+            c.rollback().unwrap();
+        }
+    }
+
+    #[test]
     fn failed_apply_leaves_nothing() {
         let dir = tempfile::tempdir().unwrap();
         let state = Arc::new(Mutex::new(FakeState::typical_host()));
+        // tc() split tunnel plans four changes (server pin, route, split DNS, IPv6 block);
+        // fail the last one.
         state.lock().unwrap().fail_apply_at = Some(3);
         let before = state.lock().unwrap().net_only();
         let mut c = JournaledController::new(

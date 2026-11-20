@@ -208,7 +208,15 @@ fn up_config(
 
     let params = LinkParams {
         local: link.local,
-        peer: link.peer.unwrap_or(gateway_ip),
+        // The far-side address labels the point-to-point interface and installs a host route to
+        // itself via the tunnel. A FortiGate announces its public address as the peer (PPP
+        // semantics), but using that here would route the TLS carrier into its own tunnel. Only
+        // accept a peer that is a distinct in-tunnel address; otherwise label the link with our
+        // own assigned address, which captures nothing external.
+        peer: match link.peer {
+            Some(p) if p != gateway_ip => p,
+            _ => link.local,
+        },
         mtu: DEFAULT_MTU.min(link.peer_mru),
     };
     let dev = w
