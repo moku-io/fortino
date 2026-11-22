@@ -245,7 +245,8 @@ struct EmsStatusRow: View {
     private var color: Color {
         switch status?.state {
         case "registered": return .green
-        case "stale": return .yellow
+        // Keepalives run only while connected, so a quiet registration is normal when idle.
+        case "stale": return .secondary
         case "quarantined": return .red
         default: return .secondary
         }
@@ -254,7 +255,7 @@ struct EmsStatusRow: View {
     private var label: String {
         switch status?.state {
         case "registered": return "Registered"
-        case "stale": return "Registered, no recent check-in"
+        case "stale": return "Registered"
         case "quarantined": return "Quarantined"
         case "managed-by-forticlient": return "Managed by FortiClient"
         // No administrator has approved this server on this Mac yet.
@@ -267,7 +268,7 @@ struct EmsStatusRow: View {
     private var detail: String {
         guard let t = status?.lastKeepalive else { return "" }
         let ago = max(0, Int(Date().timeIntervalSince1970) - t)
-        return "Last check-in \(formatDuration(ago)) ago"
+        return "Last check-in with the EMS \(formatDuration(ago)) ago. Fortino checks in while the VPN is connected."
     }
 }
 
