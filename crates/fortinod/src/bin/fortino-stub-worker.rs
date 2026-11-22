@@ -136,7 +136,7 @@ async fn main() -> io::Result<()> {
                         false,
                     ),
                     WorkerEvent::Terminated(t) => (
-                        WorkerMsg::Terminated { v, attempt: a, seq, reason: reason(t.code), stage: None },
+                        WorkerMsg::Terminated { v, attempt: a, seq, reason: reason(t.code), stage: None, detail: None },
                         true,
                     ),
                 };

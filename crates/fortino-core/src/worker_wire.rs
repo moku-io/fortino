@@ -253,7 +253,31 @@ pub enum WorkerMsg {
         /// Stage at which it failed, if known.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         stage: Option<WorkerStage>,
+        /// The worker's own short description of the failure (e.g. "tunnel settings: HTTP
+        /// 500"), so the user and log see the cause and not only the category. The daemon
+        /// bounds and sanitizes it (see [`failure_detail`]). Never holds credentials or
+        /// cookies: the worker's failure messages carry statuses, paths and stage names only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
+}
+
+/// Longest failure detail the daemon keeps.
+pub const MAX_DETAIL: usize = 160;
+
+/// Bounds a worker's failure detail: no control characters, no query strings (which could
+/// carry tokens), at most [`MAX_DETAIL`] bytes on a character boundary. Empty becomes `None`.
+pub fn failure_detail(s: &str) -> Option<String> {
+    let s = s.split('?').next().unwrap_or_default();
+    let mut out = String::new();
+    for c in s.chars().filter(|c| !c.is_control()) {
+        if out.len() + c.len_utf8() > MAX_DETAIL {
+            break;
+        }
+        out.push(c);
+    }
+    let out = out.trim().to_owned();
+    (!out.is_empty()).then_some(out)
 }
 
 /// A protocol violation by the worker. The daemon terminates the attempt.
@@ -363,8 +387,14 @@ impl WorkerMsg {
                     block_ipv6,
                 })
             }
-            WorkerMsg::Terminated { reason, .. } => {
-                WorkerEvent::Terminated(reason.to_termination())
+            WorkerMsg::Terminated { reason, detail, .. } => {
+                let mut t = reason.to_termination();
+                if !matches!(reason, WireReason::Stopped | WireReason::Cancelled) {
+                    if let Some(d) = detail.as_deref().and_then(failure_detail) {
+                        t.message = format!("{}: {d}", t.message);
+                    }
+                }
+                WorkerEvent::Terminated(t)
             }
         })
     }
@@ -432,6 +462,50 @@ mod tests {
             block_ipv6: false,
         };
         assert!(many.into_event("a", &mut last).is_err());
+    }
+
+    #[test]
+    fn failure_detail_is_bounded_and_sanitized() {
+        assert_eq!(
+            failure_detail("tunnel settings: HTTP 500").as_deref(),
+            Some("tunnel settings: HTTP 500")
+        );
+        assert_eq!(
+            failure_detail("redirect to /remote/x?token=abc").as_deref(),
+            Some("redirect to /remote/x")
+        );
+        assert_eq!(failure_detail("a\nb\u{7}c").as_deref(), Some("abc"));
+        assert_eq!(failure_detail("  "), None);
+        let long = "é".repeat(200);
+        let d = failure_detail(&long).unwrap();
+        assert!(d.len() <= MAX_DETAIL && d.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn termination_carries_detail_except_for_stops() {
+        let msg = |reason, detail: &str| WorkerMsg::Terminated {
+            v: WORKER_PROTOCOL_VERSION,
+            attempt: "a".into(),
+            seq: 1,
+            reason,
+            stage: None,
+            detail: Some(detail.into()),
+        };
+        let mut seq = 0;
+        match msg(WireReason::Backend, "tunnel settings: HTTP 500").into_event("a", &mut seq) {
+            Ok(WorkerEvent::Terminated(t)) => {
+                assert_eq!(
+                    t.message,
+                    "tunnel backend failed: tunnel settings: HTTP 500"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        let mut seq = 0;
+        match msg(WireReason::Stopped, "ignored").into_event("a", &mut seq) {
+            Ok(WorkerEvent::Terminated(t)) => assert_eq!(t.message, "stopped"),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

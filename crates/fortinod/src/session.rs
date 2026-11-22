@@ -888,7 +888,7 @@ impl Session {
                 State::RecoveryRequired
             }
         };
-        tracing::info!(attempt = %a.attempt_id, code = ?result.code, "attempt finished");
+        tracing::info!(attempt = %a.attempt_id, code = ?result.code, message = %result.message, "attempt finished");
         g.last = Some(Finished {
             owner: a.owner,
             attempt_id: a.attempt_id,

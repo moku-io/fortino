@@ -160,6 +160,7 @@ pub async fn run() -> io::Result<()> {
                 seq,
                 reason: WireReason::InvalidCertificate,
                 stage: None,
+                detail: None,
             };
             return send(&mut wr, &m).await;
         }
@@ -194,7 +195,14 @@ pub async fn run() -> io::Result<()> {
                         false,
                     ),
                     WorkerEvent::Terminated(t) => (
-                        WorkerMsg::Terminated { v, attempt: a, seq, reason: reason(t.code), stage: None },
+                        WorkerMsg::Terminated {
+                            v,
+                            attempt: a,
+                            seq,
+                            reason: reason(t.code),
+                            stage: None,
+                            detail: t.code.is_some().then(|| t.message.clone()),
+                        },
                         true,
                     ),
                 };
