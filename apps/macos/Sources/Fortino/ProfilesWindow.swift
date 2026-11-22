@@ -213,7 +213,12 @@ struct EmsStatusRow: View {
             HStack(spacing: 6) {
                 StatusDot(color: color)
                 Text(label)
-                if status?.state == "unconfigured" {
+                if emsTrustFailed {
+                    // The last connect failed verifying this EMS (e.g. reached by an address its
+                    // certificate doesn't name): show the certificate and offer to pin it.
+                    Button("Review Certificate…") { model.approveEms(server) }
+                        .controlSize(.small)
+                } else if status?.state == "unconfigured" {
                     // Approving is enough for a Mac the EMS already knows: it registers on the
                     // next connect. A DMG is only needed for a Mac the EMS has never seen.
                     Button("Approve…") { model.approveEms(server) }
@@ -230,6 +235,11 @@ struct EmsStatusRow: View {
             }
             .help(detail)
         }
+    }
+
+    private var emsTrustFailed: Bool {
+        guard model.state == .idle, let r = model.status?.lastResult else { return false }
+        return r.code == "trust_failure" && r.message.hasPrefix("EMS:")
     }
 
     private var color: Color {

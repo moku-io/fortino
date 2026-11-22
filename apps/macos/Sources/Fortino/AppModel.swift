@@ -296,13 +296,29 @@ final class AppModel: ObservableObject {
     /// Approves an EMS server on this Mac (administrator password), so connecting registers
     /// with it. No deployment package needed for a Mac the EMS already knows.
     func approveEms(_ server: EmsServer) {
-        do {
-            try EnrollmentApproval(server: server).requestInApp()
-        } catch {
-            report(error)
-            return
+        actionError = nil
+        Task {
+            do {
+                if try await approveWithCertificateCheck(server) {
+                    await refreshEmsStatus()
+                }
+            } catch {
+                report(error)
+            }
         }
-        Task { await self.refreshEmsStatus() }
+    }
+
+    /// Checks the server's certificate, warns once if macOS doesn't trust it, and writes the
+    /// approval (pinning the certificate the user accepted). False when the user cancelled.
+    func approveWithCertificateCheck(_ server: EmsServer) async throws -> Bool {
+        let cert = try await EmsCertificate.fetch(server)
+        var pin: String?
+        if !cert.trusted {
+            guard cert.confirmTrust(for: server) else { return false }
+            pin = cert.sha256
+        }
+        try EnrollmentApproval(server: server).requestInApp(pin: pin)
+        return true
     }
 
     func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {

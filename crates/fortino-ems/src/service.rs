@@ -59,16 +59,44 @@ pub struct PackageApprovals {
 }
 
 impl PackageApprovals {
-    fn permits(&self, server: &EmsServer) -> bool {
+    /// The trust for an approved server, or `None` when it is not approved. An empty marker
+    /// trusts the system CA bundle; a marker holding a SHA-256 pin trusts exactly that leaf
+    /// certificate, which the administrator accepted after a warning (for an EMS reached by an
+    /// address its certificate doesn't name). Any other content is refused.
+    fn trust_for(&self, server: &EmsServer) -> Option<Trust> {
         use sha2::{Digest, Sha256};
         use std::os::unix::fs::MetadataExt;
         let protected = |meta: &std::fs::Metadata| meta.uid() == 0 && meta.mode() & 0o022 == 0;
-        std::fs::symlink_metadata(&self.directory).is_ok_and(|m| m.is_dir() && protected(&m))
-            && std::fs::symlink_metadata(
-                self.directory
-                    .join(hex::encode(Sha256::digest(server_key(server)))),
-            )
-            .is_ok_and(|m| m.is_file() && protected(&m))
+        if !std::fs::symlink_metadata(&self.directory).is_ok_and(|m| m.is_dir() && protected(&m)) {
+            return None;
+        }
+        let marker = self
+            .directory
+            .join(hex::encode(Sha256::digest(server_key(server))));
+        if !std::fs::symlink_metadata(&marker)
+            .is_ok_and(|m| m.is_file() && protected(&m) && m.len() <= 256)
+        {
+            return None;
+        }
+        let content = std::fs::read_to_string(&marker).ok()?;
+        marker_trust(&content, &self.ca_file)
+    }
+}
+
+/// Parses an approval marker's content (see [`PackageApprovals::trust_for`]).
+fn marker_trust(content: &str, ca_file: &std::path::Path) -> Option<Trust> {
+    let pin = content.trim();
+    if pin.is_empty() {
+        return Some(Trust::CaFile(ca_file.to_path_buf()));
+    }
+    match fortino_tls::parse_pin(pin) {
+        Some(p) => Some(Trust::Pinned(vec![p])),
+        None => {
+            tracing::warn!(
+                "EMS approval marker holds neither nothing nor a SHA-256 pin; ignoring it"
+            );
+            None
+        }
     }
 }
 
@@ -176,8 +204,8 @@ impl EmsWorkers {
             return Some(settings.clone());
         }
         let approvals = self.settings.package_approvals.as_ref()?;
-        approvals.permits(server).then(|| ServerSettings {
-            trust: Trust::CaFile(approvals.ca_file.clone()),
+        approvals.trust_for(server).map(|trust| ServerSettings {
+            trust,
             key_file: None,
             register: true,
         })
@@ -638,6 +666,25 @@ impl WorkerFactory for EmsWorkers {
             events: ev_rx,
             commands: cmd_tx,
         }
+    }
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+
+    #[test]
+    fn marker_content_selects_trust() {
+        let ca = std::path::Path::new("/etc/ssl/cert.pem");
+        assert!(matches!(marker_trust("", ca), Some(Trust::CaFile(_))));
+        assert!(matches!(marker_trust("\n", ca), Some(Trust::CaFile(_))));
+        let pin = "ab".repeat(32);
+        match marker_trust(&format!("{pin}\n"), ca) {
+            Some(Trust::Pinned(p)) => assert_eq!(p, vec![[0xab; 32]]),
+            other => panic!("expected a pin, got {other:?}"),
+        }
+        assert!(marker_trust("not a pin", ca).is_none());
+        assert!(marker_trust(&"ab".repeat(31), ca).is_none());
     }
 }
 

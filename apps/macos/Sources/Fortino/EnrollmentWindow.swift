@@ -49,7 +49,8 @@ struct EnrollmentWindow: View {
             defer { busy = false }
             do {
                 if needsApproval {
-                    try EnrollmentApproval(package: package).requestInApp()
+                    guard case let .success(server?) = parseEms(package.address),
+                          try await model.approveWithCertificateCheck(server) else { return }
                     needsApproval = false
                 }
                 let result = try await model.enroll(package)

@@ -16,10 +16,16 @@ struct EnrollmentApproval {
         return directory + "/" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    func requestInApp() throws {
+    /// Writes the approval marker as root. With `pin` (64 lower-case hex digits) the daemon
+    /// trusts exactly that leaf certificate for this server; without, the system CA bundle.
+    func requestInApp(pin: String? = nil) throws {
         // EnrollmentPackage has no public initializer. Its address comes from parseEms.
+        if let pin, pin.count != 64 || !pin.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) {
+            throw ProtoError(code: "invalid_request", message: "Invalid certificate fingerprint.")
+        }
+        let write = pin.map { "/usr/bin/printf %s \($0) > \(marker)" } ?? ": > \(marker)"
         let script = """
-        do shell script "umask 077 && /usr/bin/install -d -m 0700 -o root -g wheel \(directory) && /usr/bin/touch \(marker)" with prompt "Allow Fortino to register this Mac with the EMS server \(address)?" with administrator privileges
+        do shell script "umask 077 && /usr/bin/install -d -m 0700 -o root -g wheel \(directory) && \(write)" with prompt "Allow Fortino to register this Mac with the EMS server \(address)?" with administrator privileges
         """
         var error: NSDictionary?
         guard let approval = NSAppleScript(source: script) else {
