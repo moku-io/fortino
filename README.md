@@ -63,6 +63,22 @@ scripts/macos-vm-dmg-test.sh   # optional: install it from the DMG in a disposab
 
 Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [development].
 
+### Release checklist
+
+1. Raise `CFBundleShortVersionString` and `CFBundleVersion` in `apps/macos/Resources/Info.plist`.
+2. Check the tree:
+   ```sh
+   cargo fmt --all --check
+   cargo clippy --workspace --all-targets
+   cargo test --locked --workspace
+   ```
+3. Commit, so the DMG matches a commit.
+4. Build the signed DMG (it builds the release binaries itself); add `NOTARY_PROFILE=fortino` once a notary profile exists:
+   ```sh
+   SIGN_APP="Developer ID Application: …" scripts/package-macos.sh
+   ```
+5. Optionally run `scripts/macos-vm-dmg-test.sh`, then tag the commit (`git tag v<version>`) and hand out `target/package/Fortino-<version>.dmg`.
+
 The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock -- fortigate fixtures/mock/basic.yaml`.
 
 ## Thanks
