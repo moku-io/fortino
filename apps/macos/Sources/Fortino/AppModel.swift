@@ -69,9 +69,16 @@ final class AppModel: ObservableObject {
     // MARK: Connection to the daemon
 
     private func connectLoop() async {
+        var ticks = 0
         while true {
             if client == nil && !connecting {
                 await openConnection()
+            }
+            // Keepalives start a few seconds after connecting and repeat while connected, so
+            // the EMS state read on the state change is soon out of date: refresh it every 30 s.
+            ticks += 1
+            if ticks % 15 == 0 && state == .connected {
+                await refreshEmsStatus()
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
