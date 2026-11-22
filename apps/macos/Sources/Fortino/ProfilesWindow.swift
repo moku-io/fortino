@@ -224,16 +224,11 @@ struct EmsStatusRow: View {
                     Button("Approve…") { model.approveEms(server) }
                         .controlSize(.small)
                         .help("Lets Fortino register this Mac with this EMS server when you connect")
-                } else if status?.state == "not-registered" {
-                    Button("Enroll…") {
-                        openWindow(id: "enrollment")
-                        NSApp.activate(ignoringOtherApps: true)
-                    }
-                    .controlSize(.small)
-                    .help("Registers now from the EMS deployment DMG. Not needed if the EMS already knows this Mac: connecting registers it.")
                 }
             }
-            .help(detail)
+            .help(status?.state == "not-registered"
+                  ? "Nothing to do: Fortino registers this Mac with the EMS the next time you connect. For a Mac the EMS has never seen, the administrator may also supply a deployment DMG (Enroll with EMS… in the menu)."
+                  : detail)
         }
     }
 
