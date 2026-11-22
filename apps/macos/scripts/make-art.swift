@@ -1,9 +1,9 @@
-// Draws Fortino's app icon and the disk-image background at build time (no binary assets in the
-// repository). Original artwork from standard SF Symbols; not derived from any vendor's design.
+// Draws the disk-image background at build time. The app icon is apps/macos/Resources/AppIcon.iconset
+// (source artwork AppIcon.svg).
 //
 //   swift apps/macos/scripts/make-art.swift OUT_DIR
 //
-// Writes OUT_DIR/AppIcon.icns and OUT_DIR/dmg-background.tiff (1x + 2x).
+// Writes OUT_DIR/dmg-background.tiff (1x + 2x).
 
 import AppKit
 
@@ -24,58 +24,9 @@ func render(_ size: CGSize, scale: CGFloat, _ draw: (CGRect) -> Void) -> Data {
     return rep.representation(using: .png, properties: [:])!
 }
 
-func symbol(_ name: String, pointSize: CGFloat, weight: NSFont.Weight, colors: [NSColor]) -> NSImage {
-    let cfg = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-        .applying(.init(paletteColors: colors))
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)!.withSymbolConfiguration(cfg)!
-}
-
 func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
     NSColor(srgbRed: CGFloat(hex >> 16 & 0xff) / 255, green: CGFloat(hex >> 8 & 0xff) / 255,
             blue: CGFloat(hex & 0xff) / 255, alpha: alpha)
-}
-
-// MARK: App icon: a white shield with a lock on a deep-blue rounded square.
-
-func drawIcon(_ r: CGRect) {
-    let s = r.width / 1024
-    let tile = CGRect(x: 100 * s, y: 100 * s, width: 824 * s, height: 824 * s)
-    let path = NSBezierPath(roundedRect: tile, xRadius: 185 * s, yRadius: 185 * s)
-
-    NSGraphicsContext.saveGraphicsState()
-    let shadow = NSShadow()
-    shadow.shadowColor = .black.withAlphaComponent(0.3)
-    shadow.shadowBlurRadius = 24 * s
-    shadow.shadowOffset = CGSize(width: 0, height: -10 * s)
-    shadow.set()
-    color(0x1D4ED8).setFill()
-    path.fill()
-    NSGraphicsContext.restoreGraphicsState()
-
-    NSGradient(colors: [color(0x3B82F6), color(0x1E3A8A)])!.draw(in: path, angle: -90)
-    // Soft highlight on the upper half.
-    NSGraphicsContext.saveGraphicsState()
-    path.addClip()
-    NSGradient(colors: [.white.withAlphaComponent(0.18), .white.withAlphaComponent(0)])!
-        .draw(in: CGRect(x: tile.minX, y: tile.midY, width: tile.width, height: tile.height / 2), angle: -90)
-    NSGraphicsContext.restoreGraphicsState()
-
-    let glyph = symbol("lock.shield.fill", pointSize: 470 * s, weight: .regular,
-                       colors: [color(0x1E40AF), .white])
-    let g = glyph.size
-    glyph.draw(in: CGRect(x: tile.midX - g.width / 2, y: tile.midY - g.height / 2 - 6 * s,
-                          width: g.width, height: g.height))
-}
-
-let iconset = out.appendingPathComponent("AppIcon.iconset")
-try? FileManager.default.removeItem(at: iconset)
-try! FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-for pt in [16, 32, 128, 256, 512] {
-    for scale in [1, 2] {
-        let name = scale == 1 ? "icon_\(pt)x\(pt).png" : "icon_\(pt)x\(pt)@2x.png"
-        let data = render(CGSize(width: pt, height: pt), scale: CGFloat(scale), drawIcon)
-        try! data.write(to: iconset.appendingPathComponent(name))
-    }
 }
 
 // MARK: Disk-image background: 640 x 400 points, app on the left, Applications on the right.

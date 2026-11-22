@@ -23,10 +23,10 @@ app="$here/.build/Fortino.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Library/LaunchDaemons" \
     "$app/Contents/Resources"
-# App icon and disk-image background, drawn by make-art.swift (no binary assets in git).
+# App icon from Resources/AppIcon.iconset; disk-image background drawn by make-art.swift.
 art="$here/.build/art"
 swift "$here/scripts/make-art.swift" "$art" >&2
-iconutil -c icns "$art/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
+iconutil -c icns "$here/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 cp "$here/Resources/Info.plist" "$app/Contents/Info.plist"
 cp "$here/Resources/org.fortino.fortinod.plist" "$app/Contents/Library/LaunchDaemons/"
 cp "$here/.build/$config/Fortino" "$app/Contents/MacOS/Fortino"
