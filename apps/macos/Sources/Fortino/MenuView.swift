@@ -65,6 +65,8 @@ struct MenuView: View {
                 MenuRow(title: "Open Login Items Settings…") { service.openLoginItemsSettings() }
             } else if case .failed(let why) = service.state {
                 notice(why, symbol: "exclamationmark.triangle.fill", tint: .orange)
+            } else if let u = model.serviceUpdate, u != .afterDisconnect || model.serviceError == nil {
+                serviceUpdateNotice(u)
             } else if let e = model.serviceError {
                 notice(e, symbol: "exclamationmark.triangle.fill", tint: .orange)
             } else if model.state == .inUse {
@@ -121,6 +123,32 @@ struct MenuView: View {
             service.refresh()
             service.refreshCLI()
             await model.refreshProfiles()
+        }
+    }
+
+    @ViewBuilder
+    private func serviceUpdateNotice(_ u: ServiceUpdate) -> some View {
+        switch u {
+        case .afterDisconnect:
+            notice("Fortino was updated. The VPN service switches to the new version when you disconnect.",
+                   symbol: "arrow.down.circle", tint: .secondary)
+        case .restarting:
+            notice("Restarting the VPN service with the new version…",
+                   symbol: "arrow.triangle.2.circlepath", tint: .secondary)
+        case .otherCopy:
+            notice("The VPN service belongs to another copy of Fortino. Keep one copy in Applications and open it from there.",
+                   symbol: "exclamationmark.triangle.fill", tint: .orange)
+        case .needsAdminRestart:
+            if model.state == .idle || model.state == .recoveryRequired {
+                notice("The VPN service is from an older version of Fortino. Restart it to finish the update.",
+                       symbol: "arrow.down.circle", tint: .orange)
+                MenuRow(title: "Restart VPN Service…", help: "Asks for an administrator's password") {
+                    model.restartServiceAsAdmin(service)
+                }
+            } else {
+                notice("The VPN service is from an older version of Fortino. Disconnect, then restart it from this menu.",
+                       symbol: "arrow.down.circle", tint: .orange)
+            }
         }
     }
 

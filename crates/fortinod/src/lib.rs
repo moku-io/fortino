@@ -26,6 +26,11 @@ use crate::config::DaemonConfig;
 use crate::netctl::JournaledController;
 use crate::session::Session;
 
+/// Build identifier stamped by `apps/macos/scripts/bundle.sh` (`FORTINO_BUILD_ID`): the commit,
+/// plus a timestamp for a tree with local changes. The app compares it with its own to notice
+/// a daemon left running from before an update. Unstamped (development) builds have none.
+pub const BUILD_ID: Option<&str> = option_env!("FORTINO_BUILD_ID");
+
 /// Binds the control socket, replacing a stale one, and restricts its permissions.
 ///
 /// With a group the socket is `0660 root:<group>`; without one it is `0600`.

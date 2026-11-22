@@ -16,6 +16,17 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 root="$(cd "$here/../.." && pwd)"
 
 if [ "$config" = release ]; then cargo_flag="--release"; else cargo_flag=""; fi
+# One build ID for the daemon, the CLI and the app's Info.plist (FortinoBuildID). The app
+# compares the daemon's with its own after an update and asks an older daemon to restart. A
+# clean tree gives the commit; local changes add a timestamp so every such build differs.
+if [ -z "${FORTINO_BUILD_ID:-}" ]; then
+    FORTINO_BUILD_ID="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
+    if [ -n "$(git -C "$root" status --porcelain 2>/dev/null)" ]; then
+        FORTINO_BUILD_ID="$FORTINO_BUILD_ID-dirty-$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
+fi
+export FORTINO_BUILD_ID
+echo "build $FORTINO_BUILD_ID" >&2
 (cd "$root" && cargo build --locked -p fortino-cli -p fortinod --bin fortino --bin fortinod $cargo_flag)
 (cd "$here" && swift build -c "$config" --product Fortino)
 
@@ -29,6 +40,7 @@ swift "$here/scripts/make-art.swift" "$art" >&2
 iconutil -c icns "$here/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 cp "$here"/Resources/ShieldStatusBar*.png "$app/Contents/Resources/"
 cp "$here/Resources/Info.plist" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :FortinoBuildID string $FORTINO_BUILD_ID" "$app/Contents/Info.plist"
 cp "$here/Resources/org.fortino.fortinod.plist" "$app/Contents/Library/LaunchDaemons/"
 cp "$here/.build/$config/Fortino" "$app/Contents/MacOS/Fortino"
 cp "$root/target/$config/fortinod" "$app/Contents/MacOS/fortinod"

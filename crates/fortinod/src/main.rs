@@ -92,10 +92,17 @@ async fn daemon() -> ExitCode {
         // launchd stops the service with SIGTERM.
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .map_err(|e| format!("SIGTERM handler: {e}"))?;
+        let restart = session.clone();
         tokio::select! {
             () = fortinod::server::serve(listener, session, auth) => {}
             _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
             _ = term.recv() => tracing::info!("shutting down"),
+            () = restart.exit_requested() => {
+                // No attempt is active. Let the connection tasks deliver the answer to
+                // `daemon.restart`, then exit; launchd (KeepAlive) starts the installed binary.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                tracing::info!("exiting for restart");
+            }
         }
         Ok::<(), String>(())
     };

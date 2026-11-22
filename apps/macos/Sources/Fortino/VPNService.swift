@@ -71,6 +71,23 @@ final class VPNService: ObservableObject {
         SMAppService.openSystemSettingsLoginItems()
     }
 
+    /// Restarts the service with an administrator's password: launchd stops it and starts the
+    /// binary in this bundle. Only for a service that predates build IDs (newer ones restart
+    /// themselves when asked). Returns an error message, or nil on success or cancellation.
+    func restartAsAdmin() -> String? {
+        let script = """
+        do shell script "launchctl kickstart -k system/org.fortino.fortinod" \
+        with prompt "Fortino wants to restart its VPN service to finish an update." \
+        with administrator privileges
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
+        if let error, (error[NSAppleScript.errorNumber] as? Int) != -128 {
+            return error[NSAppleScript.errorMessage] as? String ?? "Could not restart the VPN service."
+        }
+        return nil
+    }
+
     // MARK: Command-line tool
 
     func refreshCLI() {

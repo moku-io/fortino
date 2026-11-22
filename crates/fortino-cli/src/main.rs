@@ -451,7 +451,33 @@ async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {
     Ok(())
 }
 
+/// Build identifier stamped by `apps/macos/scripts/bundle.sh`; none in development builds.
+const BUILD_ID: Option<&str> = option_env!("FORTINO_BUILD_ID");
+
+/// A note when the daemon runs a different build than this tool, typically a service left
+/// running from before an app update.
+fn build_mismatch(daemon: Option<&str>) -> Option<String> {
+    let mine = BUILD_ID?;
+    match daemon {
+        Some(d) if d == mine => None,
+        Some(d) => Some(format!(
+            "the VPN service runs build {d}, this tool is build {mine}; \
+             open Fortino to restart the service"
+        )),
+        None => Some(
+            "the VPN service predates this build; open Fortino to restart it, or run \
+             `sudo launchctl kickstart -k system/org.fortino.fortinod` while disconnected"
+                .into(),
+        ),
+    }
+}
+
 async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
+    if !json {
+        if let Some(note) = build_mismatch(c.hello.build.as_deref()) {
+            eprintln!("fortino: note: {note}");
+        }
+    }
     let show = |s: &Status| {
         if json {
             println!("{}", serde_json::json!({"v": 1, "status": s}));

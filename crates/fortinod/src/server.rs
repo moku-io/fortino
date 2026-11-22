@@ -257,6 +257,7 @@ impl Conn {
                     version: PROTOCOL_VERSION,
                     daemon_instance: s.instance(),
                     uid,
+                    build: s.build(),
                 })
             }
             method::STATUS => {
@@ -407,6 +408,26 @@ impl Conn {
                     .map_err(|e| ProtoError::new(ErrorCode::InvalidRequest, e))?;
                 to_value(LogLevelResult {
                     level: Some(p.level),
+                })
+            }
+            method::DAEMON_RESTART => {
+                let p: DaemonRestartParams = parse_params(params)?;
+                if p.build.len() > MAX_BUILD_ID_LEN {
+                    return Err(ProtoError::new(
+                        ErrorCode::InvalidRequest,
+                        "build ID too long",
+                    ));
+                }
+                // Only a client from a different build has a reason to restart the daemon.
+                if s.build().is_none_or(|b| b == p.build) {
+                    return Err(ProtoError::new(
+                        ErrorCode::InvalidRequest,
+                        "the VPN service already runs this build",
+                    ));
+                }
+                tracing::info!(uid, "restart requested by a client from another build");
+                to_value(DaemonRestartResult {
+                    when: s.request_restart(),
                 })
             }
             _ => Err(ProtoError::new(ErrorCode::InvalidRequest, "unknown method")),

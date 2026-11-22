@@ -162,6 +162,38 @@ public struct HelloResult: Codable {
     public var version: Int
     public var daemonInstance: String
     public var uid: Int
+    /// The daemon's build ID; nil for development daemons and daemons that predate it.
+    public var build: String?
+}
+
+/// When a daemon asked to restart (`daemon.restart`) will exit.
+public enum RestartWhen: String, Codable {
+    /// Idle: it exits right after answering and launchd starts the installed build.
+    case now
+    /// Connected: it exits once the VPN is disconnected; the tunnel is never cut.
+    case afterDisconnect
+}
+
+public struct DaemonRestartResult: Codable {
+    public var when: RestartWhen
+}
+
+/// How the running daemon relates to this app's build.
+public enum DaemonBuildCheck: Equatable {
+    /// Same build, or nothing to compare (a development app or daemon).
+    case current
+    /// The daemon runs another build, typically one left running from before an update; it
+    /// can be asked to restart.
+    case different(daemon: String)
+    /// The daemon predates build IDs, so it cannot be asked; it needs an administrator restart.
+    case predatesBuildIds
+}
+
+/// Compares the app's build (`FortinoBuildID` in Info.plist) with the daemon's from `hello`.
+public func checkDaemonBuild(app: String?, daemon: String?) -> DaemonBuildCheck {
+    guard let app, !app.isEmpty else { return .current }
+    guard let daemon else { return .predatesBuildIds }
+    return daemon == app ? .current : .different(daemon: daemon)
 }
 
 public struct Empty: Codable {

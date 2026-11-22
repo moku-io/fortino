@@ -91,6 +91,7 @@ impl Client {
                 version: 0,
                 daemon_instance: String::new(),
                 uid: 0,
+                build: None,
             },
         };
         c.hello = c
@@ -142,6 +143,18 @@ impl Client {
             .ok_or_else(|| ProtoError::new(ErrorCode::InvalidRequest, "already subscribed"))?;
         let st: Status = self.call(method::SUBSCRIBE, &Empty {}).await?;
         Ok((st, rx))
+    }
+
+    /// Asks the daemon to exit so launchd starts the installed build. `build` is the caller's
+    /// build identifier, which must differ from the daemon's.
+    pub async fn daemon_restart(&self, build: &str) -> Result<DaemonRestartResult, ProtoError> {
+        self.call(
+            method::DAEMON_RESTART,
+            &DaemonRestartParams {
+                build: build.into(),
+            },
+        )
+        .await
     }
 
     /// Status snapshot.

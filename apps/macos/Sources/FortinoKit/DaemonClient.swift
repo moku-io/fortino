@@ -198,6 +198,7 @@ public final class DaemonClient: @unchecked Sendable {
     struct RespondParams: Encodable { let attemptId: String; let challengeId: String; let value: String }
     struct DisconnectParams: Encodable { let attemptId: String }
     struct LogLevelParams: Encodable { let level: String }
+    struct RestartParams: Encodable { let build: String }
     public struct LogLevelResult: Decodable { public let level: String? }
 
     /// The daemon's log level, or nil when `RUST_LOG` set a per-target filter.
@@ -208,6 +209,12 @@ public final class DaemonClient: @unchecked Sendable {
     /// Changes the daemon's log level (error, warn, info, debug or trace).
     public func setLogLevel(_ level: String) async throws {
         let _: LogLevelResult = try await call("log.setLevel", LogLevelParams(level: level))
+    }
+
+    /// Asks a daemon from another build to exit so launchd starts the installed one. `build` is
+    /// this app's build ID.
+    public func restartDaemon(build: String) async throws -> RestartWhen {
+        try await call("daemon.restart", RestartParams(build: build), as: DaemonRestartResult.self).when
     }
 
     public func create(_ spec: ProfileSpec) async throws -> Profile {

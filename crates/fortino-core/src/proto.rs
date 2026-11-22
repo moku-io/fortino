@@ -49,7 +49,12 @@ pub mod method {
     pub const LOG_GET_LEVEL: &str = "log.getLevel";
     /// Change the daemon's log level at runtime.
     pub const LOG_SET_LEVEL: &str = "log.setLevel";
+    /// Ask the daemon to exit so launchd starts the build installed on disk.
+    pub const DAEMON_RESTART: &str = "daemon.restart";
 }
+
+/// Longest build identifier accepted from a client.
+pub const MAX_BUILD_ID_LEN: usize = 128;
 
 /// A client request.
 #[derive(Debug, Serialize, Deserialize)]
@@ -346,6 +351,39 @@ pub struct HelloResult {
     pub daemon_instance: String,
     /// The caller's UID as seen by the daemon.
     pub uid: u32,
+    /// Build identifier of the running daemon, stamped at packaging time. Absent from daemons
+    /// built without one and from daemons that predate this field. A client whose own build
+    /// differs is newer or older than the daemon (see `daemon.restart`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+}
+
+/// `daemon.restart` parameters.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRestartParams {
+    /// The caller's build. The daemon refuses when it already runs this build, so a client
+    /// can't restart it for nothing.
+    pub build: String,
+}
+
+/// When a requested restart happens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestartWhen {
+    /// No attempt is active; the daemon exits right after answering.
+    Now,
+    /// An attempt is active; the daemon exits once it has ended and its network state has
+    /// been rolled back. The tunnel is never cut for an update.
+    AfterDisconnect,
+}
+
+/// `daemon.restart` result.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DaemonRestartResult {
+    /// When the daemon will exit.
+    pub when: RestartWhen,
 }
 
 /// `profile.list` result.

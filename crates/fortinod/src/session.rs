@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::time::Instant;
 
 use fortino_config::{IpPolicy, Profile, ProfileId, ProfileStore, StoreError};
 use fortino_core::proto::{
-    Challenge, ChallengeKind, ConnectParams, ConnectResult, LastResult, State, Status,
+    Challenge, ChallengeKind, ConnectParams, ConnectResult, LastResult, RestartWhen, State, Status,
 };
 use fortino_core::worker::{
     Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerStage,
@@ -164,6 +164,18 @@ struct Inner {
     active: Option<Active>,
     last: Option<Finished>,
     keys: HashMap<(u32, String), (ConnectParams, ConnectResult)>,
+    restart: Restart,
+    build: Option<String>,
+}
+
+/// Progress of a `daemon.restart` request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Restart {
+    None,
+    /// Exit once the active attempt has finished.
+    AfterAttempt,
+    /// Exit signalled; new attempts are refused.
+    Exiting,
 }
 
 /// Shared daemon state.
@@ -171,6 +183,8 @@ pub struct Session {
     pub(crate) ems: Option<fortino_ems::service::EmsWorkers>,
     inner: Mutex<Inner>,
     events: broadcast::Sender<Arc<Snapshot>>,
+    /// Becomes true when the daemon should exit for a restart.
+    exit: watch::Sender<bool>,
     workers: Box<dyn WorkerFactory>,
     net: Mutex<Box<dyn NetController>>,
     store: Mutex<ProfileStore>,
@@ -267,13 +281,57 @@ impl Session {
                 active: None,
                 last: None,
                 keys: HashMap::new(),
+                restart: Restart::None,
+                build: crate::BUILD_ID.map(str::to_owned),
             }),
             events,
+            exit: watch::Sender::new(false),
             workers,
             net: Mutex::new(net),
             store: Mutex::new(store),
             timeouts,
         })
+    }
+
+    /// The build this daemon reports in `hello`.
+    pub fn build(&self) -> Option<String> {
+        lock(&self.inner).build.clone()
+    }
+
+    /// Replaces the stamped build identifier (tests and development daemons).
+    pub fn set_build(&self, build: Option<String>) {
+        lock(&self.inner).build = build;
+    }
+
+    /// Asks the daemon to exit so its service manager starts the installed build: now when no
+    /// attempt is active, otherwise once the attempt has ended and its network state has been
+    /// rolled back. An update never cuts a tunnel.
+    pub fn request_restart(&self) -> RestartWhen {
+        let mut g = lock(&self.inner);
+        if g.active.is_some() {
+            if g.restart == Restart::None {
+                tracing::info!("restart requested; exiting once the active attempt ends");
+                g.restart = Restart::AfterAttempt;
+            }
+            return RestartWhen::AfterDisconnect;
+        }
+        self.begin_exit(&mut g);
+        RestartWhen::Now
+    }
+
+    fn begin_exit(&self, g: &mut Inner) {
+        if g.restart != Restart::Exiting {
+            tracing::info!("exiting so the service manager starts the installed build");
+            g.restart = Restart::Exiting;
+            self.exit.send_replace(true);
+        }
+    }
+
+    /// Resolves once a restart is due (see [`Session::request_restart`]).
+    pub async fn exit_requested(&self) {
+        let mut rx = self.exit.subscribe();
+        // The sender lives as long as `self`, so this only ends when the flag is set.
+        let _ = rx.wait_for(|exit| *exit).await;
     }
 
     /// Daemon instance ID.
@@ -425,6 +483,12 @@ impl Session {
         }
         if g.active.is_some() {
             return Err(ProtoError::new(ErrorCode::Busy, "VPN in use"));
+        }
+        if g.restart == Restart::Exiting {
+            return Err(ProtoError::new(
+                ErrorCode::ServiceUnavailable,
+                "the VPN service is restarting after an update; try again in a few seconds",
+            ));
         }
         let profile = lock(&self.store)
             .get(peer.uid, &p.profile_id)
@@ -835,6 +899,9 @@ impl Session {
             result,
         });
         self.publish(&mut g);
+        if g.restart == Restart::AfterAttempt {
+            self.begin_exit(&mut g);
+        }
     }
 }
 

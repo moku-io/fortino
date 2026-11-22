@@ -4,6 +4,19 @@ import AppKit
 import Foundation
 import FortinoKit
 
+/// Progress of bringing the VPN service to this app's build after an update.
+enum ServiceUpdate: Equatable {
+    /// The service runs an older build and restarts once the VPN is disconnected.
+    case afterDisconnect
+    /// The service was asked to restart; reconnecting to the new one.
+    case restarting
+    /// After a restart the service still runs another build: it belongs to another copy of the
+    /// app.
+    case otherCopy(build: String)
+    /// The service predates build IDs and can only be restarted by an administrator.
+    case needsAdminRestart
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var status: Status?
@@ -18,11 +31,22 @@ final class AppModel: ObservableObject {
     @Published var logLevel: String?
     /// EMS registration state by `host:port`.
     @Published var emsStatus: [String: EmsStatus] = [:]
+    /// Set while the VPN service runs another build than this app.
+    @Published var serviceUpdate: ServiceUpdate?
 
     let socketPath: String
     private var client: DaemonClient?
     private var connecting = false
     private let challenges = ChallengePanelController()
+    /// This app's build (`FortinoBuildID`, stamped by bundle.sh). Nil for development runs and
+    /// with a development daemon (FORTINO_SOCKET), where there is nothing to compare.
+    private let appBuild: String? = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] == nil
+        ? Bundle.main.object(forInfoDictionaryKey: "FortinoBuildID") as? String
+        : nil
+    /// The daemon we asked to restart, so we neither ask it twice nor loop when the restarted
+    /// service turns out to be the same build (another copy of the app registered it).
+    private var restarted: (instance: String, build: String, at: Date)?
+    private var daemon: HelloResult?
 
     init() {
         socketPath = ProcessInfo.processInfo.environment["FORTINO_SOCKET"]
@@ -62,21 +86,90 @@ final class AppModel: ObservableObject {
                 Task { @MainActor in
                     guard let self, let c, self.client === c else { return }
                     self.client = nil
-                    self.serviceError = "Lost connection to the VPN service. Reconnecting…"
+                    if self.serviceUpdate == .afterDisconnect, let d = self.daemon, let b = d.build {
+                        // The older service exited after the disconnect, as asked.
+                        self.restarted = (d.daemonInstance, b, Date())
+                        self.serviceUpdate = .restarting
+                        self.serviceError = nil
+                    } else {
+                        self.serviceError = "Lost connection to the VPN service. Reconnecting…"
+                    }
                 }
             }
-            _ = try await c.hello()
+            let hello = try await c.hello()
+            guard await acceptDaemonBuild(c, hello) else { return }
+            daemon = hello
             let st = try await c.subscribe()
             client = c
             serviceError = nil
             apply(st)
             logLevel = try? await c.logLevel()
             await refreshProfiles()
-        } catch let e as ProtoError {
-            serviceError = e.message
         } catch {
-            serviceError = error.localizedDescription
+            // While the service restarts its socket is briefly missing; say so instead of an
+            // error, unless it doesn't come back.
+            if serviceUpdate == .restarting, let r = restarted, Date().timeIntervalSince(r.at) < 30 {
+                serviceError = nil
+                return
+            }
+            if serviceUpdate == .restarting { serviceUpdate = nil }
+            serviceError = (error as? ProtoError)?.message ?? error.localizedDescription
         }
+    }
+
+    /// Compares the daemon's build with this app's and asks an older daemon to restart.
+    /// Returns false when this connection should be dropped because the daemon is exiting.
+    private func acceptDaemonBuild(_ c: DaemonClient, _ h: HelloResult) async -> Bool {
+        switch checkDaemonBuild(app: appBuild, daemon: h.build) {
+        case .current:
+            serviceUpdate = nil
+            restarted = nil
+            return true
+        case .predatesBuildIds:
+            serviceUpdate = .needsAdminRestart
+            return true
+        case .different(let build):
+            if let r = restarted {
+                if r.instance == h.daemonInstance {
+                    // The same process, still finishing its exit.
+                    serviceUpdate = .restarting
+                    return false
+                }
+                if r.build == build {
+                    serviceUpdate = .otherCopy(build: build)
+                    return true
+                }
+            }
+            guard let appBuild else { return true }
+            do {
+                switch try await c.restartDaemon(build: appBuild) {
+                case .now:
+                    restarted = (h.daemonInstance, build, Date())
+                    serviceUpdate = .restarting
+                    serviceError = nil
+                    return false
+                case .afterDisconnect:
+                    serviceUpdate = .afterDisconnect
+                    return true
+                }
+            } catch {
+                serviceUpdate = .needsAdminRestart
+                return true
+            }
+        }
+    }
+
+    /// Restarts a service that predates build IDs, with an administrator's password.
+    func restartServiceAsAdmin(_ service: VPNService) {
+        guard state == .idle || state == .recoveryRequired else { return }
+        if let e = service.restartAsAdmin() {
+            actionError = e
+            return
+        }
+        if let d = daemon {
+            restarted = (d.daemonInstance, d.build ?? "", Date())
+        }
+        serviceUpdate = .restarting
     }
 
     private func handle(_ ev: Event) {

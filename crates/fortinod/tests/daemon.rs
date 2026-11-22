@@ -8,7 +8,7 @@ use std::time::Duration;
 use fortino_config::{EmsServer, IpPolicy, ProfileSpec, ProfileStore};
 use fortino_core::client::Client;
 use fortino_core::proto::{
-    ChallengeKind, ConnectParams, Event, ProfileImportParams, State, Status, method,
+    ChallengeKind, ConnectParams, Event, ProfileImportParams, RestartWhen, State, Status, method,
 };
 use fortino_core::worker::{FakeFailure, FakeWorker, FakeWorkerConfig};
 use fortino_core::{ErrorCode, ProtoError};
@@ -663,4 +663,88 @@ async fn silent_gateway_hits_progress_deadline() {
         st.last_result.unwrap().code,
         Some(ErrorCode::TransportFailure)
     );
+}
+
+/// Resolves when the session has asked the daemon to exit, or fails after `ms`.
+async fn exits_within(session: &Arc<Session>, ms: u64) -> bool {
+    tokio::time::timeout(Duration::from_millis(ms), session.exit_requested())
+        .await
+        .is_ok()
+}
+
+#[tokio::test]
+async fn hello_reports_the_build() {
+    let h = start(fake(|_| {}), quick()).await;
+    h.session.set_build(Some("build-a".into()));
+    let c = h.client().await;
+    assert_eq!(c.hello.build.as_deref(), Some("build-a"));
+
+    // A daemon without a stamped build omits the field.
+    h.session.set_build(None);
+    let c = h.client().await;
+    assert_eq!(c.hello.build, None);
+}
+
+#[tokio::test]
+async fn restart_is_refused_for_the_same_or_an_unstamped_build() {
+    let h = start(fake(|_| {}), quick()).await;
+    let c = h.client().await;
+    // Development daemon: nothing to compare with.
+    let e = c.daemon_restart("build-b").await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidRequest);
+
+    h.session.set_build(Some("build-a".into()));
+    let e = c.daemon_restart("build-a").await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidRequest);
+    let e = c.daemon_restart(&"x".repeat(200)).await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidRequest);
+    assert!(!exits_within(&h.session, 100).await);
+}
+
+#[tokio::test]
+async fn restart_when_idle_exits_now_and_refuses_new_attempts() {
+    let h = start(fake(|_| {}), quick()).await;
+    h.session.set_build(Some("build-a".into()));
+    let c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let r = c.daemon_restart("build-b").await.unwrap();
+    assert_eq!(r.when, RestartWhen::Now);
+    assert!(exits_within(&h.session, 1000).await);
+    // Between the answer and the exit, a new attempt is refused rather than started.
+    let e = c
+        .connect_profile(&connect_params(&p, "k"))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::ServiceUnavailable);
+    // Asking again is harmless.
+    assert_eq!(
+        c.daemon_restart("build-b").await.unwrap().when,
+        RestartWhen::Now
+    );
+}
+
+#[tokio::test]
+async fn restart_while_connected_waits_for_disconnect_and_cleanup() {
+    let h = start(fake(|_| {}), quick()).await;
+    h.session.set_build(Some("build-a".into()));
+    let before = h.net.lock().unwrap().net_only();
+    let mut c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    let r = c.connect_profile(&connect_params(&p, "k1")).await.unwrap();
+    answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
+    answer(&c, &mut rx, ChallengeKind::Otp, "123456").await;
+    wait_for(&mut rx, |s| s.state == State::Connected).await;
+
+    let w = c.daemon_restart("build-b").await.unwrap();
+    assert_eq!(w.when, RestartWhen::AfterDisconnect);
+    // The tunnel stays up.
+    assert!(!exits_within(&h.session, 200).await);
+    assert_eq!(c.status().await.unwrap().state, State::Connected);
+
+    c.disconnect(&r.attempt_id).await.unwrap();
+    wait_idle(&mut rx).await;
+    assert!(exits_within(&h.session, 2000).await);
+    // The exit comes after the network state was rolled back.
+    assert_eq!(h.net.lock().unwrap().net_only(), before);
 }

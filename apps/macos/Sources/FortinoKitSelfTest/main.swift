@@ -31,6 +31,22 @@ check(checkPort("10443") == .ok && checkPort("0") != .ok, "port")
 
 check(try parseEms("EMS.example.org.:8013").get()?.display == "ems.example.org:8013", "canonical EMS approval name")
 
+// Daemon build check
+check(checkDaemonBuild(app: nil, daemon: "a") == .current, "development app skips the check")
+check(checkDaemonBuild(app: "a", daemon: "a") == .current, "same build")
+check(checkDaemonBuild(app: "b", daemon: "a") == .different(daemon: "a"), "other build")
+check(checkDaemonBuild(app: "b", daemon: nil) == .predatesBuildIds, "daemon without build IDs")
+if let h = try? JSONDecoder().decode(HelloResult.self, from: Data(#"{"version":1,"daemonInstance":"i","uid":501}"#.utf8)) {
+    check(h.build == nil, "hello without build")
+} else {
+    check(false, "hello decodes without build")
+}
+if let r = try? JSONDecoder().decode(DaemonRestartResult.self, from: Data(#"{"when":"afterDisconnect"}"#.utf8)) {
+    check(r.when == .afterDisconnect, "restart when")
+} else {
+    check(false, "restart result decodes")
+}
+
 // Status decoding
 let j = #"{"daemonInstance":"i","seq":3,"state":"awaiting-input","attemptId":"a1","challenge":{"id":"c1","kind":"otp","prompt":"Token code","expiresInSecs":119},"ipPolicy":"split-ipv4"}"#
 if let s = try? JSONDecoder().decode(Status.self, from: Data(j.utf8)) {
