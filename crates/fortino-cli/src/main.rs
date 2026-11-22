@@ -52,6 +52,11 @@ enum Cmd {
         /// New level; omit to show the current one.
         level: Option<String>,
     },
+    /// Show this Mac's registration with an EMS server (`host[:port]`), from local records.
+    EmsStatus {
+        /// EMS server, `host` or `host:port` (default port 8013).
+        server: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,7 +255,36 @@ async fn run(cli: Cli) -> CmdResult {
         Cmd::Status { watch } => status(&mut client, watch, json).await,
         Cmd::Disconnect => disconnect(&mut client, json).await,
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
+        Cmd::EmsStatus { server } => ems_status(&client, &server, json).await,
     }
+}
+
+async fn ems_status(c: &Client, server: &str, json: bool) -> CmdResult {
+    let server = parse_ems(server)?;
+    let v: serde_json::Value = c
+        .call(
+            fortino_core::proto::method::EMS_STATUS,
+            &serde_json::json!({"server": server.to_string()}),
+        )
+        .await?;
+    if json {
+        print_json(&v);
+        return Ok(());
+    }
+    let state = v["state"].as_str().unwrap_or("unknown");
+    println!("State:      {state}");
+    if let Some(t) = v["lastKeepalive"].as_u64() {
+        println!("Check-in:   unix {t}");
+    }
+    match v["rules"].as_bool() {
+        Some(true) => println!("Rules:      received"),
+        Some(false) if v["lastKeepalive"].is_u64() => println!(
+            "Rules:      none; the EMS may not recognize this Mac or its policy may not accept it"
+        ),
+        Some(false) => println!("Rules:      none yet (no check-in since registering)"),
+        None => {}
+    }
+    Ok(())
 }
 
 async fn log_level(c: &Client, level: Option<&str>, json: bool) -> CmdResult {
