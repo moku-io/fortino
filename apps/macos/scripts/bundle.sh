@@ -27,7 +27,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Library/La
 art="$here/.build/art"
 swift "$here/scripts/make-art.swift" "$art" >&2
 iconutil -c icns "$here/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
-cp "$here/Resources/ShieldStatusBar.png" "$here/Resources/ShieldStatusBar@2x.png" "$app/Contents/Resources/"
+cp "$here"/Resources/ShieldStatusBar*.png "$app/Contents/Resources/"
 cp "$here/Resources/Info.plist" "$app/Contents/Info.plist"
 cp "$here/Resources/org.fortino.fortinod.plist" "$app/Contents/Library/LaunchDaemons/"
 cp "$here/.build/$config/Fortino" "$app/Contents/MacOS/Fortino"

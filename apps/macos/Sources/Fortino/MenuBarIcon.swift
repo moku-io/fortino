@@ -1,7 +1,8 @@
-// Menu-bar icon: the Fortino shield (Resources/ShieldStatusBar*.png, a template image so macOS
-// tints it for light and dark menu bars). Full strength when connected, dimmed otherwise; states
-// that need attention keep an SF Symbol badge. Falls back to SF Symbols when the image is not in
-// the bundle (e.g. `swift run`).
+// Menu-bar icon: the Fortino shield as template images (Resources/ShieldStatusBar*.png, drawn by
+// scripts/make-menubar-icons.swift), so macOS tints them for light and dark menu bars.
+// Outline when disconnected, filled when connected, half filled while connecting or disconnecting,
+// an exclamation mark when network recovery is required. "In use" (another user's session) keeps
+// an SF Symbol. Falls back to SF Symbols when the images are not in the bundle (e.g. `swift run`).
 
 import AppKit
 import FortinoKit
@@ -10,41 +11,33 @@ import SwiftUI
 struct MenuBarIcon: View {
     let state: SessionState
 
-    private static let shield: NSImage? = {
-        guard let image = Bundle.main.image(forResource: "ShieldStatusBar") else { return nil }
+    private static func load(_ name: String) -> NSImage? {
+        guard let image = Bundle.main.image(forResource: name) else { return nil }
         image.isTemplate = true
         image.size = NSSize(width: 18, height: 18)
         return image
-    }()
+    }
+    private static let outline = load("ShieldStatusBar")
+    private static let filled = load("ShieldStatusBar-Filled")
+    private static let half = load("ShieldStatusBar-Half")
+    private static let alert = load("ShieldStatusBar-Alert")
 
     var body: some View {
-        Group {
-            switch state {
-            case .recoveryRequired:
-                Image(systemName: "exclamationmark.shield")
-            case .inUse:
-                Image(systemName: "person.badge.shield.checkmark")
-            default:
-                if let shield = Self.shield {
-                    Image(nsImage: dimmed(shield))
-                } else if case .connected = state {
-                    Image(systemName: "lock.shield.fill")
-                } else {
-                    Image(systemName: "lock.shield")
-                }
-            }
-        }
-        .accessibilityLabel("Fortino: \(state.label)")
+        icon.accessibilityLabel("Fortino: \(state.label)")
     }
 
-    /// MenuBarExtra labels ignore SwiftUI opacity, so dimming is baked into the template's alpha.
-    private func dimmed(_ image: NSImage) -> NSImage {
-        if case .connected = state { return image }
-        let out = NSImage(size: image.size, flipped: false) { rect in
-            image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.55)
-            return true
+    @ViewBuilder private var icon: some View {
+        let (image, fallback): (NSImage?, String) = switch state {
+        case .connected: (Self.filled, "lock.shield.fill")
+        case .idle: (Self.outline, "lock.shield")
+        case .recoveryRequired: (Self.alert, "exclamationmark.shield")
+        case .inUse: (nil, "person.badge.shield.checkmark")
+        default: (Self.half, "shield.lefthalf.filled")
         }
-        out.isTemplate = true
-        return out
+        if let image {
+            Image(nsImage: image)
+        } else {
+            Image(systemName: fallback)
+        }
     }
 }
