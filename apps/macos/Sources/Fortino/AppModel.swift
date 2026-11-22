@@ -33,6 +33,9 @@ final class AppModel: ObservableObject {
     @Published var emsStatus: [String: EmsStatus] = [:]
     /// Set while the VPN service runs another build than this app.
     @Published var serviceUpdate: ServiceUpdate?
+    /// The failed attempt whose EMS certificate the user has since approved, so the row stops
+    /// offering the review until a new attempt fails.
+    @Published var reviewedEmsFailure: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -297,9 +300,11 @@ final class AppModel: ObservableObject {
     /// with it. No deployment package needed for a Mac the EMS already knows.
     func approveEms(_ server: EmsServer) {
         actionError = nil
+        let failed = status?.lastResult?.attemptId
         Task {
             do {
                 if try await approveWithCertificateCheck(server) {
+                    reviewedEmsFailure = failed
                     await refreshEmsStatus()
                 }
             } catch {

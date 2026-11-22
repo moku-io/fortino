@@ -173,7 +173,11 @@ struct ConnectionSection: View {
             if isCurrent, model.state == .idle, let r = model.status?.lastResult,
                let code = r.code, code != "cancelled" {
                 LabeledContent("Last Attempt") {
-                    Text(r.message).foregroundStyle(.red)
+                    if r.attemptId == model.reviewedEmsFailure {
+                        Text("EMS certificate trusted. Connect again.").foregroundStyle(.secondary)
+                    } else {
+                        Text(r.message).foregroundStyle(.red)
+                    }
                 }
             }
             if let e = model.serviceError ?? model.actionError {
@@ -233,7 +237,8 @@ struct EmsStatusRow: View {
     }
 
     private var emsTrustFailed: Bool {
-        guard model.state == .idle, let r = model.status?.lastResult else { return false }
+        guard model.state == .idle, let r = model.status?.lastResult,
+              r.attemptId != model.reviewedEmsFailure else { return false }
         return r.code == "trust_failure" && r.message.hasPrefix("EMS:")
     }
 
