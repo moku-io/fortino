@@ -212,7 +212,7 @@ struct EmsStatusRow: View {
             HStack(spacing: 6) {
                 StatusDot(color: color)
                 Text(label)
-                if status?.state == "not-registered" {
+                if status?.state == "not-registered" || status?.state == "unconfigured" {
                     Button("Enroll…") {
                         openWindow(id: "enrollment")
                         NSApp.activate(ignoringOtherApps: true)
@@ -240,6 +240,8 @@ struct EmsStatusRow: View {
         case "not-registered": return "Not Registered"
         case "quarantined": return "Quarantined"
         case "managed-by-forticlient": return "Managed by FortiClient"
+        // The daemon has no approval for this server yet; enrollment approves it.
+        case "unconfigured": return "Not Enrolled"
         default: return "Unavailable"
         }
     }
