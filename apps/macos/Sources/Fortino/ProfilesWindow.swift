@@ -163,7 +163,7 @@ struct ConnectionSection: View {
                 }
             }
             if let ems = profile.spec.endpoint.ems {
-                EmsStatusRow(model: model, status: model.emsStatus[ems.display])
+                EmsStatusRow(model: model, server: ems, status: model.emsStatus[ems.display])
             }
             if isCurrent, model.state == .connected, let st = model.status {
                 if let ip = st.assignedIp { LabeledContent("Address", value: ip) }
@@ -204,6 +204,7 @@ struct StatusDot: View {
 /// EMS registration state for the profile's EMS server.
 struct EmsStatusRow: View {
     @ObservedObject var model: AppModel
+    let server: EmsServer
     let status: EmsStatus?
     @Environment(\.openWindow) private var openWindow
 
@@ -212,12 +213,19 @@ struct EmsStatusRow: View {
             HStack(spacing: 6) {
                 StatusDot(color: color)
                 Text(label)
-                if status?.state == "not-registered" || status?.state == "unconfigured" {
+                if status?.state == "unconfigured" {
+                    // Approving is enough for a Mac the EMS already knows: it registers on the
+                    // next connect. A DMG is only needed for a Mac the EMS has never seen.
+                    Button("Approve…") { model.approveEms(server) }
+                        .controlSize(.small)
+                        .help("Lets Fortino register this Mac with this EMS server when you connect")
+                } else if status?.state == "not-registered" {
                     Button("Enroll…") {
                         openWindow(id: "enrollment")
                         NSApp.activate(ignoringOtherApps: true)
                     }
                     .controlSize(.small)
+                    .help("Registers now from the EMS deployment DMG. Not needed if the EMS already knows this Mac: connecting registers it.")
                 }
             }
             .help(detail)
@@ -228,7 +236,7 @@ struct EmsStatusRow: View {
         switch status?.state {
         case "registered": return .green
         case "stale": return .yellow
-        case "not-registered", "quarantined": return .red
+        case "quarantined": return .red
         default: return .secondary
         }
     }
@@ -237,11 +245,11 @@ struct EmsStatusRow: View {
         switch status?.state {
         case "registered": return "Registered"
         case "stale": return "Registered, no recent check-in"
-        case "not-registered": return "Not Registered"
         case "quarantined": return "Quarantined"
         case "managed-by-forticlient": return "Managed by FortiClient"
-        // The daemon has no approval for this server yet; enrollment approves it.
-        case "unconfigured": return "Not Enrolled"
+        // No administrator has approved this server on this Mac yet.
+        case "unconfigured": return "Not Approved"
+        case "not-registered": return "Registers When You Connect"
         default: return "Unavailable"
         }
     }

@@ -293,6 +293,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Approves an EMS server on this Mac (administrator password), so connecting registers
+    /// with it. No deployment package needed for a Mac the EMS already knows.
+    func approveEms(_ server: EmsServer) {
+        do {
+            try EnrollmentApproval(server: server).requestInApp()
+        } catch {
+            report(error)
+            return
+        }
+        Task { await self.refreshEmsStatus() }
+    }
+
     func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {
         let r = try await require().enroll(package)
         await refreshEmsStatus()

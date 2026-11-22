@@ -166,7 +166,12 @@ impl EmsWorkers {
         }
     }
 
-    fn server_settings(&self, server: &EmsServer, enrolling: bool) -> Option<ServerSettings> {
+    /// Settings for `server`: from the daemon configuration, or from a local administrator's
+    /// approval of that address. An approved server registers on connect with or without a
+    /// deployment package: a device the EMS already knows (enrolled earlier, by FortiClient
+    /// or by Fortino) is matched by its hardware identity, so the package is only needed for
+    /// devices the EMS has never seen. Without an approval nothing is sent to the EMS.
+    fn server_settings(&self, server: &EmsServer) -> Option<ServerSettings> {
         if let Some(settings) = self.settings.servers.get(&server_key(server)) {
             return Some(settings.clone());
         }
@@ -174,8 +179,7 @@ impl EmsWorkers {
         approvals.permits(server).then(|| ServerSettings {
             trust: Trust::CaFile(approvals.ca_file.clone()),
             key_file: None,
-            // A profile alone must never create a package enrollment without its deployment ID.
-            register: enrolling,
+            register: true,
         })
     }
 
@@ -193,7 +197,7 @@ impl EmsWorkers {
         {
             return Err(Error::Protocol("invalid package installer ID".into()));
         }
-        let settings = match self.server_settings(&server, true) {
+        let settings = match self.server_settings(&server) {
             Some(settings) if settings.register => settings,
             None if self.settings.package_approvals.is_some() => {
                 return Ok(("approval-required", false));
@@ -221,7 +225,7 @@ impl EmsWorkers {
     /// This device's registration state with `server`, from local records only: no network
     /// exchange, nothing created. Reveals no serial, UID or keys.
     pub fn status(&self, server: &EmsServer) -> Result<EmsStatusInfo, Error> {
-        if self.server_settings(server, false).is_none() {
+        if self.server_settings(server).is_none() {
             return Ok(EmsStatusInfo::bare(EmsState::Unconfigured));
         }
         if (self.forticlient)()
@@ -554,8 +558,8 @@ impl WorkerFactory for EmsWorkers {
         let Some(server) = cfg.endpoint.ems.clone() else {
             return self.inner.spawn(cfg);
         };
-        let Some(server_settings) = self.server_settings(&server, false) else {
-            tracing::warn!(ems = %server, "profile names an EMS with no trust configured; connecting without EMS");
+        let Some(server_settings) = self.server_settings(&server) else {
+            tracing::warn!(ems = %server, "profile names an EMS that is neither configured nor approved on this Mac; connecting without EMS");
             return self.inner.spawn(cfg);
         };
         let ctx = Arc::new(self.context(server, server_settings));
