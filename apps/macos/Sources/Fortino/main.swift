@@ -45,10 +45,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         service.ensureRegistered()
+        // The Dock icon is shown only while an app window is open; otherwise Fortino lives in the
+        // menu bar alone, like other menu-bar apps.
+        let center = NotificationCenter.default
+        center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            MainActor.assumeIsolated {
+                if let window = note.object as? NSWindow, Self.isAppWindow(window) {
+                    NSApp.setActivationPolicy(.regular)
+                }
+            }
+        }
+        center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            let closing = note.object as? NSWindow
+            // The closing window is still listed as visible; check once it is gone.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    Self.hideFromDockIfNoWindows(except: closing)
+                }
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// "Quit" from the Dock closes the windows and leaves Fortino in the menu bar. Quit from the
+    /// menu-bar menu, logout and shutdown still terminate.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard Self.isQuitFromDock() else { return .terminateNow }
+        for window in NSApp.windows where Self.isAppWindow(window) && window.isVisible {
+            window.close()
+        }
+        NSApp.setActivationPolicy(.accessory)
+        return .terminateCancel
+    }
+
+    /// Ordinary titled windows (Profiles, Import, …); not the menu-bar popover or panels.
+    private static func isAppWindow(_ window: NSWindow) -> Bool {
+        window.styleMask.contains(.titled) && !(window is NSPanel) && window.canBecomeMain
+    }
+
+    private static func hideFromDockIfNoWindows(except closing: NSWindow?) {
+        let open = NSApp.windows.contains { $0 !== closing && isAppWindow($0) && $0.isVisible }
+        if !open { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    private static func isQuitFromDock() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventClass == kCoreEventClass, event.eventID == kAEQuitApplication,
+              let pid = event.attributeDescriptor(forKeyword: keySenderPIDAttr)?.int32Value
+        else { return false }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock"
     }
 }
 
