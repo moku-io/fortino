@@ -160,9 +160,9 @@ final class AppModel: ObservableObject {
     }
 
     /// Restarts a service that predates build IDs, with an administrator's password.
-    func restartServiceAsAdmin(_ service: VPNService) {
-        guard state == .idle || state == .recoveryRequired else { return }
-        if let e = service.restartAsAdmin() {
+    func restartServiceAsAdmin() {
+        guard ServiceUpdate.canRestart(state) else { return }
+        if let e = VPNService.restartAsAdmin() {
             actionError = e
             return
         }

@@ -13,6 +13,7 @@ struct EnrollmentWindow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
+            ServiceUpdateBanner(model: model).padding(.horizontal, -20).padding(.top, -20)
             Button("Choose FortiClient DMG…", action: choose)
             if let package {
                 Text("EMS server").font(.headline)

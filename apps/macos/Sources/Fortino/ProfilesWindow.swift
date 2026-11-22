@@ -55,6 +55,7 @@ struct ProfilesWindow: View {
                         message: "Add a profile for your FortiGate gateway, or import one from FortiClient.")
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) { ServiceUpdateBanner(model: model) }
             .navigationTitle(creating ? "New Profile" : (model.selectedProfile?.spec.name ?? "VPN Profiles"))
         }
         .toolbar {

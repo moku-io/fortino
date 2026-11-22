@@ -74,7 +74,7 @@ final class VPNService: ObservableObject {
     /// Restarts the service with an administrator's password: launchd stops it and starts the
     /// binary in this bundle. Only for a service that predates build IDs (newer ones restart
     /// themselves when asked). Returns an error message, or nil on success or cancellation.
-    func restartAsAdmin() -> String? {
+    static func restartAsAdmin() -> String? {
         let script = """
         do shell script "launchctl kickstart -k system/org.fortino.fortinod" \
         with prompt "Fortino wants to restart its VPN service to finish an update." \
