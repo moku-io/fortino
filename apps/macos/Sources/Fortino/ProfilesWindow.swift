@@ -157,12 +157,12 @@ struct ConnectionSection: View {
         Section {
             LabeledContent("Status") {
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(dotColor)
-                        .frame(width: 8, height: 8)
-                        .accessibilityHidden(true)
+                    StatusDot(color: dotColor)
                     Text(isCurrent && model.state.isActive ? model.state.label : "Not Connected")
                 }
+            }
+            if let ems = profile.spec.endpoint.ems {
+                EmsStatusRow(model: model, status: model.emsStatus[ems.display])
             }
             if isCurrent, model.state == .connected, let st = model.status {
                 if let ip = st.assignedIp { LabeledContent("Address", value: ip) }
@@ -189,6 +189,64 @@ struct ConnectionSection: View {
         case .recoveryRequired: return .orange
         default: return .yellow
         }
+    }
+}
+
+struct StatusDot: View {
+    let color: Color
+
+    var body: some View {
+        Circle().fill(color).frame(width: 8, height: 8).accessibilityHidden(true)
+    }
+}
+
+/// EMS registration state for the profile's EMS server.
+struct EmsStatusRow: View {
+    @ObservedObject var model: AppModel
+    let status: EmsStatus?
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        LabeledContent("EMS") {
+            HStack(spacing: 6) {
+                StatusDot(color: color)
+                Text(label)
+                if status?.state == "not-registered" {
+                    Button("Enroll…") {
+                        openWindow(id: "enrollment")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .help(detail)
+        }
+    }
+
+    private var color: Color {
+        switch status?.state {
+        case "registered": return .green
+        case "stale": return .yellow
+        case "not-registered", "quarantined": return .red
+        default: return .secondary
+        }
+    }
+
+    private var label: String {
+        switch status?.state {
+        case "registered": return "Registered"
+        case "stale": return "Registered, no recent check-in"
+        case "not-registered": return "Not Registered"
+        case "quarantined": return "Quarantined"
+        case "managed-by-forticlient": return "Managed by FortiClient"
+        default: return "Unavailable"
+        }
+    }
+
+    private var detail: String {
+        guard let t = status?.lastKeepalive else { return "" }
+        let ago = max(0, Int(Date().timeIntervalSince1970) - t)
+        return "Last check-in \(formatDuration(ago)) ago"
     }
 }
 

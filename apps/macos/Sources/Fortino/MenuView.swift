@@ -5,16 +5,9 @@
 import FortinoKit
 import SwiftUI
 
-struct StatusIcon: View {
-    let state: SessionState
-
-    var body: some View {
-        Image(systemName: symbol)
-            .accessibilityLabel("VPN: \(state.label)")
-    }
-
-    var symbol: String {
-        switch state {
+extension SessionState {
+    var menuBarSymbol: String {
+        switch self {
         case .connected: return "lock.shield.fill"
         case .idle: return "lock.shield"
         case .recoveryRequired: return "exclamationmark.shield"
@@ -104,6 +97,10 @@ struct MenuView: View {
             }
             MenuRow(title: "Import from FortiClient…") {
                 openWindow(id: "import")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            MenuRow(title: "Enroll with EMS…") {
+                openWindow(id: "enrollment")
                 NSApp.activate(ignoringOtherApps: true)
             }
             if service.isManaged && !service.cliInstalled {

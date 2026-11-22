@@ -15,6 +15,8 @@ use crate::store::Registration;
 pub struct Compat {
     /// `FCTVER`.
     pub version: String,
+    /// Deployment identifier supplied by the package for this EMS.
+    pub install_uid: Option<String>,
     /// `CAPS`.
     pub caps: u32,
 }
@@ -27,6 +29,7 @@ impl Default for Compat {
             version: "7.4.4.1831".into(),
             // UNVERIFIED: CAPS bits are not decoded. Zero claims no optional capability.
             caps: 0,
+            install_uid: None,
         }
     }
 }
@@ -143,14 +146,13 @@ pub fn full(
     s.push("USER_SID", user_sid(f).unwrap_or_default())?;
     s.push("DOMAIN", "")?;
     s.push("PC_DOMAIN", "")?;
-    // Identity fields FortiClient sends; Fortino has no values for them on macOS.
-    for k in [
-        "ADGUID",
+    s.push("ADGUID", "")?;
+    s.push(
         "INSTALLUID",
-        "WORKGROUP",
-        "GROUP_TAG",
-        "FORTIEDR_VERSION",
-    ] {
+        reg.map_or(compat.install_uid.as_deref(), |r| r.install_uid.as_deref())
+            .unwrap_or_default(),
+    )?;
+    for k in ["WORKGROUP", "GROUP_TAG", "FORTIEDR_VERSION"] {
         s.push(k, "")?;
     }
     // No software inventory and a hardware form-factor Fortino does not detect.

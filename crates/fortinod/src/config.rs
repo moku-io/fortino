@@ -60,6 +60,9 @@ pub struct DaemonConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct EmsSection {
+    /// Enable local administrator package approvals with built-in macOS settings.
+    #[serde(skip)]
+    pub builtin_package_enrollment: bool,
     /// Registration store; default `<state_dir>/ems`.
     pub state_dir: Option<PathBuf>,
     /// Endpoint UID override (32 hex digits); default is the platform UUID.
@@ -140,6 +143,10 @@ impl DaemonConfig {
             .flatten()
             .is_some();
         Self {
+            ems: EmsSection {
+                builtin_package_enrollment: cfg!(target_os = "macos"),
+                ..Default::default()
+            },
             socket_group: staff.then(|| DEFAULT_ALLOWED_GROUP.to_owned()),
             ..Self::default()
         }

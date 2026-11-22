@@ -206,7 +206,7 @@ async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<A
             }
         };
         let id = req.id.clone();
-        let result = conn.dispatch(req);
+        let result = conn.dispatch(req).await;
         drop(frame);
         let fatal = matches!(&result, Err(e) if e.code == ErrorCode::UnsupportedVersion);
         let Some(bytes) = encode(&response(&id, result)) else {
@@ -224,7 +224,7 @@ async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<A
 }
 
 impl Conn {
-    fn dispatch(&mut self, req: RequestRef<'_>) -> Result<serde_json::Value, ProtoError> {
+    async fn dispatch(&mut self, req: RequestRef<'_>) -> Result<serde_json::Value, ProtoError> {
         if req.v != PROTOCOL_VERSION {
             return Err(ProtoError::new(
                 ErrorCode::UnsupportedVersion,
@@ -285,6 +285,49 @@ impl Conn {
                     started,
                 ));
                 to_value(st)
+            }
+            method::EMS_ENROLL => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Enrollment {
+                    server: String,
+                    install_uid: String,
+                }
+                let p: Enrollment = parse_params(params)?;
+                let server = p.server.parse().map_err(|_| {
+                    ProtoError::new(ErrorCode::InvalidRequest, "Invalid EMS address")
+                })?;
+                let ems = s.ems.as_ref().ok_or_else(|| {
+                    ProtoError::new(ErrorCode::UnsupportedPolicy, "EMS enrollment unavailable")
+                })?;
+                let (status, rules) = ems
+                    .enroll_package(server, &p.install_uid)
+                    .await
+                    .map_err(enrollment_error)?;
+                Ok(serde_json::json!({"status":status,"rules":rules}))
+            }
+            method::EMS_STATUS => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Query {
+                    server: String,
+                }
+                let p: Query = parse_params(params)?;
+                let server = p.server.parse().map_err(|_| {
+                    ProtoError::new(ErrorCode::InvalidRequest, "Invalid EMS address")
+                })?;
+                let Some(ems) = s.ems.as_ref() else {
+                    return Ok(serde_json::json!({"state":"unconfigured"}));
+                };
+                let info = ems.status(&server).map_err(enrollment_error)?;
+                let mut v = serde_json::json!({"state": info.state.as_str()});
+                if let Some(t) = info.registered_at {
+                    v["registeredAt"] = t.into();
+                }
+                if let Some(t) = info.last_keepalive {
+                    v["lastKeepalive"] = t.into();
+                }
+                Ok(v)
             }
             method::PROFILE_LIST => {
                 let _: Empty = parse_params(params)?;
@@ -425,4 +468,35 @@ async fn forward_events(
             Err(mpsc::error::TrySendError::Closed(_)) => break,
         }
     }
+}
+
+fn enrollment_error(e: fortino_ems::Error) -> ProtoError {
+    use fortino_ems::Error;
+    let (code, message) = match e {
+        Error::RegistrationDisabled => (
+            ErrorCode::PermissionDenied,
+            "Enable registration and configure TLS trust for this EMS in fortinod.toml.",
+        ),
+        Error::Trust(_) => (
+            ErrorCode::TrustFailure,
+            "Could not verify EMS using the configured TLS trust.",
+        ),
+        Error::Transport(_) => (
+            ErrorCode::TransportFailure,
+            "Could not establish a verified TLS connection to EMS.",
+        ),
+        Error::Refused(_) => (
+            ErrorCode::UnsupportedPolicy,
+            "EMS refused registration. Check the configured connection key and enrollment requirements.",
+        ),
+        Error::Protocol(_) => (
+            ErrorCode::InvalidRequest,
+            "Invalid enrollment data or unsupported EMS reply.",
+        ),
+        Error::Store(_) | Error::NotRegistered => (
+            ErrorCode::BackendFailure,
+            "Could not read or save this Mac's EMS registration.",
+        ),
+    };
+    ProtoError::new(code, message)
 }

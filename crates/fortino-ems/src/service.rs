@@ -49,9 +49,34 @@ pub struct ServerSettings {
     pub register: bool,
 }
 
+/// Built-in daemon policy for destinations approved by a local administrator.
+#[derive(Debug, Clone)]
+pub struct PackageApprovals {
+    /// Protected directory of root-created approval markers named by the SHA-256 of the normalized server.
+    pub directory: PathBuf,
+    /// System CA bundle. Package-provided certificates are never trust anchors.
+    pub ca_file: PathBuf,
+}
+
+impl PackageApprovals {
+    fn permits(&self, server: &EmsServer) -> bool {
+        use sha2::{Digest, Sha256};
+        use std::os::unix::fs::MetadataExt;
+        let protected = |meta: &std::fs::Metadata| meta.uid() == 0 && meta.mode() & 0o022 == 0;
+        std::fs::symlink_metadata(&self.directory).is_ok_and(|m| m.is_dir() && protected(&m))
+            && std::fs::symlink_metadata(
+                self.directory
+                    .join(hex::encode(Sha256::digest(server_key(server)))),
+            )
+            .is_ok_and(|m| m.is_file() && protected(&m))
+    }
+}
+
 /// Agent settings.
 #[derive(Debug, Clone)]
 pub struct Settings {
+    /// Local administrator approval mechanism, when enabled by the daemon.
+    pub package_approvals: Option<PackageApprovals>,
     /// Registration store directory (root-owned).
     pub state_dir: PathBuf,
     /// Endpoint UID override; default is the platform UUID.
@@ -82,7 +107,9 @@ pub fn system_facts() -> FactsSource {
 }
 
 /// Wraps a worker factory with the EMS steps.
+#[derive(Clone)]
 pub struct EmsWorkers {
+    registration_lock: Arc<tokio::sync::Mutex<()>>,
     inner: Arc<dyn WorkerFactory>,
     settings: Arc<Settings>,
     facts: FactsSource,
@@ -117,6 +144,7 @@ impl EmsWorkers {
             tracing::warn!("no device UID; gateways that ask for one will not get it");
         }
         Self {
+            registration_lock: Arc::default(),
             inner,
             settings: Arc::new(settings),
             facts,
@@ -126,11 +154,164 @@ impl EmsWorkers {
         }
     }
 
+    fn context(&self, server: EmsServer, server_settings: ServerSettings) -> Ctx {
+        Ctx {
+            registration_lock: self.registration_lock.clone(),
+            settings: self.settings.clone(),
+            facts: self.facts.clone(),
+            forticlient: self.forticlient.clone(),
+            server,
+            server_settings,
+            connect_override: self.connect_override,
+        }
+    }
+
+    fn server_settings(&self, server: &EmsServer, enrolling: bool) -> Option<ServerSettings> {
+        if let Some(settings) = self.settings.servers.get(&server_key(server)) {
+            return Some(settings.clone());
+        }
+        let approvals = self.settings.package_approvals.as_ref()?;
+        approvals.permits(server).then(|| ServerSettings {
+            trust: Trust::CaFile(approvals.ca_file.clone()),
+            key_file: None,
+            // A profile alone must never create a package enrollment without its deployment ID.
+            register: enrolling,
+        })
+    }
+
+    /// Explicit first enrollment without a VPN tunnel. Uses the same registration as connect.
+    pub async fn enroll_package(
+        &self,
+        server: EmsServer,
+        install_uid: &str,
+    ) -> Result<(&'static str, bool), Error> {
+        if install_uid.is_empty()
+            || install_uid.len() > 256
+            || !install_uid
+                .bytes()
+                .all(|b| b.is_ascii_graphic() && b != b'|')
+        {
+            return Err(Error::Protocol("invalid package installer ID".into()));
+        }
+        let settings = match self.server_settings(&server, true) {
+            Some(settings) if settings.register => settings,
+            None if self.settings.package_approvals.is_some() => {
+                return Ok(("approval-required", false));
+            }
+            _ => return Err(Error::RegistrationDisabled),
+        };
+        let ctx = self.context(server, settings);
+        match ctx.prepare(Some(install_uid)).await?.0 {
+            Prepared::Deferred(_) => Ok(("managed-by-forticlient", false)),
+            Prepared::Agent(Some(_)) => {
+                let record = Store::open(&ctx.settings.state_dir)?
+                    .load(&server_key(&ctx.server))?
+                    .ok_or(Error::NotRegistered)?;
+                let status = if record.install_uid.as_deref() == Some(install_uid) {
+                    "registered"
+                } else {
+                    "existing-registration"
+                };
+                Ok((status, record.host_rules.content.is_some()))
+            }
+            Prepared::Agent(None) => Err(Error::NotRegistered),
+        }
+    }
+
+    /// This device's registration state with `server`, from local records only: no network
+    /// exchange, nothing created. Reveals no serial, UID or keys.
+    pub fn status(&self, server: &EmsServer) -> Result<EmsStatusInfo, Error> {
+        if self.server_settings(server, false).is_none() {
+            return Ok(EmsStatusInfo::bare(EmsState::Unconfigured));
+        }
+        if (self.forticlient)()
+            .is_some_and(|fc| fc.running && fc.serial.is_some() && fc.uses_address(server))
+        {
+            return Ok(EmsStatusInfo::bare(EmsState::ManagedByForticlient));
+        }
+        let Some(r) = Store::open(&self.settings.state_dir)?.load(&server_key(server))? else {
+            return Ok(EmsStatusInfo::bare(EmsState::NotRegistered));
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        Ok(EmsStatusInfo {
+            state: registration_state(&r, now),
+            registered_at: Some(r.registered_at),
+            last_keepalive: r.last_keepalive,
+        })
+    }
+
     /// Defers to an installed FortiClient's EMS agent where it manages the same device on the
     /// same EMS (see [`crate::forticlient`]).
     pub fn with_forticlient(mut self, source: FortiClientSource) -> Self {
         self.forticlient = source;
         self
+    }
+}
+
+/// Registration state reported by [`EmsWorkers::status`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmsState {
+    /// The daemon has no settings for this server.
+    Unconfigured,
+    /// FortiClient's own agent manages this device on this EMS.
+    ManagedByForticlient,
+    /// No registration with this EMS.
+    NotRegistered,
+    /// Registered, with a recent keepalive.
+    Registered,
+    /// Registered, but no keepalive within three full-keepalive intervals.
+    Stale,
+    /// The server quarantined this device.
+    Quarantined,
+}
+
+impl EmsState {
+    /// Wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unconfigured => "unconfigured",
+            Self::ManagedByForticlient => "managed-by-forticlient",
+            Self::NotRegistered => "not-registered",
+            Self::Registered => "registered",
+            Self::Stale => "stale",
+            Self::Quarantined => "quarantined",
+        }
+    }
+}
+
+/// One EMS registration's state and times.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmsStatusInfo {
+    /// State.
+    pub state: EmsState,
+    /// Unix time of registration.
+    pub registered_at: Option<u64>,
+    /// Unix time of the last accepted keepalive.
+    pub last_keepalive: Option<u64>,
+}
+
+impl EmsStatusInfo {
+    fn bare(state: EmsState) -> Self {
+        Self {
+            state,
+            registered_at: None,
+            last_keepalive: None,
+        }
+    }
+}
+
+/// Keepalives only run while a tunnel is up, so "stale" means "not checked in recently", not an
+/// error.
+fn registration_state(r: &crate::store::Registration, now: u64) -> EmsState {
+    if r.quarantined {
+        return EmsState::Quarantined;
+    }
+    let window = u64::from(r.full_ka_interval.max(r.ka_interval).max(60)).saturating_mul(3);
+    match r.last_keepalive {
+        Some(t) if now.saturating_sub(t) <= window => EmsState::Registered,
+        _ => EmsState::Stale,
     }
 }
 
@@ -144,6 +325,7 @@ enum Prepared {
 
 /// One attempt's EMS context.
 struct Ctx {
+    registration_lock: Arc<tokio::sync::Mutex<()>>,
     settings: Arc<Settings>,
     facts: FactsSource,
     forticlient: FortiClientSource,
@@ -230,8 +412,10 @@ impl Ctx {
 
     /// The identity to give the worker, and this device's UID for the gateway. `Err` ends the
     /// attempt.
-    async fn prepare(&self) -> Result<(Prepared, Uid), Error> {
-        let agent = self.agent().await?;
+    async fn prepare(&self, install_uid: Option<&str>) -> Result<(Prepared, Uid), Error> {
+        let _guard = self.registration_lock.lock().await;
+        let mut agent = self.agent().await?;
+        agent.compat.install_uid = install_uid.map(str::to_owned);
         let conn = self.connection()?;
         if let Some(fc) = self.forticlient_state().await {
             if self.forticlient_manages(&agent, &conn, &fc).await? {
@@ -353,7 +537,7 @@ fn termination(e: &Error) -> Termination {
     let code = match e {
         Error::Trust(_) => ErrorCode::TrustFailure,
         Error::Transport(_) => ErrorCode::TransportFailure,
-        Error::Refused(_) => ErrorCode::UnsupportedPolicy,
+        Error::RegistrationDisabled | Error::Refused(_) => ErrorCode::UnsupportedPolicy,
         Error::Protocol(_) | Error::NotRegistered | Error::Store(_) => ErrorCode::BackendFailure,
     };
     Termination {
@@ -370,25 +554,18 @@ impl WorkerFactory for EmsWorkers {
         let Some(server) = cfg.endpoint.ems.clone() else {
             return self.inner.spawn(cfg);
         };
-        let Some(server_settings) = self.settings.servers.get(&server_key(&server)).cloned() else {
+        let Some(server_settings) = self.server_settings(&server, false) else {
             tracing::warn!(ems = %server, "profile names an EMS with no trust configured; connecting without EMS");
             return self.inner.spawn(cfg);
         };
-        let ctx = Arc::new(Ctx {
-            settings: self.settings.clone(),
-            facts: self.facts.clone(),
-            forticlient: self.forticlient.clone(),
-            server,
-            server_settings,
-            connect_override: self.connect_override,
-        });
+        let ctx = Arc::new(self.context(server, server_settings));
         let inner = self.inner.clone();
         let (ev_tx, ev_rx) = mpsc::channel(16);
         let (cmd_tx, mut cmd_rx) = mpsc::channel(4);
         tokio::spawn(async move {
             let _ = ev_tx.send(WorkerEvent::Stage(WorkerStage::Transport)).await;
             let prepared = tokio::select! {
-                r = ctx.prepare() => r,
+                r = ctx.prepare(None) => r,
                 c = cmd_rx.recv() => {
                     if matches!(c, Some(WorkerCommand::Stop) | None) {
                         let _ = ev_tx.send(WorkerEvent::Terminated(Termination {
@@ -398,7 +575,7 @@ impl WorkerFactory for EmsWorkers {
                         return;
                     }
                     // No challenge is outstanding yet; nothing else can arrive.
-                    ctx.prepare().await
+                    ctx.prepare(None).await
                 }
             };
             let mut keep_alive = true;
@@ -457,5 +634,46 @@ impl WorkerFactory for EmsWorkers {
             events: ev_rx,
             commands: cmd_tx,
         }
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use crate::store::{Received, Registration};
+
+    fn reg() -> Registration {
+        Registration {
+            server: "ems.test:8013".into(),
+            install_uid: None,
+            uid: "0A1B2C3D4E5F60718293A4B5C6D7E8F9".into(),
+            serial: "FCTEMS0000000001".into(),
+            host: "ems.test".into(),
+            tenant: None,
+            vdom: "default".into(),
+            ka_interval: 60,
+            full_ka_interval: 600,
+            tags: String::new(),
+            rules_sent: String::new(),
+            quarantined: false,
+            conf: Received::default(),
+            host_rules: Received::default(),
+            server_list: Received::default(),
+            on_net: Received::default(),
+            off_net: Received::default(),
+            registered_at: 1,
+            last_keepalive: None,
+        }
+    }
+
+    #[test]
+    fn states_from_record() {
+        let mut r = reg();
+        assert_eq!(registration_state(&r, 10_000), EmsState::Stale);
+        r.last_keepalive = Some(9_000);
+        assert_eq!(registration_state(&r, 10_000), EmsState::Registered);
+        assert_eq!(registration_state(&r, 9_000 + 1_801), EmsState::Stale);
+        r.quarantined = true;
+        assert_eq!(registration_state(&r, 10_000), EmsState::Quarantined);
     }
 }

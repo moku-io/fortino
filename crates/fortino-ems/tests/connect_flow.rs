@@ -99,6 +99,7 @@ async fn start_fc(
     let mut workers = EmsWorkers::new(
         Arc::new(inner),
         Settings {
+            package_approvals: None,
             state_dir: dir.path().join("ems"),
             uid: None,
             compat: Default::default(),
@@ -425,6 +426,7 @@ async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
     let workers = EmsWorkers::new(
         Arc::new(inner),
         Settings {
+            package_approvals: None,
             state_dir: dir.path().join("ems"),
             uid: None,
             compat: Default::default(),
@@ -463,4 +465,80 @@ async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
     stop(&mut r).await;
     // No EMS was configured, so none was contacted.
     assert!(r.ems.state.lock().unwrap().seen.is_empty());
+}
+
+#[tokio::test]
+async fn package_enrollment_is_scoped_and_idempotent() {
+    use fortino_core::worker::{FakeWorker, FakeWorkerConfig};
+
+    let mock = ems::start(&EmsScenario::default()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let mut workers = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: FakeWorkerConfig::default(),
+        }),
+        Settings {
+            state_dir: dir.path().into(),
+            package_approvals: None,
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::from([(
+                "ems.test:8013".into(),
+                ServerSettings {
+                    trust: Trust::Roots(vec![mock.handle.cert_der.clone()]),
+                    register: true,
+                    key_file: None,
+                },
+            )]),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    workers.connect_override = Some(mock.handle.addr);
+    assert!(
+        workers
+            .enroll_package("other.test".parse().unwrap(), "pkg-a")
+            .await
+            .is_err()
+    );
+    assert!(
+        workers
+            .enroll_package(server.clone(), "bad\nvalue")
+            .await
+            .is_err()
+    );
+    let (a, b) = tokio::join!(
+        workers.enroll_package(server.clone(), "pkg-a"),
+        workers.enroll_package(server.clone(), "pkg-a")
+    );
+    assert_eq!(a.unwrap().0, "registered");
+    assert_eq!(b.unwrap().0, "registered");
+    assert_eq!(
+        workers.enroll_package(server, "pkg-b").await.unwrap().0,
+        "existing-registration"
+    );
+    let state = mock.state.lock().unwrap();
+    assert_eq!(
+        state.seen.iter().filter(|r| r.kind == "REGISTER").count(),
+        1
+    );
+    assert!(
+        state
+            .endpoints
+            .values()
+            .next()
+            .unwrap()
+            .sysinfo
+            .iter()
+            .any(|(k, v)| k == "INSTALLUID" && v == "pkg-a")
+    );
+    let r = Store::open(dir.path())
+        .unwrap()
+        .load("ems.test:8013")
+        .unwrap()
+        .unwrap();
+    let ka = fortino_ems::report::full(&base_facts(), &Default::default(), Some(&r)).unwrap();
+    assert_eq!(ka.get("INSTALLUID"), Some("pkg-a"));
 }

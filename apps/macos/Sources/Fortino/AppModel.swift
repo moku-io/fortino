@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     @Published var focusEmsFor: String?
     /// The daemon's log level; nil when unknown or a custom `RUST_LOG` filter.
     @Published var logLevel: String?
+    /// EMS registration state by `host:port`.
+    @Published var emsStatus: [String: EmsStatus] = [:]
 
     let socketPath: String
     private var client: DaemonClient?
@@ -90,8 +92,13 @@ final class AppModel: ObservableObject {
         if let cur = status, cur.daemonInstance == s.daemonInstance, s.seq < cur.seq {
             return
         }
+        let changed = status?.state != s.state
         status = s
         challenges.update(status: s)
+        // Keepalives run while connected, so the EMS state moves on connect and disconnect.
+        if changed && (s.state == .connected || s.state == .idle) {
+            Task { await self.refreshEmsStatus() }
+        }
     }
 
     func refreshStatus() async {
@@ -105,11 +112,25 @@ final class AppModel: ObservableObject {
             let l = try await c.profiles()
             profiles = l.profiles
             storeRevision = l.storeRevision
+            Task { await self.refreshEmsStatus() }
             if selectedProfileId == nil || !profiles.contains(where: { $0.id == selectedProfileId }) {
                 selectedProfileId = profiles.first?.id
             }
         } catch {
             report(error)
+        }
+    }
+
+    /// Refreshes the EMS state of every profile's EMS server.
+    func refreshEmsStatus() async {
+        guard let c = client else { return }
+        let servers = Set(profiles.compactMap { $0.spec.endpoint.ems })
+        for server in servers {
+            if let st = try? await c.emsStatus(server: server) {
+                emsStatus[server.display] = st
+            } else {
+                emsStatus[server.display] = nil
+            }
         }
     }
 
@@ -177,6 +198,12 @@ final class AppModel: ObservableObject {
         } catch {
             return ProtoError(code: "internal", message: error.localizedDescription)
         }
+    }
+
+    func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {
+        let r = try await require().enroll(package)
+        await refreshEmsStatus()
+        return r
     }
 
     func save(_ spec: ProfileSpec, existing: Profile?) async -> ProtoError? {

@@ -22,6 +22,9 @@ pub struct Received {
 pub struct Registration {
     /// `host:port` as configured in the profile. The key of this record.
     pub server: String,
+    /// Deployment identifier used during first enrollment, scoped to this EMS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_uid: Option<String>,
     /// Endpoint UID this registration was made with.
     pub uid: String,
     /// Server serial, from PROBE and REG.
@@ -184,6 +187,7 @@ mod tests {
             server_list: Received::default(),
             on_net: Received::default(),
             off_net: Received::default(),
+            install_uid: None,
             registered_at: 1,
             last_keepalive: None,
         }

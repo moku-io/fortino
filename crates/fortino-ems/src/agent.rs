@@ -152,6 +152,11 @@ impl Agent {
             })
             .await?;
         let rr = RegisterReply::from_reply(&reply)?;
+        tracing::debug!(
+            rules_field_present = reply.fields.get("ZHVR").is_some(),
+            rules_field_populated = rr.pushed.host_rules.is_some(),
+            "EMS registration policy fields"
+        );
         log_notes("register", &rr.notes);
         let r = match rr.outcome {
             Ok(r) => r,
@@ -194,6 +199,7 @@ impl Agent {
             server_list: Received::default(),
             on_net: Received::default(),
             off_net: Received::default(),
+            install_uid: self.compat.install_uid.clone(),
             registered_at: unix_now(),
             last_keepalive: None,
         };

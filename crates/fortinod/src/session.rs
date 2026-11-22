@@ -168,6 +168,7 @@ struct Inner {
 
 /// Shared daemon state.
 pub struct Session {
+    pub(crate) ems: Option<fortino_ems::service::EmsWorkers>,
     inner: Mutex<Inner>,
     events: broadcast::Sender<Arc<Snapshot>>,
     workers: Box<dyn WorkerFactory>,
@@ -231,8 +232,18 @@ impl Session {
     pub fn new(
         store: ProfileStore,
         workers: Box<dyn WorkerFactory>,
+        net: Box<dyn NetController>,
+        timeouts: Timeouts,
+    ) -> Arc<Self> {
+        Self::with_ems(store, workers, net, timeouts, None)
+    }
+
+    pub(crate) fn with_ems(
+        store: ProfileStore,
+        workers: Box<dyn WorkerFactory>,
         mut net: Box<dyn NetController>,
         timeouts: Timeouts,
+        ems: Option<fortino_ems::service::EmsWorkers>,
     ) -> Arc<Self> {
         let state = match net.recover() {
             Ok(n) => {
@@ -248,6 +259,7 @@ impl Session {
         };
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         Arc::new(Self {
+            ems,
             inner: Mutex::new(Inner {
                 instance: uuid_like(),
                 seq: 1,

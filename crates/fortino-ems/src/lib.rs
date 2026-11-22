@@ -36,6 +36,9 @@ pub enum Error {
     /// The server refused, with its message.
     #[error("refused by EMS: {0}")]
     Refused(String),
+    /// Local configuration disallows first enrollment on this server.
+    #[error("Enable registration and configure TLS trust for this EMS in fortinod.toml.")]
+    RegistrationDisabled,
     /// No registration for this server.
     #[error("not registered to this EMS")]
     NotRegistered,

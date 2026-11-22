@@ -178,6 +178,28 @@ fn wrong_password_exit_code() {
 }
 
 #[test]
+fn previews_conf_backup_without_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("forticlient.conf");
+    std::fs::write(
+        &backup,
+        "<forticlient_configuration><vpn><sslvpn><connections><connection>\
+         <name>Example</name><server>vpn.example.test</server>\
+         </connection></connections></sslvpn></vpn></forticlient_configuration>",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_fortino"))
+        .env("FORTINO_SOCKET", dir.path().join("absent.sock"))
+        .args(["--json", "profile", "import", "--dry-run"])
+        .arg(backup)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let preview: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(preview["result"]["entries"][0]["spec"]["name"], "Example");
+}
+
+#[test]
 fn import_dry_run_and_commit() {
     let d = daemon();
     let x = d.write(

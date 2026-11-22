@@ -11,6 +11,7 @@ use std::fmt;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::model::{
     DEFAULT_VPN_PORT, Endpoint, Host, ProfileSpec, name_key, normalize_name, validate_realm,
@@ -419,6 +420,19 @@ pub fn parse(bytes: &[u8]) -> Result<Preview, ImportError> {
 
 type EntryErr = (&'static str, &'static str);
 
+/// SHA-256 of the exact serialized empty certificate selection for a macOS export.
+/// Its meaning was checked against the corresponding local profiles.
+const EMPTY_CERTIFICATE_SHA256: [u8; 32] = [
+    0xa6, 0x9d, 0x61, 0xb2, 0x81, 0x50, 0x8a, 0x7e, 0xd3, 0x96, 0x51, 0xa6, 0x38, 0x8e, 0x7c, 0x8e,
+    0xea, 0xeb, 0xf2, 0x51, 0x5a, 0xb1, 0xfd, 0x40, 0x5b, 0xdf, 0x45, 0x1b, 0x5a, 0xe1, 0xa3, 0x00,
+];
+
+fn has_certificate_selection(certificate: &Node) -> bool {
+    let text = certificate.text.trim();
+    !certificate.children.is_empty()
+        || (!text.is_empty() && Sha256::digest(text.as_bytes())[..] != EMPTY_CERTIFICATE_SHA256)
+}
+
 fn parse_connection(
     ordinal: usize,
     c: &Node,
@@ -452,7 +466,8 @@ fn parse_connection(
         skipped.get_or_insert_with(|| "saml_unsupported".into());
     }
     let has_text = |f: &str| c.child(f).is_some_and(|n| !n.text.trim().is_empty());
-    if has_text("certificate")
+    if c.child("certificate")
+        .is_some_and(has_certificate_selection)
         || c.child("prompt_certificate")
             .is_some_and(|n| bool01(n) == Ok(true))
         || has_text("pkcs11_lib")
@@ -685,6 +700,27 @@ mod tests {
         assert!(p.entries[1].is_eligible());
         assert!(!p.entries[1].warnings.is_empty());
         assert!(!p.entries[2].is_eligible() && !p.entries[3].is_eligible());
+    }
+
+    #[test]
+    fn unknown_encrypted_certificate_and_explicit_prompt_remain_blocked() {
+        let encrypted = format!("Enc {}", "0".repeat(50));
+        for setting in [
+            format!("<certificate>{encrypted}</certificate>"),
+            "<certificate/><prompt_certificate>1</prompt_certificate>".to_owned(),
+        ] {
+            let xml = wrap(
+                &format!(
+                    "<connection><name>A</name><server>a.example</server>{setting}</connection>"
+                ),
+                "",
+            );
+            let preview = parse(xml.as_bytes()).unwrap();
+            assert_eq!(
+                preview.entries[0].blocked.as_deref(),
+                Some("client_certificate_unsupported")
+            );
+        }
     }
 
     #[test]

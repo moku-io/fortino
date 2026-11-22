@@ -23,6 +23,10 @@ pub mod method {
     pub const STATUS: &str = "status";
     /// Snapshot followed by events on this connection.
     pub const SUBSCRIBE: &str = "subscribe";
+    /// Enroll this machine using deployment metadata for a trusted EMS.
+    pub const EMS_ENROLL: &str = "ems.enroll";
+    /// This machine's registration state with one EMS, from local records.
+    pub const EMS_STATUS: &str = "ems.status";
     /// List the caller's profiles.
     pub const PROFILE_LIST: &str = "profile.list";
     /// Fetch one profile by ID or name.

@@ -1,0 +1,101 @@
+// Read deployment metadata from a user-selected image. No installer is launched.
+import Darwin
+import Foundation
+
+public struct EnrollmentPackage: Sendable {
+    public let address: String
+    public let installID: String
+
+    public static func read(_ image: URL) throws -> Self {
+        let fm = FileManager.default
+        let mount = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: mount, withIntermediateDirectories: false,
+                               attributes: [.posixPermissions: 0o700])
+        defer { _ = rmdir(mount.path) }
+        try diskImage(["attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint", mount.path, image.path])
+        let result = Result { try metadata(at: mount) }
+        try diskImage(["detach", mount.path])
+        return try result.get()
+    }
+
+    private static func diskImage(_ args: [String]) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        p.arguments = args
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw invalid("Could not " + args[0] + " the disk image.") }
+    }
+
+    private static func invalid(_ message: String) -> NSError {
+        NSError(domain: "Fortino.Enrollment", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    static func metadata(at mount: URL) throws -> Self {
+        func readMember(_ name: String, limit: Int) throws -> Data {
+            let root = mount.resolvingSymlinksInPath().standardizedFileURL
+            let file = root.appendingPathComponent("fctdata/" + name)
+            guard file.resolvingSymlinksInPath().standardizedFileURL.path == file.path,
+                  try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else {
+                throw invalid("Missing regular package file " + name)
+            }
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: limit + 1) ?? Data()
+            guard !data.isEmpty, data.count <= limit else { throw invalid("Invalid size for " + name) }
+            return data
+        }
+        let custom = try readMember("custom.conf", limit: 65536)
+        let plist = try PropertyListSerialization.propertyList(from: custom, format: nil)
+        guard let id = (plist as? [String: Any])?["INSTALLUID"] as? String,
+              !id.isEmpty, id.utf8.count <= 256,
+              id.utf8.allSatisfy({ (33...126).contains($0) && $0 != 124 }) else {
+            throw invalid("This package has no supported deployment identifier.")
+        }
+        let data = try readMember("default.conf", limit: 4 * 1024 * 1024)
+        guard let xml = String(data: data, encoding: .utf8), !xml.contains("<!DOCTYPE") else {
+            throw invalid("Unsupported package configuration format.")
+        }
+        let doc = try XMLDocument(xmlString: xml, options: [.nodeLoadExternalEntitiesNever])
+        let nodes = try doc.nodes(forXPath: "/forticlient_configuration/endpoint_control/management_servers/server/addresses")
+        guard nodes.count == 1, let address = nodes.first?.stringValue,
+              case let .success(server?) = parseEms(address) else {
+            throw invalid("Expected one EMS management address in this package.")
+        }
+        return Self(address: server.display, installID: id)
+    }
+}
+
+
+public struct EnrollmentReply: Decodable {
+    public let status: String
+    public let rules: Bool
+}
+
+extension DaemonClient {
+    public func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {
+        struct Params: Encodable {
+            let server: String
+            let install_uid: String
+        }
+        return try await call("ems.enroll", Params(server: package.address, install_uid: package.installID))
+    }
+}
+
+/// This Mac's registration state with one EMS (`ems.status`).
+public struct EmsStatus: Decodable, Equatable {
+    /// unconfigured, managed-by-forticlient, not-registered, registered, stale, quarantined.
+    public let state: String
+    public let registeredAt: Int?
+    public let lastKeepalive: Int?
+}
+
+extension DaemonClient {
+    public func emsStatus(server: EmsServer) async throws -> EmsStatus {
+        struct Params: Encodable { let server: String }
+        return try await call("ems.status", Params(server: server.display))
+    }
+}

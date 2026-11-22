@@ -37,7 +37,7 @@ public func checkHost(_ s: String) -> FieldCheck {
 public func parseEms(_ s: String) -> Result<EmsServer?, ProtoError> {
     let t = s.trimmingCharacters(in: .whitespaces)
     if t.isEmpty { return .success(nil) }
-    if t.contains("://") || t.contains("/") || t.contains("@") || t.contains("?") || t.contains(" ") {
+    if t.contains("://") || t.contains("/") || t.contains("@") || t.contains("?") || t.contains(where: { $0.isWhitespace || $0.isNewline }) {
         return .failure(ProtoError(code: "invalid_address", message: "Enter a host name or IPv4 address with an optional port", field: "ems"))
     }
     var host = t
@@ -53,6 +53,8 @@ public func parseEms(_ s: String) -> Result<EmsServer?, ProtoError> {
     if case let .error(m) = checkHost(host) {
         return .failure(ProtoError(code: "invalid_address", message: m, field: "ems"))
     }
+    // Match the daemon's normalized host:port, also used for per-server approval.
+    if host.hasSuffix(".") { host.removeLast() }
     return .success(EmsServer(host: host.lowercased(), port: port))
 }
 

@@ -232,6 +232,17 @@ fn main() -> ExitCode {
 
 async fn run(cli: Cli) -> CmdResult {
     let json = cli.json;
+    if let Cmd::Profile(ProfileCmd::Import(a)) = &cli.cmd
+        && a.dry_run
+    {
+        let preview = read_import_preview(&a.file)?;
+        if json {
+            print_json(&preview);
+        } else {
+            render::import_preview(&preview);
+        }
+        return Ok(());
+    }
     let mut client = Client::connect(&cli.socket, "fortino").await?;
     match cli.cmd {
         Cmd::Profile(p) => profile(&client, p, json).await,
@@ -386,11 +397,15 @@ fn apply_edit(p: &Profile, e: EditArgs) -> Result<ProfileSpec, Failure> {
     Ok(s)
 }
 
+fn read_import_preview(file: &std::path::Path) -> Result<fortino_config::import::Preview, Failure> {
+    let bytes =
+        std::fs::read(file).map_err(|e| invalid(format!("cannot read {}: {e}", file.display())))?;
+    fortino_config::import::parse(&bytes)
+        .map_err(|e| Failure(ProtoError::new(ErrorCode::InvalidProfile, e.to_string())))
+}
+
 async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {
-    let bytes = std::fs::read(&a.file)
-        .map_err(|e| invalid(format!("cannot read {}: {e}", a.file.display())))?;
-    let preview = fortino_config::import::parse(&bytes)
-        .map_err(|e| Failure(ProtoError::new(ErrorCode::InvalidProfile, e.to_string())))?;
+    let preview = read_import_preview(&a.file)?;
     let mut entries: Vec<_> = preview.eligible().cloned().collect();
     if !a.select.is_empty() {
         let keys: Vec<String> = a
@@ -401,15 +416,8 @@ async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {
             .collect();
         entries.retain(|e| keys.contains(&fortino_config::name_key(&e.spec.name)));
     }
-    if json && a.dry_run {
-        print_json(&preview);
-        return Ok(());
-    }
     if !json {
         render::import_preview(&preview);
-    }
-    if a.dry_run {
-        return Ok(());
     }
     if entries.is_empty() {
         return Err(invalid("nothing to import"));

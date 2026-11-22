@@ -49,10 +49,11 @@ struct ImportWindow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(file?.lastPathComponent ?? "Choose a FortiClient XML export")
+                Text(file?.lastPathComponent ?? "Choose a FortiClient backup (.conf) or XML export")
                     .font(.headline)
                 Spacer()
                 Button("Choose File…", action: choose)
+                    .disabled(busy)
             }
             if let p = preview {
                 List {
@@ -100,7 +101,10 @@ struct ImportWindow: View {
                     .foregroundStyle(.secondary)
             }
             if let r = e.blocked ?? e.skipped {
-                Text((e.blocked != nil ? "Blocked: " : "Skipped: ") + r).font(.caption).foregroundStyle(.orange)
+                Text(r == "client_certificate_unsupported"
+                     ? "Blocked: This profile has a client certificate setting. Fortino cannot import client certificate settings yet."
+                     : (e.blocked != nil ? "Blocked: " : "Skipped: ") + r)
+                    .font(.caption).foregroundStyle(.orange)
             }
             ForEach(e.warnings, id: \.self) { Text("⚠︎ \($0)").font(.caption) }
             ForEach(e.omitted, id: \.self) { Text("Not imported: \($0)").font(.caption).foregroundStyle(.secondary) }
@@ -124,9 +128,12 @@ struct ImportWindow: View {
 
     private func choose() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.xml]
+        panel.allowedContentTypes = [.xml] + [UTType(filenameExtension: "conf")].compactMap { $0 }
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        selected.removeAll()
+        replace.removeAll()
+        ems.removeAll()
         file = url
         Task { await loadPreview(url) }
     }

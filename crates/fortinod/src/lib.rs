@@ -99,17 +99,15 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
             })
         }
     };
-    let workers: Box<dyn fortino_core::worker::WorkerFactory> = Box::new(
-        fortino_ems::service::EmsWorkers::new(
-            std::sync::Arc::from(workers),
-            ems_settings(cfg)?,
-            fortino_ems::service::system_facts(),
-        )
-        .with_forticlient(fortino_ems::forticlient::source(
-            (cfg.ems.defer_to_forticlient != Some(false) && cfg!(target_os = "macos"))
-                .then(|| fortino_ems::forticlient::MACOS_ROOT.into()),
-        )),
-    );
+    let ems = fortino_ems::service::EmsWorkers::new(
+        std::sync::Arc::from(workers),
+        ems_settings(cfg)?,
+        fortino_ems::service::system_facts(),
+    )
+    .with_forticlient(fortino_ems::forticlient::source(
+        (cfg.ems.defer_to_forticlient != Some(false) && cfg!(target_os = "macos"))
+            .then(|| fortino_ems::forticlient::MACOS_ROOT.into()),
+    ));
     let journal_path = cfg.state_dir.join("net-journal.json");
     let net: Box<dyn crate::netctl::NetController> = if cfg.fake.is_some() || cfg.fake_network {
         tracing::warn!("using the FAKE network; routes and DNS on this host are not changed");
@@ -120,7 +118,13 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
     } else {
         real_network(journal_path)?
     };
-    Ok(Session::new(store, workers, net, cfg.timeouts()))
+    Ok(Session::with_ems(
+        store,
+        Box::new(ems.clone()),
+        net,
+        cfg.timeouts(),
+        Some(ems),
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -173,6 +177,12 @@ pub fn ems_settings(cfg: &DaemonConfig) -> Result<fortino_ems::service::Settings
         fortino_proto_ems::ids::Uid::parse(u).map_err(|_| "[ems] uid: not a UUID".to_owned())?;
     }
     Ok(Settings {
+        package_approvals: cfg.ems.builtin_package_enrollment.then(|| {
+            fortino_ems::service::PackageApprovals {
+                directory: "/private/var/db/fortino-ems-approvals".into(),
+                ca_file: crate::procworker::SYSTEM_CA_BUNDLE.into(),
+            }
+        }),
         state_dir: cfg
             .ems
             .state_dir
