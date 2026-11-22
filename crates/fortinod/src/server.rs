@@ -328,6 +328,9 @@ impl Conn {
                 if let Some(t) = info.last_keepalive {
                     v["lastKeepalive"] = t.into();
                 }
+                if let Some(r) = info.rules {
+                    v["rules"] = r.into();
+                }
                 Ok(v)
             }
             method::PROFILE_LIST => {

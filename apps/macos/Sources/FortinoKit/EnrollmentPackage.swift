@@ -91,6 +91,22 @@ public struct EmsStatus: Decodable, Equatable {
     public let state: String
     public let registeredAt: Int?
     public let lastKeepalive: Int?
+    /// Whether the EMS sent host-verification rules; nil when not registered.
+    public let rules: Bool?
+
+    public init(state: String, registeredAt: Int? = nil, lastKeepalive: Int? = nil, rules: Bool? = nil) {
+        self.state = state
+        self.registeredAt = registeredAt
+        self.lastKeepalive = lastKeepalive
+        self.rules = rules
+    }
+
+    /// Registered and checked in, yet the EMS sent no rules: it likely doesn't recognize this
+    /// Mac, or its policy doesn't cover it. Not shown before the first keepalive, when no
+    /// rules are expected yet.
+    public var checkedInWithoutRules: Bool {
+        (state == "registered" || state == "stale") && lastKeepalive != nil && rules == false
+    }
 }
 
 extension DaemonClient {

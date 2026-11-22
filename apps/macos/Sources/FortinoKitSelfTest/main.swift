@@ -47,6 +47,12 @@ if let r = try? JSONDecoder().decode(DaemonRestartResult.self, from: Data(#"{"wh
     check(false, "restart result decodes")
 }
 
+// EMS without rules
+check(EmsStatus(state: "registered", lastKeepalive: 5, rules: false).checkedInWithoutRules, "no rules after keepalive")
+check(!EmsStatus(state: "registered", lastKeepalive: nil, rules: false).checkedInWithoutRules, "no keepalive yet")
+check(!EmsStatus(state: "registered", lastKeepalive: 5, rules: true).checkedInWithoutRules, "rules present")
+check(!EmsStatus(state: "not-registered").checkedInWithoutRules, "not registered")
+
 // Status decoding
 let j = #"{"daemonInstance":"i","seq":3,"state":"awaiting-input","attemptId":"a1","challenge":{"id":"c1","kind":"otp","prompt":"Token code","expiresInSecs":119},"ipPolicy":"split-ipv4"}"#
 if let s = try? JSONDecoder().decode(Status.self, from: Data(j.utf8)) {

@@ -271,6 +271,7 @@ impl EmsWorkers {
             state: registration_state(&r, now),
             registered_at: Some(r.registered_at),
             last_keepalive: r.last_keepalive,
+            rules: Some(r.host_rules.content.is_some()),
         })
     }
 
@@ -322,6 +323,10 @@ pub struct EmsStatusInfo {
     pub registered_at: Option<u64>,
     /// Unix time of the last accepted keepalive.
     pub last_keepalive: Option<u64>,
+    /// Whether the EMS has sent host-verification rules for this device. An EMS that knows
+    /// the device and assigns it a policy sends them; none after a keepalive usually means
+    /// the EMS doesn't recognize this Mac or its policy doesn't cover it.
+    pub rules: Option<bool>,
 }
 
 impl EmsStatusInfo {
@@ -330,6 +335,7 @@ impl EmsStatusInfo {
             state,
             registered_at: None,
             last_keepalive: None,
+            rules: None,
         }
     }
 }

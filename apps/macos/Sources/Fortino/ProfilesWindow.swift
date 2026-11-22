@@ -164,6 +164,9 @@ struct ConnectionSection: View {
             }
             if let ems = profile.spec.endpoint.ems {
                 EmsStatusRow(model: model, server: ems, status: model.emsStatus[ems.display])
+                if model.emsStatus[ems.display]?.checkedInWithoutRules == true {
+                    EmsNoRulesNote()
+                }
             }
             if isCurrent, model.state == .connected, let st = model.status {
                 if let ip = st.assignedIp { LabeledContent("Address", value: ip) }
@@ -206,6 +209,36 @@ struct StatusDot: View {
 }
 
 /// EMS registration state for the profile's EMS server.
+/// The EMS accepted this Mac but assigned it nothing. Often harmless, but on gateways that admit
+/// devices by EMS tag it explains a VPN that connects while nothing loads.
+struct EmsNoRulesNote: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("The EMS sent no compliance rules for this Mac").fontWeight(.medium)
+                    Text("It may not recognize this Mac yet, or its policy may not accept it, for example because of the macOS version or missing antivirus. If the VPN connects but company resources don't load, enroll with your organization's FortiClient package or ask your IT administrator.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            }
+            HStack {
+                Spacer()
+                Button("Enroll with Package…") {
+                    openWindow(id: "enrollment")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 struct EmsStatusRow: View {
     @ObservedObject var model: AppModel
     let server: EmsServer
