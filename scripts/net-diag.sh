@@ -73,5 +73,20 @@ section 'Public IPv6 ICMP' ping6 -n -c 1 "$v6"
 section 'Public IPv4 TCP 443 (numeric)' nc -4 -nvz -w 3 "$v4" 443
 section 'Public IPv6 TCP 443 (numeric)' nc -6 -nvz -w 3 "$v6" 443
 section 'System hostname lookup (may be cached)' dscacheutil -q host -a name apple.com
+
+# Known fault: FortiClient's ZTNA agent leaves a main-ruleset pf rule sending all
+# UDP/53 into its utun after ztagent has exited, so DNS is blackholed.
+printf '\n### Stale FortiClient ZTNA DNS redirect check\n'
+dns_rules=$(bounded "${pf[@]}" -s rules 2>/dev/null | grep -E 'route-to utun[0-9]+ .*port = (53|domain)')
+if [[ -z $dns_rules ]]; then
+    echo 'OK: no pf rule redirects DNS into a tunnel (or pf rules unreadable without sudo).'
+elif pgrep -x ztagent >/dev/null; then
+    echo 'OK: pf redirects DNS into a tunnel and ztagent is running.'
+else
+    echo 'PROBLEM: pf redirects DNS into a tunnel but ztagent is not running; DNS is blackholed.'
+    echo "$dns_rules"
+    echo 'Fix: restart FortiClient (or its ZTNA agent), or reload the stock macOS pf rules:'
+    echo '  sudo pfctl -f /etc/pf.conf'
+fi
 echo
 echo 'Capture complete.'
