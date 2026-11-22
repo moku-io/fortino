@@ -1,5 +1,6 @@
 // Renders the menu-bar template images from the shield outline
-// (Resources/ShieldStatusBar.svg: an outer and an inner polygon, 1024 x 1024 viewBox).
+// (Resources/ShieldStatusBar.svg: an outer and an inner polygon, 1024 x 1024 viewBox),
+// cropped to the shield, 16 pt tall.
 // Run after changing the artwork; the PNGs are committed.
 //
 //   swift apps/macos/scripts/make-menubar-icons.swift apps/macos/Resources
@@ -33,8 +34,17 @@ func path(_ pts: [CGPoint]) -> NSBezierPath {
 }
 let outer = path(polys[0]), inner = path(polys[1])
 
+// The traced ring is ~50 units thick, under 1 pt at menu-bar size. Thicken it inward so it
+// matches the ~1.5 pt strokes of SF Symbols and other menu-bar icons; the outer edge is unchanged.
+let thicken: CGFloat = 40
+
 func outline() {
-    let p = NSBezierPath(); p.append(outer); p.append(inner); p.windingRule = .evenOdd; p.fill()
+    outer.fill()
+    NSGraphicsContext.current?.compositingOperation = .clear
+    inner.fill()
+    NSGraphicsContext.current?.compositingOperation = .sourceOver
+    inner.lineWidth = thicken
+    inner.stroke()
 }
 
 let variants: [(String, () -> Void)] = [
@@ -43,6 +53,7 @@ let variants: [(String, () -> Void)] = [
     ("ShieldStatusBar-Half", {
         outline()
         NSGraphicsContext.saveGraphicsState()
+        // Fill the left half of the (thickened) hole.
         NSBezierPath(rect: CGRect(x: 0, y: 0, width: 512, height: 1024)).addClip()
         inner.fill()
         NSGraphicsContext.restoreGraphicsState()
@@ -54,18 +65,27 @@ let variants: [(String, () -> Void)] = [
     }),
 ]
 
+// The image is cropped to the shield and is 16 pt tall, like SF Symbols in the menu bar;
+// the width keeps the shield's aspect ratio (rounded up, shield centered).
+let bounds = outer.bounds
+let heightPt: CGFloat = 16
+let unitsPerPt = bounds.height / heightPt
+let widthPt = (bounds.width / unitsPerPt).rounded(.up)
+
 for (name, draw) in variants {
     for scale in [1, 2] {
-        let px = 18 * scale
+        let pxW = Int(widthPt) * scale, pxH = Int(heightPt) * scale
         let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: px, pixelsHigh: px, bitsPerSample: 8, samplesPerPixel: 4,
+            bitmapDataPlanes: nil, pixelsWide: pxW, pixelsHigh: pxH, bitsPerSample: 8, samplesPerPixel: 4,
             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
         NSGraphicsContext.saveGraphicsState()
         let ctx = NSGraphicsContext(bitmapImageRep: rep)!
         NSGraphicsContext.current = ctx
         // SVG coordinates are y-down.
-        ctx.cgContext.translateBy(x: 0, y: CGFloat(px))
-        ctx.cgContext.scaleBy(x: CGFloat(px) / 1024, y: -CGFloat(px) / 1024)
+        let k = CGFloat(scale) / unitsPerPt
+        ctx.cgContext.translateBy(x: CGFloat(pxW) / 2, y: CGFloat(pxH))
+        ctx.cgContext.scaleBy(x: k, y: -k)
+        ctx.cgContext.translateBy(x: -bounds.midX, y: -bounds.minY)
         NSColor.black.setFill()
         draw()
         NSGraphicsContext.restoreGraphicsState()

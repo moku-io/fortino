@@ -14,7 +14,6 @@ struct MenuBarIcon: View {
     private static func load(_ name: String) -> NSImage? {
         guard let image = Bundle.main.image(forResource: name) else { return nil }
         image.isTemplate = true
-        image.size = NSSize(width: 18, height: 18)
         return image
     }
     private static let outline = load("ShieldStatusBar")

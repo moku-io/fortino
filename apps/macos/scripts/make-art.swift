@@ -1,5 +1,5 @@
 // Draws the disk-image background at build time. The app icon is apps/macos/Resources/AppIcon.iconset
-// (source artwork AppIcon.svg).
+// (rendered from AppIcon.svg by make-app-icon.swift).
 //
 //   swift apps/macos/scripts/make-art.swift OUT_DIR
 //
