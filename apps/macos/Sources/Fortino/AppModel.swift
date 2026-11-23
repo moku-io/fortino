@@ -276,10 +276,28 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(id, forKey: "selectedProfileId")
     }
 
-    func connect() {
+    /// Unsaved changes in the profile window's editor. `ProfileEditor` registers them while its
+    /// form differs from the stored profile; `save` returns an error message, or nil once saved.
+    struct PendingEdits {
+        let editor: UUID
+        let profileId: String
+        let save: () async -> String?
+    }
+
+    /// Not published: nothing renders from it, and editors update it during view updates.
+    var pendingEdits: PendingEdits?
+
+    /// Connects the selected profile. With `savingEdits` (the profile window's Connect button),
+    /// unsaved changes shown in the editor are saved first, so Connect uses what the user sees.
+    func connect(savingEdits: Bool = false) {
         guard let p = selectedProfile else { return }
         actionError = nil
+        let pending = savingEdits ? pendingEdits.flatMap { $0.profileId == p.id ? $0 : nil } : nil
         Task {
+            if let pending, let e = await pending.save() {
+                actionError = e
+                return
+            }
             do {
                 let c = try require()
                 // Use the latest revision; a stale one is refused by the daemon.

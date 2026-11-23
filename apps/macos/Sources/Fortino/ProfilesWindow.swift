@@ -164,7 +164,7 @@ struct ConnectButton: View {
         case .inUse:
             Button("In Use") {}.disabled(true).help("Another user on this Mac is connected")
         case .idle, .recoveryRequired:
-            Button("Connect") { model.connect() }
+            Button("Connect") { model.connect(savingEdits: true) }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.selectedProfile == nil || model.serviceError != nil)
         }
@@ -435,6 +435,8 @@ struct ProfileEditor: View {
     /// after Create, so an empty form doesn't open covered in red.
     @State private var touched: Set<String> = []
     @State private var attempted = false
+    /// Tells this editor's pending edits apart from the next editor's when the view is replaced.
+    @State private var editorId = UUID()
     @FocusState private var focus: Field?
 
     enum Field: Hashable { case name, host, port, ems, realm, username }
@@ -508,14 +510,37 @@ struct ProfileEditor: View {
                 .font(.caption).foregroundStyle(.secondary)
             }
             DebugOverridesBox(rows: $draft.debugOverrides)
-            if let s = serverError, s.field == nil {
-                errorText(s.message)
+        }
+        .formStyle(.grouped)
+        // Pinned below the form so Save stays in view however long the form grows.
+        .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
+        .onAppear {
+            if let p = profile { draft = Draft(p) }
+            registerEdits()
+            if let id = model.focusEmsFor, id == profile?.id {
+                focus = .ems
+                model.focusEmsFor = nil
             }
-            if let s = serverError, s.field == "debugEmsSysinfo" {
+        }
+        .onChange(of: hasChanges) { _ in registerEdits() }
+        .onDisappear {
+            if model.pendingEdits?.editor == editorId { model.pendingEdits = nil }
+        }
+        .onChange(of: model.focusEmsFor) { id in
+            if let id, id == profile?.id {
+                focus = .ems
+                model.focusEmsFor = nil
+            }
+        }
+    }
+
+    private var actionBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let s = serverError, s.field == nil || s.field == "debugEmsSysinfo" {
                 errorText(s.message)
             }
             if isActiveProfile {
-                Text("Disconnect before changing this profile.").foregroundStyle(.secondary)
+                Text("Disconnect before changing this profile.").font(.callout).foregroundStyle(.secondary)
             }
             HStack {
                 if let p = profile {
@@ -534,22 +559,31 @@ struct ProfileEditor: View {
                 Button(profile == nil ? "Create" : "Save", action: save)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(saving || isActiveProfile || (!errors.isEmpty && (profile != nil || attempted)))
+                    .disabled(saving || isActiveProfile || !hasChanges
+                              || (!errors.isEmpty && (profile != nil || attempted)))
             }
         }
-        .formStyle(.grouped)
-        .onAppear {
-            if let p = profile { draft = Draft(p) }
-            if let id = model.focusEmsFor, id == profile?.id {
-                focus = .ems
-                model.focusEmsFor = nil
-            }
-        }
-        .onChange(of: model.focusEmsFor) { id in
-            if let id, id == profile?.id {
-                focus = .ems
-                model.focusEmsFor = nil
-            }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+    }
+
+    /// The form differs from the stored profile. A new profile always counts as changed.
+    private var hasChanges: Bool {
+        guard let p = profile else { return true }
+        // Compare what would be saved, so edits that normalize away (case, spaces) don't count.
+        // An invalid form yields no spec and so counts as changed.
+        return draft.spec(base: p.spec) != p.spec
+    }
+
+    /// Lets the window's Connect button save this editor's changes before connecting.
+    private func registerEdits() {
+        guard let p = profile else { return }
+        if hasChanges {
+            model.pendingEdits = .init(editor: editorId, profileId: p.id, save: { await commit() })
+        } else if model.pendingEdits?.editor == editorId {
+            model.pendingEdits = nil
         }
     }
 
@@ -569,21 +603,28 @@ struct ProfileEditor: View {
     }
 
     private func save() {
+        Task { await commit() }
+    }
+
+    /// Saves the form. Returns why it wasn't saved (shown by Connect), or nil once saved.
+    @discardableResult
+    private func commit() async -> String? {
         attempted = true
-        guard errors.isEmpty, let spec = draft.spec(base: profile?.spec) else { return }
+        guard errors.isEmpty, let spec = draft.spec(base: profile?.spec) else {
+            return "This profile has unsaved changes with errors. Correct them, then connect again."
+        }
         saving = true
         serverError = nil
-        Task {
-            if let e = await model.save(spec, existing: profile) {
-                serverError = e
-                if e.code == "stale_revision" {
-                    serverError = ProtoError(code: e.code, message: "This profile was changed elsewhere. It has been reloaded; review and save again.")
-                    await model.refreshProfiles()
-                }
-            } else if profile == nil {
-                onDone()
+        defer { saving = false }
+        if let e = await model.save(spec, existing: profile) {
+            serverError = e
+            if e.code == "stale_revision" {
+                serverError = ProtoError(code: e.code, message: "This profile was changed elsewhere. It has been reloaded; review and save again.")
+                await model.refreshProfiles()
             }
-            saving = false
+            return "Your changes could not be saved: \(serverError?.message ?? e.message)"
         }
+        if profile == nil { onDone() }
+        return nil
     }
 }
