@@ -118,4 +118,6 @@ Why another client: some gateways admit a tunnel only for clients registered wit
 
 Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port) and LivConnect (a multi-protocol desktop wrapper around openfortivpn and OpenConnect).
 
-Project code is licensed under [GPL-3.0-or-later](LICENSE).
+Project code is licensed under [GPL-3.0-or-later](LICENSE). Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Fortino is an independent project, not affiliated with or endorsed by Fortinet. FortiClient, FortiGate and FortiOS are trademarks of Fortinet, Inc.
