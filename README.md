@@ -1,111 +1,77 @@
+<div align="center">
+
+<img src="apps/macos/Resources/AppIcon.svg" width="128" alt="Fortino icon">
+
 # Fortino
 
-Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient EMS, starting with macOS. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
+**The first open-source FortiClient alternative that speaks EMS.**
 
-**Built for people who use more than one organization's VPN.** Each VPN profile names its own EMS server, and Fortino keeps a separate EMS registration for each. Connecting to a gateway uses that gateway's EMS, so switching between organizations needs no unregistering and re-registering, unlike FortiClient, which holds one EMS registration per machine.
+Connects to your company's FortiGate. Then gets out of your way.
 
-## Current status
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
+![macOS Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-black)
+![Rust](https://img.shields.io/badge/Rust-2024-orange)
+![Version](https://img.shields.io/badge/version-0.5.3-green)
 
-Fortino 0.5.3 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-dark.png">
+  <img src="docs/assets/menu-light.png" width="420" alt="Fortino menu-bar app">
+</picture>
 
-## Documentation
+</div>
 
-| Topic | Where |
+## Features
+
+- **FortiClient EMS registration, one per profile.** Each VPN profile has its own EMS. Switching organizations takes one click, with no unregister and re-register ritual.
+- **Password + OTP**, strict TLS, and an in-app review for pinning a gateway certificate.
+- **Split routes and per-domain split DNS**, a DNS choice for each profile, and an IPv6 leak block.
+- **Crash-safe networking.** Every route and DNS change goes into a journal first, so it gets rolled back even after a crash.
+- **A sleek native menu-bar app** (SwiftUI) **and a headless `fortino` CLI.**
+- **Dark mode**, matching both your terminal and your mood about corporate VPNs.
+- **You can quit it.** No icon squatting in your menu bar forever.
+- **macOS Keychain** for saved passwords: coming soon.
+
+## No backdoor, by design
+
+FortiClient EMS can push remote commands (RUN_SRV_CMD), scripts, upgrades and forensic collection to the endpoints it manages. Fortino accepts none of them: those requests are refused and logged by name and nothing is uploaded to EMS.
+Your VPN client shouldn't double as a remote shell.
+
+Posture is truthful too. Fortino never reports an antivirus, a firewall or a host-check result it doesn't have, and it presents an EMS serial only after it has actually registered. Ask your IT team before registering it with a corporate EMS.
+
+## Platforms
+
+macOS on Apple silicon today. Want Linux or Intel? [Open an issue](https://github.com/moku-io/fortino/issues) and react with 👍
+
+## Install
+
+Download the DMG from [Releases](https://github.com/moku-io/fortino/releases), drag Fortino to Applications, open it and allow its VPN service once in System Settings → General → Login Items. To uninstall, drag it to the Trash.
+
+Building from source? See [DEVELOPMENT.md](DEVELOPMENT.md): dev daemon, mock gateway, tests and the signed DMG.
+
+## Docs
+
+| | |
 | --- | --- |
-| Run and test the daemon, CLI and app locally | [DEVELOPMENT.md](DEVELOPMENT.md) |
-| Contributing and licensing of contributions | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| Rules for coding agents | [AGENTS.md](AGENTS.md) |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Build, run and test locally |
+| [docs/comparison.md](docs/comparison.md) | Fortino vs openfortivpn, OpenConnect and FortiClient |
+| [docs/releasing.md](docs/releasing.md) | Signed DMG and release checklist |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contributing and licensing |
+| [AGENTS.md](AGENTS.md) | Rules for coding agents |
 
-## Build and try it
+## Sponsor
 
-Use stable Rust and the checked-in lockfile from the repository root.
-
-```sh
-cargo build --locked --workspace
-cargo test --locked --workspace
-```
-
-Run the development daemon with the fake worker (unprivileged, no network changes) and drive it from the CLI or the app. See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
-
-```sh
-cargo run -p fortinod -- --config fixtures/dev/fortinod-fake.toml   # allowed_uids must list your UID
-export FORTINO_SOCKET=$PWD/target/dev/fortinod.sock
-cargo run -p fortino-cli -- profile add demo-vpn --host vpn.example.org --ems-server ems.example.org:9016
-cargo run -p fortino-cli -- connect demo-vpn        # password hunter2, code 123456
-swift run --package-path apps/macos Fortino
-```
-
-### Build the downloads
-
-After changing the source, rebuild everything (Rust binaries, app bundle and DMG) with one command. The VPN service ships inside `Fortino.app`, and macOS only registers it from a Developer ID-signed app, so sign the build:
-
-```sh
-SIGN_APP="Developer ID Application: …" scripts/package-macos.sh   # → target/package/Fortino-<version>.dmg
-scripts/macos-vm-dmg-test.sh   # optional: install it from the DMG in a disposable VM and test it
-```
-
-`security find-identity -v -p codesigning` prints the exact identity name for `SIGN_APP`. The first build asks to let the terminal control Finder (it lays out the DMG window); allow it in System Settings → Privacy & Security → Automation.
-
-Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [DEVELOPMENT.md](DEVELOPMENT.md#installer).
-
-### Release checklist
-
-1. Raise `CFBundleShortVersionString` and `CFBundleVersion` in `apps/macos/Resources/Info.plist`.
-2. Check the tree:
-   ```sh
-   cargo fmt --all --check
-   cargo clippy --workspace --all-targets
-   cargo test --locked --workspace
-   ```
-3. Commit, so the DMG matches a commit.
-4. Build the signed DMG (it builds the release binaries itself); add `NOTARY_PROFILE=fortino` once a notary profile exists:
-   ```sh
-   SIGN_APP="Developer ID Application: …" scripts/package-macos.sh
-   ```
-5. Optionally run `scripts/macos-vm-dmg-test.sh`, then tag the commit (`git tag v<version>`) and hand out `target/package/Fortino-<version>.dmg`.
-
-The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock -- fortigate fixtures/mock/basic.yaml`.
+<div align="center">
+<a href="https://www.moku.io"><img src="docs/assets/moku-logo.svg" width="180" alt="Moku"></a>
+<p>Fortino is brought to you by <a href="https://www.moku.io">Moku</a>, the makers of <a href="https://vaultlane.io">Vaultlane</a>.<br>
+Need help with a VPN? <a href="https://www.moku.io/en/contact">Get in touch</a>.</p>
+</div>
 
 ## Thanks
 
-Fortino stands on the shoulders of the open-source clients that made FortiGate SSL VPNs usable without the vendor client. Thank you to:
+Built on what [openfortivpn](https://github.com/adrienverge/openfortivpn), [OpenConnect](https://www.infradead.org/openconnect/fortinet.html) and their friends taught us. [Full credits](docs/comparison.md#thanks).
 
-- **[openfortivpn](https://github.com/adrienverge/openfortivpn)** (Adrien Vergé and contributors). Its clear implementation of the SSL VPN login and PPP tunnel was our reference for early debugging, and its pinned build proved the PPP path.
-- **[OpenConnect](https://www.infradead.org/openconnect/fortinet.html)** (David Woodhouse, Daniel Lenski and contributors), whose Fortinet support documents the protocol, PPP-over-DTLS and the challenge forms.
-- The projects around them: **[openfortivpn-webview](https://github.com/gm-vm/openfortivpn-webview)** for SAML login, **[NetworkManager-fortisslvpn](https://gitlab.gnome.org/GNOME/NetworkManager-fortisslvpn)** for Linux desktop integration, and GUIs such as **OpenFortiGUI**, **[OpenFortiVPN GUI](https://e1z0.net/software/openfortivpn-gui)** and **[fcovpn](https://github.com/jiriteach/fcovpn)**.
+---
 
-## How Fortino compares
-
-Fortino is still in development: the table shows **target** behaviour for Fortino, and its status column says what works today. Entries for the other clients come from their documentation (November 2026); corrections are welcome.
-
-| | Fortino (status) | openfortivpn | OpenConnect `--protocol=fortinet` | FortiClient VPN (vendor) |
-| --- | --- | --- | --- | --- |
-| License | GPL-3.0-or-later | GPL-3.0 + OpenSSL exception | LGPL-2.1 | Proprietary |
-| Language | Rust daemon, Swift app | C | C | — |
-| Password + token code | Yes (password live on one gateway; codes tested against the mock) | Yes | Yes (tokeninfo and HTML forms) | Yes |
-| FortiToken Mobile push | Planned | Yes | Not documented | Yes |
-| SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
-| Client certificate | Planned | Yes | Yes | Yes |
-| Gateway certificate checks | Strict; fetches intermediates a gateway leaves out; after a warning, trusts one specific certificate per gateway (app) | Strict, or `--trusted-cert` pin | Strict, or `--servercert` pin | Prompt |
-| PPP tunnel | Supported by the native worker (no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
-| Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
-| DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |
-| EMS registration (needed by some gateways) | Per-profile registration and truthful posture | No | No | Yes |
-| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **One registration per EMS, selected by the VPN profile** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
-| FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
-| Per-domain split DNS | Yes (macOS controller) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
-| User-chosen split tunnel: only the subnets you list go through the VPN, the rest of the Internet stays on the Mac's own connection | Planned (today: the gateway's routes) | Partial (`--set-routes=0`, then your own routes) | Via vpnc-script or vpn-slice | Set by the gateway or EMS administrator |
-| DNS choice per profile: the gateway's DNS, or keep the Mac's own (like FortiClient's `inherit_local_dns`) | Yes: the gateway's DNS for the domains it names, or the Mac's DNS for every name; VPN DNS for every name is planned | `--set-dns=0` | Via vpnc-script | One global option, not per profile |
-| IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
-| Network rollback after crash | Yes (write-ahead journal) | Partial | Script-dependent | Yes |
-| macOS app | Native SwiftUI menu bar | Third-party GUIs | OpenConnect-GUI | Yes |
-| Headless CLI | Yes (`fortino`) | Yes | Yes | Limited |
-| Security suite (AV, web filter, ZTNA…) | No (out of scope) | No | No | Paid editions |
-
-Why another client: some gateways admit a tunnel only for clients registered with the organization's FortiClient EMS, and no open-source client implements EMS. Fortino will register and report its real state; it never fakes compliance. Ask your IT or security team before registering it with a corporate EMS.
-
-Other related projects: [openfortivpn-go](https://pkg.go.dev/github.com/elizandrodantas/openfortivpn-go) (a Go port) and LivConnect (a multi-protocol desktop wrapper around openfortivpn and OpenConnect).
-
-Copyright © 2026 Moku S.r.l. Project code is licensed under [GPL-3.0-or-later](LICENSE). Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md).
+Copyright © 2026 Moku S.r.l. Licensed under [GPL-3.0-or-later](LICENSE).
 
 Fortino is an independent project, not affiliated with or endorsed by Fortinet. FortiClient, FortiGate and FortiOS are trademarks of Fortinet, Inc.
