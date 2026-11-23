@@ -100,6 +100,8 @@ NOTARY_PROFILE=fortino …        # add to also notarize and staple the DMG
 scripts/macos-vm-dmg-test.sh    # install from the DMG in a disposable VM and test
 ```
 
+The release version is `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist` (which names the DMG) and `version` under `[workspace.package]` in `Cargo.toml` (which `fortino -V` reports); bump both together, and `cargo test` fails if they differ.
+
 `Fortino.app` carries everything (built by `apps/macos/scripts/bundle.sh`):
 
 | Path in the bundle | Role |

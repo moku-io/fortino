@@ -239,3 +239,21 @@ fn service_unavailable() {
         .unwrap();
     assert_eq!(code(&o), 7);
 }
+
+/// The app's Info.plist carries the release version; the Rust workspace version
+/// must match it so `fortino -V` and `fortinod` report the same release.
+#[test]
+fn version_matches_app_release() {
+    let plist = include_str!("../../../apps/macos/Resources/Info.plist");
+    let key = "<key>CFBundleShortVersionString</key>";
+    let rest = &plist[plist.find(key).expect("CFBundleShortVersionString") + key.len()..];
+    let start = rest.find("<string>").unwrap() + "<string>".len();
+    let release = &rest[start..start + rest[start..].find("</string>").unwrap()];
+    assert_eq!(env!("CARGO_PKG_VERSION"), release);
+
+    let o = Command::new(env!("CARGO_BIN_EXE_fortino"))
+        .arg("-V")
+        .output()
+        .unwrap();
+    assert_eq!(stdout(&o).trim(), format!("fortino {release}"));
+}
