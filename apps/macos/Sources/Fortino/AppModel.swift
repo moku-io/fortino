@@ -303,12 +303,48 @@ final class AppModel: ObservableObject {
                 // Use the latest revision; a stale one is refused by the daemon.
                 await refreshProfiles()
                 let cur = profiles.first { $0.id == p.id } ?? p
+                guard try await approveEmsBeforeConnecting(cur, client: c) else { return }
                 _ = try await c.connect(ConnectParams(
                     profileId: cur.id, revision: cur.revision,
                     requestKey: UUID().uuidString, username: nil))
             } catch {
                 report(error)
             }
+        }
+    }
+
+    /// The service connects without the EMS when the profile's EMS server isn't approved on this
+    /// Mac (it can't ask for an administrator password itself), so the app asks first. False
+    /// when the user cancelled; true to connect, with or without the EMS.
+    private func approveEmsBeforeConnecting(_ profile: Profile, client c: DaemonClient) async throws -> Bool {
+        guard let server = profile.spec.endpoint.ems,
+              let st = try? await c.emsStatus(server: server) else { return true }
+        emsStatus[server.display] = st
+        guard st.state == "unconfigured" else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = "Approve the EMS server \(server.display)?"
+        alert.informativeText = """
+        \(profile.spec.name) uses this EMS server, which hasn't been approved on this Mac. \
+        Approving lets Fortino register this Mac with it when you connect, and needs an \
+        administrator password.
+
+        Without it, Fortino connects without the EMS, and the gateway may refuse the \
+        connection or limit access.
+        """
+        alert.addButton(withTitle: "Approve…")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Connect Without EMS")
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            guard try await approveWithCertificateCheck(server) else { return false }
+            await refreshEmsStatus()
+            return true
+        case .alertThirdButtonReturn:
+            return true
+        default:
+            return false
         }
     }
 
