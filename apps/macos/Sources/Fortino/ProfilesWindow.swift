@@ -52,27 +52,35 @@ struct ProfilesWindow: View {
                     ContentUnavailableCompat(
                         title: "No VPN Profiles",
                         symbol: "network.badge.shield.half.filled",
-                        message: "Add a profile for your FortiGate gateway, or import one from FortiClient.")
+                        message: "Add a profile for your FortiGate gateway, or import one from FortiClient."
+                    ) {
+                        HStack {
+                            Button("Import from FortiClient…") { openWindow(id: "import") }
+                            Button("New Profile") { creating = true }
+                                .keyboardShortcut(.defaultAction)
+                        }
+                        .fixedSize()
+                    }
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) { ServiceUpdateBanner(model: model) }
             .navigationTitle(creating ? "New Profile" : (model.selectedProfile?.spec.name ?? "VPN Profiles"))
         }
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    creating = true
+            ToolbarItem(placement: .primaryAction) {
+                // Click adds a profile; the arrow also offers the import, which is rare enough
+                // not to need its own toolbar button. ⌘N and ⇧⌘I are in the File menu.
+                Menu {
+                    Button("New Profile") { creating = true }
+                    Button("Import from FortiClient…") { openWindow(id: "import") }
                 } label: {
                     Label("New Profile", systemImage: "plus")
+                } primaryAction: {
+                    creating = true
                 }
-                .keyboardShortcut("n", modifiers: .command)
                 .help("New Profile")
-                Button {
-                    openWindow(id: "import")
-                } label: {
-                    Label("Import", systemImage: "square.and.arrow.down")
-                }
-                .help("Import from FortiClient")
+                // Without it VoiceOver names the toolbar item after the symbol ("add").
+                .accessibilityLabel("New Profile")
             }
             ToolbarItem(placement: .primaryAction) {
                 ConnectButton(model: model)
@@ -86,23 +94,39 @@ struct ProfilesWindow: View {
         .onChange(of: model.focusEmsFor) { id in
             if id != nil { creating = false }
         }
+        .onChange(of: model.newProfileRequested) { _ in takeNewProfileRequest() }
+        .onAppear { takeNewProfileRequest() }
+    }
+
+    private func takeNewProfileRequest() {
+        guard model.newProfileRequested else { return }
+        model.newProfileRequested = false
+        creating = true
     }
 }
 
 /// `ContentUnavailableView` exists from macOS 14; this keeps macOS 13 working.
-struct ContentUnavailableCompat: View {
+struct ContentUnavailableCompat<Actions: View>: View {
     let title: String
     let symbol: String
     let message: String
+    @ViewBuilder var actions: () -> Actions
 
     var body: some View {
         if #available(macOS 14, *) {
-            ContentUnavailableView(title, systemImage: symbol, description: Text(message))
+            ContentUnavailableView {
+                Label(title, systemImage: symbol)
+            } description: {
+                Text(message)
+            } actions: {
+                actions()
+            }
         } else {
             VStack(spacing: 8) {
                 Image(systemName: symbol).font(.system(size: 40)).foregroundStyle(.secondary)
                 Text(title).font(.title2)
                 Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                actions().padding(.top, 8)
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -264,9 +288,14 @@ struct EmsStatusRow: View {
                 }
             }
             .help(status?.state == "not-registered"
-                  ? "Nothing to do: Fortino registers this Mac with the EMS the next time you connect. For a Mac the EMS has never seen, the administrator may also supply a deployment DMG (Enroll with EMS… in the menu)."
+                  ? "Nothing to do: Fortino registers this Mac with the EMS the next time you connect. For a Mac the EMS has never seen, the administrator may also supply a deployment DMG (Enroll with Package…)."
                   : detail)
         }
+    }
+
+    private func openEnrollment() {
+        openWindow(id: "enrollment")
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private var emsTrustFailed: Bool {
@@ -385,6 +414,10 @@ struct ProfileEditor: View {
     @State private var serverError: ProtoError?
     @State private var saving = false
     @State private var confirmDelete = false
+    /// Fields the user has edited; a new profile shows a field's error only after that, or
+    /// after Create, so an empty form doesn't open covered in red.
+    @State private var touched: Set<String> = []
+    @State private var attempted = false
     @FocusState private var focus: Field?
 
     enum Field: Hashable { case name, host, port, ems, realm, username }
@@ -397,7 +430,7 @@ struct ProfileEditor: View {
     private var errors: [String: String] { draft.errors }
 
     private func fieldError(_ key: String) -> String? {
-        if let e = errors[key] { return e }
+        if let e = errors[key], profile != nil || attempted || touched.contains(key) { return e }
         if let s = serverError, s.field?.hasSuffix(key) == true || (key == "ems" && s.field == "endpoint.ems") {
             return s.message
         }
@@ -416,12 +449,14 @@ struct ProfileEditor: View {
                     TextField("Port", text: $draft.port)
                         .frame(width: 70)
                         .focused($focus, equals: .port)
+                        .onChange(of: draft.port) { _ in touched.insert("port") }
                         .accessibilityLabel("VPN gateway port")
                 }
                 if let e = fieldError("port") { errorText(e) }
                 VStack(alignment: .leading, spacing: 2) {
                     TextField("EMS server", text: $draft.ems, prompt: Text("ems.example.org:9016"))
                         .focused($focus, equals: .ems)
+                        .onChange(of: draft.ems) { _ in touched.insert("ems") }
                         .accessibilityLabel("EMS server")
                     if let e = fieldError("ems") {
                         errorText(e)
@@ -432,7 +467,7 @@ struct ProfileEditor: View {
                 field("Realm", text: $draft.realm, key: "realm", focus: .realm, prompt: "Optional")
             }
             Section("Account") {
-                field("Name", text: $draft.name, key: "name", focus: .name)
+                field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
                 field("Username", text: $draft.username, key: "username", focus: .username,
                       prompt: "Asked when connecting")
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
@@ -470,7 +505,7 @@ struct ProfileEditor: View {
                 Button(profile == nil ? "Create" : "Save", action: save)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
-                    .disabled(!errors.isEmpty || saving || isActiveProfile)
+                    .disabled(saving || isActiveProfile || (!errors.isEmpty && (profile != nil || attempted)))
             }
         }
         .formStyle(.grouped)
@@ -495,6 +530,7 @@ struct ProfileEditor: View {
             TextField(label, text: text, prompt: prompt.map { Text($0) })
                 .focused($focus, equals: f)
                 .accessibilityLabel(label)
+                .onChange(of: text.wrappedValue) { _ in touched.insert(key) }
             if let e = fieldError(key) { errorText(e) }
         }
     }
@@ -504,7 +540,8 @@ struct ProfileEditor: View {
     }
 
     private func save() {
-        guard let spec = draft.spec(base: profile?.spec) else { return }
+        attempted = true
+        guard errors.isEmpty, let spec = draft.spec(base: profile?.spec) else { return }
         saving = true
         serverError = nil
         Task {

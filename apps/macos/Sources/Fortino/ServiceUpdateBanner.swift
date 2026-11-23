@@ -15,7 +15,7 @@ extension ServiceUpdate {
         case .afterDisconnect:
             return "Fortino was updated. The VPN service switches to the new version when you disconnect."
         case .restarting:
-            return "Restarting the VPN service with the new version…"
+            return "Restarting the VPN service…"
         case .otherCopy:
             return "The VPN service belongs to another copy of Fortino. Keep one copy in Applications and open it from there."
         case .needsAdminRestart:

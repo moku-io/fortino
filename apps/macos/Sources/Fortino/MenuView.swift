@@ -54,7 +54,9 @@ struct ConnectionSummary: View {
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: VPNService
+    @ObservedObject private var optionKey = OptionKey.shared
     @Environment(\.openWindow) private var openWindow
+    @State private var host = WindowRef()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -62,7 +64,10 @@ struct MenuView: View {
             if service.state == .requiresApproval {
                 notice("Allow Fortino's VPN service in System Settings to connect.",
                        symbol: "lock.shield", tint: .orange)
-                MenuRow(title: "Open Login Items Settings…") { service.openLoginItemsSettings() }
+                MenuRow(title: "Open Login Items Settings…") {
+                    closePanel()
+                    service.openLoginItemsSettings()
+                }
             } else if case .failed(let why) = service.state {
                 notice(why, symbol: "exclamationmark.triangle.fill", tint: .orange)
             } else if let u = model.serviceUpdate, u != .afterDisconnect || model.serviceError == nil {
@@ -93,25 +98,36 @@ struct MenuView: View {
             }
 
             Divider().padding(.vertical, 2)
-            MenuRow(title: model.profiles.isEmpty ? "Add a VPN Profile…" : "Profiles…") {
+            MenuRow(title: model.profiles.isEmpty ? "Add a VPN Profile…" : "Open Fortino…") {
+                closePanel()
+                if model.profiles.isEmpty { model.newProfileRequested = true }
                 openWindow(id: "profiles")
                 NSApp.activate(ignoringOtherApps: true)
             }
-            MenuRow(title: "Import from FortiClient…") {
-                openWindow(id: "import")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            MenuRow(title: "Enroll with EMS…") {
-                openWindow(id: "enrollment")
-                NSApp.activate(ignoringOtherApps: true)
-            }
-            if service.isManaged && !service.cliInstalled {
-                MenuRow(title: "Install Command-Line Tool…",
-                        help: "Adds the fortino command to /usr/local/bin") {
-                    if let e = service.installCLI() { model.actionError = e }
+            if model.profiles.isEmpty {
+                // First run: importing is the usual way in for someone coming from FortiClient.
+                MenuRow(title: "Import from FortiClient…") {
+                    closePanel()
+                    openWindow(id: "import")
+                    NSApp.activate(ignoringOtherApps: true)
                 }
             }
-            LogLevelRow(model: model)
+            SettingsRow(willOpen: closePanel)
+            if optionKey.isDown {
+                // Troubleshooting, shown while Option is held (like the system's Wi-Fi menu).
+                Divider().padding(.vertical, 2)
+                LogLevelRow(model: model)
+                MenuRow(title: "Open Service Log in Console") {
+                    closePanel()
+                    ServiceLog.openInConsole()
+                }
+                .disabled(!ServiceLog.exists)
+                MenuRow(title: "Show Service Log in Finder") {
+                    closePanel()
+                    ServiceLog.revealInFinder()
+                }
+                .disabled(!ServiceLog.exists)
+            }
             Divider().padding(.vertical, 2)
             MenuRow(title: "Quit Fortino", help: "The VPN stays connected after quitting") {
                 NSApp.terminate(nil)
@@ -119,6 +135,7 @@ struct MenuView: View {
         }
         .padding(8)
         .frame(width: 300)
+        .background(WindowReader(ref: host))
         .task {
             service.refresh()
             service.refreshCLI()
@@ -126,11 +143,37 @@ struct MenuView: View {
         }
     }
 
+    /// Closes the menu-bar panel before an action that opens a window or another app; SwiftUI
+    /// leaves it open otherwise. Not the Menu Preview window, which shows the same view.
+    /// It toggles through the status item, as a click on the icon does: closing the window
+    /// directly leaves SwiftUI thinking the panel is open, and the next click is lost.
+    private func closePanel() {
+        guard let w = host.window, w.level == .popUpMenu, w.isVisible else { return }
+        if let button = Self.statusButton() {
+            button.performClick(nil)
+        } else {
+            w.close()
+        }
+    }
+
+    private static func statusButton() -> NSStatusBarButton? {
+        func find(_ v: NSView?) -> NSStatusBarButton? {
+            guard let v else { return nil }
+            if let b = v as? NSStatusBarButton { return b }
+            return v.subviews.lazy.compactMap(find).first
+        }
+        for w in NSApp.windows where w.className.contains("StatusBarWindow") {
+            if let b = find(w.contentView?.superview ?? w.contentView) { return b }
+        }
+        return nil
+    }
+
     @ViewBuilder
     private func serviceUpdateNotice(_ u: ServiceUpdate) -> some View {
         notice(u.message(state: model.state), symbol: u.symbol, tint: u.tint)
         if u.offersRestart(state: model.state) {
             MenuRow(title: "Restart VPN Service…", help: "Asks for an administrator's password") {
+                closePanel()
                 model.restartServiceAsAdmin()
             }
         }
@@ -246,6 +289,65 @@ struct LogLevelRow: View {
         .padding(.horizontal, 8)
         .disabled(model.serviceError != nil)
         .help("Daemon log verbosity. Secrets are never logged at any level.")
+    }
+}
+
+/// "Settings…": `openSettings` from macOS 14, the responder-chain action before.
+struct SettingsRow: View {
+    let willOpen: () -> Void
+
+    var body: some View {
+        if #available(macOS 14, *) {
+            SettingsRow14(willOpen: willOpen)
+        } else {
+            MenuRow(title: "Settings…") {
+                willOpen()
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
+        }
+    }
+}
+
+@available(macOS 14, *)
+private struct SettingsRow14: View {
+    let willOpen: () -> Void
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        MenuRow(title: "Settings…") {
+            willOpen()
+            NSApp.activate(ignoringOtherApps: true)
+            openSettings()
+        }
+    }
+}
+
+/// The window a view is in, kept by reference so reading it doesn't redraw the view.
+final class WindowRef {
+    weak var window: NSWindow?
+}
+
+struct WindowReader: NSViewRepresentable {
+    let ref: WindowRef
+
+    final class Probe: NSView {
+        var ref: WindowRef?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            ref?.window = window
+        }
+    }
+
+    func makeNSView(context: Context) -> Probe {
+        let v = Probe()
+        v.ref = ref
+        return v
+    }
+
+    func updateNSView(_ view: Probe, context: Context) {
+        view.ref = ref
+        ref.window = view.window
     }
 }
 

@@ -27,6 +27,8 @@ final class AppModel: ObservableObject {
     @Published var selectedProfileId: String?
     /// Profile to show in the editor with the EMS field focused ("Set EMS server").
     @Published var focusEmsFor: String?
+    /// File → New Profile: the Profiles window opens the new-profile form and clears this.
+    @Published var newProfileRequested = false
     /// The daemon's log level; nil when unknown or a custom `RUST_LOG` filter.
     @Published var logLevel: String?
     /// EMS registration state by `host:port`.
@@ -235,6 +237,12 @@ final class AppModel: ObservableObject {
                 emsStatus[server.display] = nil
             }
         }
+    }
+
+    /// Re-reads the level, which `fortino log-level` may have changed.
+    func refreshLogLevel() async {
+        guard let c = client else { return }
+        logLevel = try? await c.logLevel()
     }
 
     func setLogLevel(_ level: String) {

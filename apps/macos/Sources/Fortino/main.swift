@@ -18,25 +18,75 @@ struct FortinoApp: App {
                     for id in ids where id != "profiles" { openWindow(id: id) }
                 }
         }
+        .commands { FortinoCommands(model: model) }
 
         MenuBarExtra {
             MenuView(model: model, service: delegate.service)
         } label: {
             MenuBarIcon(state: model.state)
+                // Opening Fortino again (Finder, Spotlight) shows the Profiles window, so the app
+                // stays reachable when the menu-bar item is hidden behind the notch.
+                .onReceive(NotificationCenter.default.publisher(for: .fortinoShowProfiles)) { _ in
+                    openWindow(id: "profiles")
+                    NSApp.activate(ignoringOtherApps: true)
+                }
         }
         .menuBarExtraStyle(.window)
 
-        Window("Import Profiles", id: "import") {
+        // Reached from the File menu and the Profiles window, so not listed in the Window menu.
+        Window("Import from FortiClient", id: "import") {
             ImportWindow(model: model)
         }
+        .defaultSize(width: 680, height: 640)
+        .commandsRemoved()
         Window("Enroll with EMS", id: "enrollment") {
             EnrollmentWindow(model: model)
         }
+        .commandsRemoved()
+
+        Settings {
+            SettingsView(model: model, service: delegate.service)
+        }
+
         // Development aid: the menu content in a normal window (see FORTINO_DEBUG_OPEN).
         Window("Menu Preview", id: "menu-preview") {
             MenuView(model: model, service: delegate.service)
         }
+        .commandsRemoved()
     }
+}
+
+/// File and Help menu items for the actions that used to crowd the menu-bar panel.
+struct FortinoCommands: Commands {
+    let model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Profile") {
+                model.newProfileRequested = true
+                show("profiles")
+            }
+            .keyboardShortcut("n")
+            Button("Import from FortiClient…") { show("import") }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+            Divider()
+            Button("Enroll with EMS Package…") { show("enrollment") }
+        }
+        CommandGroup(replacing: .help) {
+            Button("Open Service Log in Console") { ServiceLog.openInConsole() }
+            Button("Show Service Log in Finder") { ServiceLog.revealInFinder() }
+        }
+    }
+
+    private func show(_ id: String) {
+        openWindow(id: id)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+extension Notification.Name {
+    static let fortinoShowProfiles = Notification.Name("org.fortino.showProfiles")
 }
 
 @MainActor
@@ -45,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         service.ensureRegistered()
+        _ = OptionKey.shared
         // The Dock icon is shown only while an app window is open; otherwise Fortino lives in the
         // menu bar alone, like other menu-bar apps.
         let center = NotificationCenter.default
@@ -68,6 +119,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Opening the app while it runs (Finder, Spotlight, `open`) shows the Profiles window when
+    /// none is open.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        let open = NSApp.windows.contains { Self.isAppWindow($0) && $0.isVisible }
+        if !open { NotificationCenter.default.post(name: .fortinoShowProfiles, object: nil) }
+        return false
     }
 
     /// "Quit" from the Dock closes the windows and leaves Fortino in the menu bar. Quit from the
