@@ -1,5 +1,5 @@
-//! Sans-IO codecs for the FortiGate SSL VPN, written from the design notes and the
-//! observations. Nothing here performs I/O, so every codec is unit-testable.
+//! Sans-IO codecs for the FortiGate SSL VPN. Nothing here performs I/O, so every codec is
+//! unit-testable.
 //!
 //! - [`http`]: HTTP/1.1 request encoding with an exact header order, and an incremental
 //!   response parser.
@@ -10,7 +10,7 @@
 //! - [`frame`]: the `0x5050` PPP-over-TLS frame codec.
 //! - [`ppp`]: a PPP client (LCP and IPCP) that brings the link up and carries IPv4.
 //!
-//! Behaviour that is inferred rather than observed carries an `UNVERIFIED` comment.
+//! Behaviour that is inferred rather than observed on a gateway carries an `UNVERIFIED` comment.
 
 pub mod config;
 pub mod frame;

@@ -1,4 +1,4 @@
-//! Replies: `<REPLYTYPE>: KEY|value|…|`, and typed views of the four the agent
+//! Replies: `<REPLYTYPE>: KEY|value|…|` , and typed views of the four the agent
 //! uses.
 //!
 //! Every typed view sorts keys into three groups: understood, refused (remote commands,
@@ -163,7 +163,7 @@ impl ProbeReply {
 }
 
 /// Profile objects EMS may push in a reply, with the checksum the client echoes back
-///. Values stay encoded; the agent decodes the ones it applies.
+/// Values stay encoded; the agent decodes the ones it applies.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pushed {
     /// `ZCONF` + `CSUM`: main profile.

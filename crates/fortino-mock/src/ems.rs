@@ -1,12 +1,12 @@
-//! Mock EMS server, built from the design notes.
+//! Mock EMS server.
 //!
 //! One TLS connection per request: the client sends `MSG_HEADER` + `X-FCCK-<TYPE>` and the
 //! server answers one `<REPLYTYPE>: KEY|value|…|` line and closes (`PERCON|0`). It handles
 //! PROBE, REGISTER (optionally with a connection key), mini/full keepalives, deregistration
 //! (`FCT_UNREG`) and TAG, pushes host-verification rules as `ZHVR`, and maps rule results to tags.
 //!
-//! Every behaviour that is inferred rather than observed carries an `UNVERIFIED` comment and must
-//! match the client's assumption.
+//! Every behaviour that is inferred rather than observed carries an `UNVERIFIED` comment and
+//! must match the client's assumption.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

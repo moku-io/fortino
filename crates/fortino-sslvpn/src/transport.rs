@@ -1,5 +1,5 @@
 //! TLS to the gateway and one-request-per-connection HTTP, as FortiClient's login does
-//!.
+//! (each request on a new connection).
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

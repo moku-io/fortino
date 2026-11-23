@@ -4,7 +4,7 @@
 //! reports for one profile, to probe how an EMS reacts — for example an `OSVER` the deployment
 //! does not list, or antivirus / feature-bitmap claims. It deliberately steps around the
 //! "posture never lies" rule (AGENTS.md), so it is driven only by a per-profile map an operator
-//! fills in by hand after reading [the design notes];
+//! fills in by hand;
 //! there is no friendly field picker, and it is empty in normal use.
 //!
 //! Everything debug lives here and behind the `debug_ems_sysinfo` profile field, so removing the

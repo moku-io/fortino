@@ -1,6 +1,6 @@
 //! The client's identity on the wire, and request building with a fixed header order.
 //!
-//! the default profile reproduces FortiClient 7.4 for macOS. GATEWAY-1 refuses
+//! The default profile matches FortiClient 7.4 for macOS on the wire. GATEWAY-1 refuses
 //! tunnel access without `FSV_EMS_SN`, so these headers decide admission. The values the
 //! headers carry (hostname, EMS serial) must be true for this host: an EMS serial is only sent
 //! once this client is registered to that EMS.
@@ -14,7 +14,7 @@ pub const FORTICLIENT_MAC_UA: &str = "FortiSSLVPN (Mac OS X; SV1 [SV{v=02.01; f=
 /// FortiClient `Accept` header.
 pub const FORTICLIENT_ACCEPT: &str =
     "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
-/// The `Host` value FortiClient's tunnel code sends on the tunnel request.
+/// The `Host` value sent on the tunnel request.
 pub const TUNNEL_HOST: &str = "sslvpn";
 
 /// Which request shape to send.
@@ -97,10 +97,9 @@ impl Body {
 ///
 /// `host` is the gateway as configured (`name` or `name:port`). `cookies` are sent in order as
 /// one `Cookie` header.
-// UNVERIFIED: FortiClient's additional headers come in the order User-Agent, Accept,
-// FSV_HOSTNAME, FSV_EMS_SN, EMSSN_tenant. Where Host,
-// Cookie, Content-Type, Content-Length and Connection sit relative to them is not recorded;
-// this order is a placeholder until a header order is confirmed.
+// UNVERIFIED: the identity headers go in the order User-Agent, Accept, FSV_HOSTNAME,
+// FSV_EMS_SN, EMSSN_tenant. Where Host, Cookie, Content-Type, Content-Length and Connection sit
+// relative to them is not known; this order is a placeholder until a header order is confirmed.
 pub fn build(
     id: &ClientIdentity,
     method: &'static str,
@@ -155,9 +154,10 @@ pub fn build(
 
 /// The request that switches the TLS connection into PPP tunnel mode.
 ///
-/// `fct_uid` is appended as `?uuid=` when the gateway's `/remote/info` sets `0x80`
-/// (`FortiClient UID flag`); FortiClient builds the same target (`GET /remote/sslvpn-tunnel?uuid=<uid>`).
-// UNVERIFIED: FortiClient also sends User-Agent and FSV_HOSTNAME;  GATEWAY-2 accepted Host + User-Agent + Cookie.
+/// `fct_uid` is appended as `?uuid=` when the gateway's `/remote/info` sets `0x80` (the
+/// FortiClient UID flag).
+// UNVERIFIED: which identity headers the gateway expects here. GATEWAY-2 accepted Host + User-Agent +
+// Cookie.
 pub fn tunnel_request(id: &ClientIdentity, cookie: &str, fct_uid: Option<&str>) -> Request {
     let mut target = "/remote/sslvpn-tunnel".to_owned();
     if let Some(uid) = fct_uid.and_then(uid_param) {

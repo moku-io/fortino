@@ -1,12 +1,12 @@
-//! Mock FortiGate SSL VPN, built from the design notes and the observations.
+//! Mock FortiGate SSL VPN.
 //!
 //! It reproduces the GATEWAY-1/GATEWAY-2 login sequence (password → `ret=2` token request → `ret=1`
 //! with `SVPNTMPCOOKIE` → `hostcheck_install` swap → `SVPNCOOKIE`), serves the tunnel XML, and
 //! runs a PPP peer on `/remote/sslvpn-tunnel` that waits for the client's LCP, assigns an
 //! address and DNS through IPCP, and answers ICMP echo.
 //!
-//! Every behaviour that is inferred rather than observed
-//! carries an `UNVERIFIED` comment and must match the client's assumption.
+//! Every behaviour that is inferred rather than observed carries an `UNVERIFIED` comment and
+//! must match the client's assumption.
 
 use std::collections::{HashMap, HashSet};
 use std::net::Ipv4Addr;
@@ -101,8 +101,8 @@ pub struct TunnelCfg {
     pub split_dns: Vec<SplitDnsCfg>,
     /// Split routes as `a.b.c.d/m.m.m.m`.
     pub routes: Vec<String>,
-    /// Reject the tunnel request unless it carries `?uuid=<this value>` (the gateway's
-    /// `FortiClient UID flag`, `/remote/info` bit `0x80`).
+    /// Reject the tunnel request unless it carries `?uuid=<this value>` (the
+    /// FortiClient UID flag, `/remote/info` bit `0x80`).
     pub require_uid: Option<String>,
 }
 

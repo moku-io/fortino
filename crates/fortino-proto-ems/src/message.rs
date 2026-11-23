@@ -3,7 +3,7 @@
 //! ```text
 //! MSG_HEADER: FCTUID=<uid>\n        header lines KEY=value\n (LF only)
 //! …
-//! SIZE=<8 digits>\n                       exact byte length of the whole message
+//! SIZE=<8 digits>\n                  exact byte length of the whole message
 //! \r\n
 //! X-FCCK-<TYPE>: KEY|value|…|
 //! \r\n
@@ -24,11 +24,11 @@ use crate::sysinfo::SysInfo;
 /// `PROTO_VER` sent by FortiClient 7.4.
 pub const PROTO_VER: &str = "1.0.1";
 
-/// Width of the `SIZE` value (`<8 digits>`).
+/// Width of the `SIZE` value (decimal, space-padded to eight characters).
 const SIZE_WIDTH: usize = 8;
 
-/// `SIZE` is the exact length of the message. FortiClient's log can show a 16-byte gap; it comes from
-/// the client censoring its log copy, not from the wire.
+/// `SIZE` is the exact length of the message. FortiClient's own log can show a
+/// smaller value because it censors its log copy; the wire carries the exact length.
 pub const SIZE_DELTA: usize = 0;
 
 /// Request types that use `MSG_HEADER`.
@@ -67,8 +67,8 @@ pub enum BuildError {
     TooLarge,
 }
 
-/// The `MSG_HEADER` values. `FCTVER` and `CAPS` come from the declared compatibility profile
-///; everything else describes this machine.
+/// The `MSG_HEADER` values. `FCTVER` and `CAPS` come from the declared compatibility profile;
+/// everything else describes this machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     /// `FCTUID`.

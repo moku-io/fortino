@@ -1,8 +1,7 @@
 //! `fortinod`: the Fortino daemon.
 //!
 //! Owns the profile store, the single machine-wide session slot, the tunnel worker and all
-//! network changes. Clients (`fortino`, the desktop app) talk to it over a Unix socket; see
-//! the design notes.
+//! network changes. Clients (`fortino`, the desktop app) talk to it over a Unix socket.
 
 pub mod auth;
 pub mod config;

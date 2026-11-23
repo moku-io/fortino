@@ -2,8 +2,8 @@
 //!
 //! One worker runs per connection attempt. The daemon sends [`WorkerCommand`]s and receives
 //! [`WorkerEvent`]s. The production adapter (openfortivpn in private adapter mode) will
-//! implement the same interface over the private socket pair described in
-//! the design notes. The [`FakeWorker`] drives the daemon deterministically in tests and
+//! implement the same interface over the private socket pair
+//! ([`crate::worker_wire`]). The [`FakeWorker`] drives the daemon deterministically in tests and
 //! in the development daemon.
 
 use std::net::Ipv4Addr;

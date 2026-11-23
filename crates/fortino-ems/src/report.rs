@@ -24,8 +24,8 @@ pub struct Compat {
 impl Default for Compat {
     fn default() -> Self {
         Self {
-            // UNVERIFIED: the oldest version EMS servers accept is not known; this is the
-            // version known to be accepted.
+            // UNVERIFIED: the oldest version EMS servers accept is not known; this is a
+            // version they are known to accept.
             version: "7.4.4.1831".into(),
             // UNVERIFIED: CAPS bits are not decoded. Zero claims no optional capability.
             caps: 0,
@@ -34,8 +34,8 @@ impl Default for Compat {
     }
 }
 
-/// Feature bits Fortino has: 0x10 VPN, and
-/// 0x8, which FortiClient always sets (UNVERIFIED). Antivirus (0x1), firewall (0x2), web
+/// Feature bits Fortino has: 0x10 VPN, and 0x8, which FortiClient always sets
+/// (UNVERIFIED: core agent). Antivirus (0x1), firewall (0x2), web
 /// filter (0x4), vulnerability scan (0x20), sandbox, ZTNA (0x40000) and the rest stay clear.
 pub const FEATURES: u32 = 0x8 | 0x10;
 
@@ -158,7 +158,7 @@ pub fn full(
     // No software inventory and a hardware form-factor Fortino does not detect.
     s.push("INSTALLED_APPS", "0")?;
     s.push("ENABLED_APPS", "0")?;
-    // UNVERIFIED: DESKTOP is a form-factor flag, not posture; FortiClient sent 0 here.
+    // UNVERIFIED: DESKTOP is a form-factor flag, not posture; 0 is what FortiClient reports.
     s.push("DESKTOP", "0")?;
     s.push("COM_SN", f.serial.clone().unwrap_or_default())?;
     s.push("COM_MAN", f.manufacturer.clone().unwrap_or_default())?;

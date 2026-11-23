@@ -1,12 +1,12 @@
-//! `GET /remote/info`. Both target gateways return single-quoted attributes on an
-//! `api` element.
+//! `GET /remote/info`. Both target gateways return single-quoted attributes on an `api`
+//! element.
 
 use quick_xml::Reader;
 use quick_xml::events::Event;
 
-/// `f` bit: enable the FortiClient UID.
+/// `f` bit: the gateway wants the FortiClient UID (`?uuid=` on the tunnel request).
 pub const FLAG_FCT_UID: u32 = 0x80;
-/// `f` bit: send `FSV_EMS_SN` and the tenant header.
+/// `f` bit: the gateway wants `FSV_EMS_SN` and the tenant header.
 pub const FLAG_EMS_SN: u32 = 0x100;
 
 /// Parsed `/remote/info`.

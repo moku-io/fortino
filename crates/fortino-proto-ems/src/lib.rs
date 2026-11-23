@@ -1,5 +1,4 @@
-//! Sans-IO codecs for the FortiClient EMS protocol, written from the design notes
-//!. Nothing here performs I/O.
+//! Sans-IO codecs for the FortiClient EMS protocol. Nothing here performs I/O.
 //!
 //! - [`message`]: requests (`MSG_HEADER`, `X-FCCK-<TYPE>` bodies, `SIZE`).
 //! - [`reply`]: replies (`<TYPE>: KEY|value|…|`) and typed views of them.

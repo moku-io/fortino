@@ -33,7 +33,7 @@ pub enum Trust {
     CaFile(std::path::PathBuf),
     /// DER certificates (tests).
     Roots(Vec<Vec<u8>>),
-    /// Explicit SHA-256 pins of the gateway's leaf certificate. The
+    /// Explicit SHA-256 pins of the gateway's leaf certificate (`trusted-cert`). The
     /// chain and name are not checked, but the handshake signature still is. Set only by an
     /// administrator for a gateway whose certificate does not match its configured address.
     Pinned(Vec<[u8; 32]>),

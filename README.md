@@ -1,6 +1,6 @@
 # Fortino
 
-Fortino is an open-source, independent reimplementation of FortiClient, starting with its macOS VPN client. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
+Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient EMS, starting with macOS. The goal is a native client that a FortiGate and its FortiClient Enterprise Management Server (EMS) can admit like the vendor client: SSL VPN login with password and one-time codes, the PPP and TUN tunnel modes, split routes and split DNS, the IPv6 block, and EMS registration with truthful posture. openfortivpn and OpenConnect cover the basic SSL VPN; neither speaks EMS or reproduces FortiClient's wire identity, which some gateways require before they admit a tunnel.
 
 **Built for people who use more than one organization's VPN.** Each VPN profile names its own EMS server, and Fortino keeps a separate EMS registration for each. Connecting to a gateway uses that gateway's EMS, so switching between organizations needs no unregistering and re-registering, unlike FortiClient, which holds one EMS registration per machine.
 
@@ -9,25 +9,16 @@ Fortino is an open-source, independent reimplementation of FortiClient, starting
 **Build status.**
 
 - The daemon, CLI and app work end to end against a fake tunnel (milestone 2): profile store, kernel-credential peer checks, one serialized session, journaled network changes, password/OTP prompts.
-- The native SSL VPN worker (`crates/fortino-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM. See [the backlog].
+- The native SSL VPN worker (`crates/fortino-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM.
 - Not started: TUN tunnel mode, DTLS, the EMS agent and packaging.
 
-## Start here
+## Documentation
 
-| Decision | Project reference |
+| Topic | Where |
 | --- | --- |
-| What did FortiClient and the independent client actually do on each target? | [Session evidence and limits] |
-| Which work comes first and what counts as success? | [Delivery and verification queue] |
-| Who owns the tunnel, network state, credentials, CLI and menu? | [Client contracts] |
-| How do we integrate PPP and test a real connection? | [Worker and macOS networking] |
-| What must a worker speak to the daemon? | [Worker channel protocol] |
-| How does the EMS agent register, report and stay truthful? | [EMS agent] |
-| How does Fortino differ from FortiClient on the wire (debugging a real deployment)? | [Differences from FortiClient] |
+| Run and test the daemon, CLI and app locally | [DEVELOPMENT.md](DEVELOPMENT.md) |
+| Contributing and licensing of contributions | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Rules for coding agents | [AGENTS.md](AGENTS.md) |
-| How does profile import work? | [XML import contract and fixtures] |
-| How do I run and test the daemon, CLI and app locally? | [Development] |
-| Which product observations can we reproduce offline? | [Desktop interface] and [native evidence ledger] |
-| Where did these decisions come from? | [Source revisions and integration decisions] |
 
 The first delivery target is GATEWAY-2 on Apple Silicon and macOS 15. GATEWAY-1 additionally requires the client's own EMS registration before it admits a tunnel, so the EMS agent follows the native SSL VPN worker. openfortivpn is kept only as a lab reference for comparing behaviour.
 
@@ -40,7 +31,7 @@ cargo build --locked --workspace
 cargo test --locked --workspace
 ```
 
-Run the development daemon with the fake worker (unprivileged, no network changes) and drive it from the CLI or the app. See [development] for details.
+Run the development daemon with the fake worker (unprivileged, no network changes) and drive it from the CLI or the app. See [DEVELOPMENT.md](DEVELOPMENT.md) for details.
 
 ```sh
 cargo run -p fortinod -- --config fixtures/dev/fortinod-fake.toml   # allowed_uids must list your UID
@@ -61,7 +52,7 @@ scripts/macos-vm-dmg-test.sh   # optional: install it from the DMG in a disposab
 
 `security find-identity -v -p codesigning` prints the exact identity name for `SIGN_APP`. The first build asks to let the terminal control Finder (it lays out the DMG window); allow it in System Settings → Privacy & Security → Automation.
 
-Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [development].
+Users drag Fortino from the DMG to Applications, open it and allow its VPN service once in System Settings → General → Login Items; moving it to the Trash uninstalls it. The version comes from `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist`; raise it (and `CFBundleVersion`) for each build you hand out. Profiles survive reinstalling. For what the bundle contains, configuration and notarization, see [DEVELOPMENT.md](DEVELOPMENT.md#installer).
 
 ### Release checklist
 

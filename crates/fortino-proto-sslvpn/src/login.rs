@@ -1,7 +1,7 @@
-//! `/remote/logincheck`: request forms and classification of the gateway's answer.
+//! `/remote/logincheck` : request forms and classification of the gateway's answer.
 //!
 //! The forms are the ones a client of ours already used successfully on GATEWAY-1 and GATEWAY-2
-//!, which match FortiClient.
+//! and match what FortiClient sends.
 //!
 //! Observed GATEWAY-1/GATEWAY-2 sequence:
 //! 1. password form → `ret=2,…,tokeninfo=remote_token_auth` (second factor needed);
@@ -110,7 +110,7 @@ pub enum LoginOutcome {
         /// Path to `GET`, validated as same-origin under `/remote/`.
         path: String,
     },
-    /// The portal runs a host check this client does not implement.
+    /// The portal runs a host check this client does not implement (not implemented yet).
     HostCheckRequired,
     /// The user limit is reached (`<!--fgt limit user-->`).
     LimitReached,

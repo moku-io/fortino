@@ -1,4 +1,4 @@
-//! Host-verification rules.
+//! Host-verification rules (`hv.conf`, pushed as `ZHVR`).
 //!
 //! ```xml
 //! <forticlient_configuration><host_verification><max_tag_flag/><max_rule_flag/>

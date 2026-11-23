@@ -56,7 +56,7 @@ pub struct Facts {
     pub interfaces: Vec<Interface>,
 }
 
-/// The OS description as FortiClient builds it: the product name (letters and
+/// The OS description in FortiClient's format: the product name (letters and
 /// spaces only), a space, then the version (digits and dots only), with `.0` appended to a
 /// two-part version (`26.1` → `26.1.0`). Just the name when the version is unknown.
 pub fn os_version(name: &str, version: &str) -> String {

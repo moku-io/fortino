@@ -1,5 +1,5 @@
 //! The production tunnel worker: the native SSL VPN client behind the private worker channel
-//!. `fortinod` starts it per attempt with the channel on stdin,
+//! ([`fortino_core::worker_wire`]). `fortinod` starts it per attempt with the channel on stdin,
 //! either as `fortinod --worker` (installed app) or as the `fortino-sslvpn-worker` binary.
 //!
 //! Trust: `ca_file` from the daemon is either a PEM CA bundle or, for a gateway whose

@@ -243,7 +243,7 @@ fn up_config(
         dns_domains: Vec::new(),
         split_dns,
         gateway_ip,
-        // FortiClient blocks IPv6 on an IPv4-only tunnel.
+        // Like FortiClient, block IPv6 on an IPv4-only tunnel.
         block_ipv6: st.assigned_v6.is_none(),
     })
 }

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. Before opening a pull request, read [AGENTS.md](AGENTS.md): the independent, secrets and root rules apply to people too.
+Thanks for helping. Before opening a pull request, read [AGENTS.md](AGENTS.md): the truthfulness, secrets and root rules apply to people too.
 
 ## Licensing of contributions
 
@@ -12,4 +12,4 @@ Sign off each commit (`git commit -s`) to confirm that you wrote the change or h
 
 ## Checks
 
-Before submitting: `cargo fmt --all`, `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`, and `swift build --package-path apps/macos` for app changes.
+See [DEVELOPMENT.md](DEVELOPMENT.md). Before submitting: `cargo fmt --all`, `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`, and `swift build --package-path apps/macos` for app changes.

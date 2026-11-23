@@ -1,5 +1,5 @@
-//! EMS agent (M3): keeps one registration per EMS server and talks to the server that owns the
-//! gateway being connected.
+//! EMS agent: keeps one registration per EMS server and talks to the server that owns the
+//! gateway being connected. Switching gateways never requires unregistering.
 //!
 //! - [`transport`]: TLS, one connection per exchange.
 //! - [`store`]: registrations side by side, keyed by server.

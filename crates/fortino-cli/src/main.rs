@@ -1,7 +1,7 @@
 //! `fortino`: the Fortino command-line interface.
 //!
 //! Talks to `fortinod` over its control socket. Prompts go to the controlling terminal, results to
-//! stdout, diagnostics to stderr. Exit codes follow the design notes.
+//! stdout, diagnostics to stderr.
 
 mod prompt;
 mod render;

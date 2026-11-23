@@ -3,8 +3,7 @@
 //! The worker executable has a fixed path: the daemon itself (`fortinod --worker`) or an
 //! administrator-configured binary. It gets a minimal environment, fixed arguments, `/dev/null` for output, and its end of the socket pair as
 //! standard input. It runs in its own process group so its PPP child is stopped with it.
-//! and
-//! [`fortino_core::worker_wire`].
+//! See [`fortino_core::worker_wire`].
 
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;

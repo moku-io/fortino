@@ -15,13 +15,12 @@
 //! platform UUID, which is also what an installed FortiClient uses). `--facts` prints what
 //! would be reported, without contacting anything. `--forticlient` shows whether an installed
 //! FortiClient manages this device on that EMS (values masked; contacts nothing). Secrets are
-//! never printed. `--caps N` overrides the `CAPS` header for an experiment.
+//! never printed. `--caps N` overrides the `CAPS` header for an experiment (default 0).
 //!
 //! `--sysinfo KEY=VAL` (repeatable) is the debug SYSINFO override: it replaces or adds a SYSINFO
 //! key in what REGISTER and keepalives report, for testing how an EMS reacts (e.g.
 //! `--sysinfo "OSVER=macOS 26.1.0"` for the golden_gate / Tahoe test). These values may not be
-//! truthful; use only against an EMS you are authorised to test. See
-//! the design notes.
+//! truthful; use only against an EMS you are authorised to test.
 
 use std::process::ExitCode;
 

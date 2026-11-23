@@ -1,4 +1,4 @@
-//! Registrations, one per EMS server, side by side . Connecting a profile uses the registration of that profile's EMS; nothing here
+//! Registrations, one per EMS server, side by side. Connecting a profile uses the registration of that profile's EMS; nothing here
 //! ever moves one server's identity to another.
 
 use std::path::{Path, PathBuf};
@@ -117,7 +117,7 @@ impl Store {
         write_private(&p, text.as_bytes())
     }
 
-    /// Removes a registration. Only on explicit user request.
+    /// Removes a registration. Only on explicit user request .
     pub fn remove(&self, key: &str) -> Result<bool, Error> {
         if self.load(key)?.is_none() {
             return Ok(false);

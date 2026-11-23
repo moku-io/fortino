@@ -7,7 +7,7 @@
 //! fortino-sslvpn-probe <credentials-file> --info [--pin SHA256]
 //! ```
 //!
-//! The credentials file has `key: value`
+//! The credentials file (kept outside the repository) has `key: value`
 //! lines: `gateway` (host:port), `username`, `password`, optional `otp`, and optional
 //! `test endpoint to check if connection succeed`. Secrets are never printed.
 //!

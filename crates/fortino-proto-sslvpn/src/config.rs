@@ -56,7 +56,7 @@ impl std::fmt::Display for Ipv4Net {
 pub enum TunnelMethod {
     /// PPP in `0x5050` frames (`/remote/sslvpn-tunnel`).
     Ppp,
-    /// Raw IP.
+    /// Raw IP (`/remote/sslvpn-tunnel2`).
     Tun,
     /// Anything else, verbatim (bounded).
     Other(String),
