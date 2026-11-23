@@ -14,7 +14,7 @@
 set -euo pipefail
 
 export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
-BASE="${FORTINO_VM_BASE:-ofc-sequoia-base}"
+BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 VM="fortino-dmg-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DMG="${1:-$(ls -t "$ROOT"/target/package/Fortino-*.dmg | head -1)}"

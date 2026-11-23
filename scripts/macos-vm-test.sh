@@ -7,11 +7,11 @@
 #
 # Environment:
 #   TART_HOME  where Tart keeps VMs (default /Volumes/esterno1/tart)
-#   FORTINO_VM_BASE  base VM to clone (default ofc-sequoia-base)
+#   FORTINO_VM_BASE  base VM to clone (default ghcr.io/cirruslabs/macos-sequoia-xcode:26.6)
 set -euo pipefail
 
 export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
-BASE="${FORTINO_VM_BASE:-ofc-sequoia-base}"
+BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 VM="fortino-test-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STAGE="$(mktemp -d)"

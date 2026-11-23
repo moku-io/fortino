@@ -17,7 +17,7 @@
 set -euo pipefail
 
 export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
-BASE="${FORTINO_VM_BASE:-ofc-sequoia-base}"
+BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="$ROOT/target/vm-live.state"
 S="/Volumes/My Shared Files/fortino"
