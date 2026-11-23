@@ -26,7 +26,8 @@ struct FortinoApp: App {
                     if !ids.isEmpty {
                         NSApp.activate(ignoringOtherApps: true)
                         // `org.fortino.debug.front` with a window title brings that window to
-                        // the front; with "menu" it opens the menu-bar panel, as a click would.
+                        // the front; "menu" opens the menu-bar panel, as a click would; "close"
+                        // closes the app's windows.
                         DistributedNotificationCenter.default().addObserver(
                             forName: .init("org.fortino.debug.front"), object: nil, queue: .main
                         ) { note in
@@ -35,6 +36,10 @@ struct FortinoApp: App {
                                 NSApp.activate(ignoringOtherApps: true)
                                 if title == "menu" {
                                     debugStatusButton()?.performClick(nil)
+                                } else if title == "close" {
+                                    for w in NSApp.windows where w.styleMask.contains(.titled) {
+                                        w.close()
+                                    }
                                 } else {
                                     NSApp.windows.first { $0.title == title }?.makeKeyAndOrderFront(nil)
                                 }
