@@ -146,6 +146,7 @@ pub async fn run() -> io::Result<()> {
                 ip_policy: IpPolicy::SplitIpv4,
                 ems: ems_identity(ems_serial.as_deref(), ems_tenant.as_deref()),
                 fct_uid: fct_uid.clone(),
+                debug_ems_sysinfo: Default::default(),
             },
         ))
     })();

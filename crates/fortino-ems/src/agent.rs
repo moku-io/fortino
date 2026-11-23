@@ -43,6 +43,9 @@ pub struct Agent {
     pub uid: Uid,
     /// Registrations.
     pub store: Store,
+    /// Debug only: SYSINFO overrides applied to register/keepalive reports. Empty in normal
+    /// use; see [`crate::debug_override`].
+    pub overrides: std::collections::BTreeMap<String, String>,
 }
 
 fn log_notes(what: &str, notes: &KeyNotes) {
@@ -145,6 +148,7 @@ impl Agent {
     ) -> Result<Registration, Error> {
         let probe = self.probe(conn).await?;
         let sysinfo = report::full(&self.facts, &self.compat, None)?;
+        let sysinfo = crate::debug_override::apply(sysinfo, &self.overrides);
         let body = message::register(&sysinfo, key)?;
         let reply = conn
             .exchange(|ip| {
@@ -229,6 +233,7 @@ impl Agent {
         } else {
             report::mini(&self.facts, Some(&reg))?
         };
+        let sysinfo = crate::debug_override::apply(sysinfo, &self.overrides);
         let body = message::keepalive(&sysinfo, &User::default())?;
         let reply = conn
             .exchange(|ip| {

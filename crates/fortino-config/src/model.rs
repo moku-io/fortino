@@ -4,6 +4,7 @@
 //! the daemon stores it. The daemon revalidates every proposed profile; it never trusts a
 //! client's validation.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
@@ -272,6 +273,40 @@ pub struct ProfileSpec {
     /// Administrator-provisioned trust configuration (CA bundle) ID.
     #[serde(default = "default_trust")]
     pub trust_id: String,
+    /// Debug only: SYSINFO key/value overrides the EMS agent injects into what it reports for
+    /// this profile. Empty in normal use. Keys are SYSINFO
+    /// keys (`[A-Z0-9_]`); this deliberately bypasses the truthful-posture guarantee, so it is a
+    /// hand-entered expert escape hatch with no field picker, kept isolated for easy removal.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub debug_ems_sysinfo: BTreeMap<String, String>,
+}
+
+/// Most debug SYSINFO overrides accepted on one profile.
+pub const MAX_DEBUG_OVERRIDES: usize = 64;
+/// Longest debug SYSINFO key accepted.
+pub const MAX_DEBUG_KEY_LEN: usize = 64;
+/// Longest debug SYSINFO value accepted.
+pub const MAX_DEBUG_VALUE_LEN: usize = 4096;
+
+/// Validates the debug SYSINFO overrides: bounded count, `[A-Z0-9_]` keys, and values with no
+/// control characters. Never inspects or echoes a value.
+fn validate_debug_overrides(m: &BTreeMap<String, String>) -> Result<(), FieldError> {
+    if m.len() > MAX_DEBUG_OVERRIDES {
+        return Err(FieldError::new("debugEmsSysinfo", "too_many"));
+    }
+    for (k, v) in m {
+        let key_ok = !k.is_empty()
+            && k.len() <= MAX_DEBUG_KEY_LEN
+            && k.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+        if !key_ok {
+            return Err(FieldError::new("debugEmsSysinfo", "invalid_key"));
+        }
+        if v.len() > MAX_DEBUG_VALUE_LEN || v.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\0')) {
+            return Err(FieldError::new("debugEmsSysinfo", "invalid_value"));
+        }
+    }
+    Ok(())
 }
 
 /// Normalizes a profile name: trim, Unicode NFC, reject control characters and empty names.
@@ -325,6 +360,7 @@ impl ProfileSpec {
             credential_mode: CredentialMode::Password,
             ip_policy: IpPolicy::SplitIpv4,
             trust_id: default_trust(),
+            debug_ems_sysinfo: BTreeMap::new(),
         }
     }
 
@@ -353,6 +389,7 @@ impl ProfileSpec {
         if !trust_ok {
             return Err(FieldError::new("trustId", "invalid_trust_id"));
         }
+        validate_debug_overrides(&self.debug_ems_sysinfo)?;
         Ok(Self {
             name,
             description,
@@ -443,6 +480,35 @@ mod tests {
         s.endpoint.realm = None;
         s.endpoint.port = 0;
         assert_eq!(s.validate().unwrap_err().code, "invalid_port");
+    }
+
+    #[test]
+    fn debug_overrides_validation() {
+        let base = ProfileSpec::new("x", "a.example".parse().unwrap());
+        let with = |m: BTreeMap<String, String>| {
+            let mut s = base.clone();
+            s.debug_ems_sysinfo = m;
+            s.validate()
+        };
+        // Accepts valid SYSINFO keys and round-trips them.
+        let mut ok = BTreeMap::new();
+        ok.insert("OSVER".to_string(), "macOS 26.1.0".to_string());
+        ok.insert("AVSIG_VER".to_string(), "9.9.9".to_string());
+        assert_eq!(with(ok.clone()).unwrap().debug_ems_sysinfo, ok);
+        // Lower-case / spaced keys are rejected.
+        let bad_key = BTreeMap::from([("os_ver".to_string(), "x".to_string())]);
+        assert_eq!(with(bad_key).unwrap_err().code, "invalid_key");
+        // Newlines in a value are rejected (they'd break SYSINFO framing).
+        let bad_val = BTreeMap::from([("OSVER".to_string(), "a\nb".to_string())]);
+        assert_eq!(with(bad_val).unwrap_err().code, "invalid_value");
+        // Empty map is the default and serializes away.
+        let j = serde_json::to_string(&base).unwrap();
+        assert!(!j.contains("debugEmsSysinfo"));
+        // The field round-trips through camelCase JSON.
+        let full = with(ok).unwrap();
+        let j = serde_json::to_string(&full).unwrap();
+        assert!(j.contains("debugEmsSysinfo"));
+        assert_eq!(serde_json::from_str::<ProfileSpec>(&j).unwrap(), full);
     }
 
     #[test]

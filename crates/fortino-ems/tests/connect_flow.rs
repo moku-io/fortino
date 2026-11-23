@@ -133,6 +133,7 @@ async fn start_fc(
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: None,
+        debug_ems_sysinfo: Default::default(),
     });
     Rig {
         _gw: gw,
@@ -449,6 +450,7 @@ async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: None,
+        debug_ems_sysinfo: Default::default(),
     });
     let ems = ems::start(&EmsScenario::default()).await.unwrap();
     let mut r = Rig {

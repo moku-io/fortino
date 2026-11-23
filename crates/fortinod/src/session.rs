@@ -509,6 +509,7 @@ impl Session {
             ems: None,
             // Filled by the EMS workers once the device UID is known for this EMS.
             fct_uid: None,
+            debug_ems_sysinfo: profile.spec.debug_ems_sysinfo.clone(),
         });
         let wake = Arc::new(Notify::new());
         g.active = Some(Active {

@@ -478,6 +478,7 @@ async fn run() -> Result<(), String> {
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: device_uid(),
+        debug_ems_sysinfo: Default::default(),
     });
 
     let started = std::time::Instant::now();

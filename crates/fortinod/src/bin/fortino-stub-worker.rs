@@ -91,6 +91,7 @@ async fn main() -> io::Result<()> {
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: None,
+        debug_ems_sysinfo: Default::default(),
     });
     let wire_attempt = if misbehave == "stale-attempt" {
         "someone-else".to_owned()

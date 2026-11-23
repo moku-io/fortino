@@ -47,6 +47,9 @@ pub struct WorkerConfig {
     /// request only when `/remote/info` asks for it (`f` bit `0x80`), the same value the EMS
     /// knows for this device.
     pub fct_uid: Option<String>,
+    /// Debug only: per-profile SYSINFO overrides the EMS agent injects into its register and
+    /// keepalive reports. Empty in normal use; see `fortino_ems::debug_override`.
+    pub debug_ems_sysinfo: std::collections::BTreeMap<String, String>,
 }
 
 /// Worker progress stages.
@@ -410,6 +413,7 @@ mod tests {
             ip_policy: IpPolicy::SplitIpv4,
             ems: None,
             fct_uid: None,
+            debug_ems_sysinfo: Default::default(),
         }
     }
 

@@ -47,6 +47,11 @@ public struct ProfileSpec: Codable, Equatable {
     public var credentialMode: String
     public var ipPolicy: IpPolicy
     public var trustId: String
+    /// Debug only: SYSINFO key/value overrides injected into what the EMS agent reports for this
+    /// profile. `nil`/absent in normal use. Kept optional so
+    /// the whole feature deletes cleanly. (Synthesized Codable omits a `nil` optional, matching
+    /// the daemon's `skip_serializing_if`.)
+    public var debugEmsSysinfo: [String: String]?
 
     public init(name: String, endpoint: Endpoint) {
         self.name = name
@@ -56,6 +61,7 @@ public struct ProfileSpec: Codable, Equatable {
         self.credentialMode = "password"
         self.ipPolicy = .splitIpv4
         self.trustId = "system"
+        self.debugEmsSysinfo = nil
     }
 }
 

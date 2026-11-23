@@ -41,6 +41,7 @@ fn agent(dir: &std::path::Path) -> Agent {
         },
         uid: Uid::parse("0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9").unwrap(),
         store: Store::open(dir).unwrap(),
+        overrides: Default::default(),
     }
 }
 

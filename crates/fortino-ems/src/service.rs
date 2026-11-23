@@ -182,7 +182,12 @@ impl EmsWorkers {
         }
     }
 
-    fn context(&self, server: EmsServer, server_settings: ServerSettings) -> Ctx {
+    fn context(
+        &self,
+        server: EmsServer,
+        server_settings: ServerSettings,
+        overrides: std::collections::BTreeMap<String, String>,
+    ) -> Ctx {
         Ctx {
             registration_lock: self.registration_lock.clone(),
             settings: self.settings.clone(),
@@ -191,6 +196,7 @@ impl EmsWorkers {
             server,
             server_settings,
             connect_override: self.connect_override,
+            overrides,
         }
     }
 
@@ -232,7 +238,8 @@ impl EmsWorkers {
             }
             _ => return Err(Error::RegistrationDisabled),
         };
-        let ctx = self.context(server, settings);
+        // Explicit package enrollment carries no per-profile debug overrides.
+        let ctx = self.context(server, settings, std::collections::BTreeMap::new());
         match ctx.prepare(Some(install_uid)).await?.0 {
             Prepared::Deferred(_) => Ok(("managed-by-forticlient", false)),
             Prepared::Agent(Some(_)) => {
@@ -370,6 +377,8 @@ struct Ctx {
     server: EmsServer,
     server_settings: ServerSettings,
     connect_override: Option<std::net::SocketAddr>,
+    /// Debug only: per-profile SYSINFO overrides for this attempt. Empty in normal use.
+    overrides: std::collections::BTreeMap<String, String>,
 }
 
 impl Ctx {
@@ -406,6 +415,7 @@ impl Ctx {
             facts,
             uid,
             store: Store::open(&self.settings.state_dir)?,
+            overrides: self.overrides.clone(),
         })
     }
 
@@ -596,7 +606,7 @@ impl WorkerFactory for EmsWorkers {
             tracing::warn!(ems = %server, "profile names an EMS that is neither configured nor approved on this Mac; connecting without EMS");
             return self.inner.spawn(cfg);
         };
-        let ctx = Arc::new(self.context(server, server_settings));
+        let ctx = Arc::new(self.context(server, server_settings, cfg.debug_ems_sysinfo.clone()));
         let inner = self.inner.clone();
         let (ev_tx, ev_rx) = mpsc::channel(16);
         let (cmd_tx, mut cmd_rx) = mpsc::channel(4);

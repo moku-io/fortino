@@ -10,6 +10,7 @@
 //! - [`forticlient`]: deferring to an installed FortiClient that manages the same device.
 
 pub mod agent;
+pub mod debug_override;
 pub mod forticlient;
 pub mod hostcheck;
 pub mod report;

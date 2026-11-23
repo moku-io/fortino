@@ -48,6 +48,7 @@ async fn start_with_uid(sc: Scenario, uid: Option<&str>) -> Rig {
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: uid.map(Into::into),
+        debug_ems_sysinfo: Default::default(),
     });
     Rig {
         _mock: mock,
@@ -256,6 +257,7 @@ async fn untrusted_certificate_fails_before_credentials() {
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
         fct_uid: None,
+        debug_ems_sysinfo: Default::default(),
     });
     loop {
         match next(&mut h).await {

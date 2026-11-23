@@ -2,9 +2,9 @@
 //!
 //! ```text
 //! fortino-ems-probe HOST[:PORT] --print-pin
-//! fortino-ems-probe HOST[:PORT] --pin SHA256 [--ca FILE] [--facts]
-//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --register [--key-file FILE] --yes
-//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --keepalive [--full] [--check-host] [--tag BITS|-]
+//! fortino-ems-probe HOST[:PORT] --pin SHA256 [--ca FILE] [--facts] [--sysinfo KEY=VAL]...
+//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --register [--key-file FILE] [--sysinfo KEY=VAL]... --yes
+//! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --keepalive [--full] [--check-host] [--tag BITS|-] [--sysinfo KEY=VAL]...
 //! fortino-ems-probe HOST[:PORT] --pin SHA256 --state DIR --deregister --yes
 //! fortino-ems-probe HOST[:PORT] --forticlient
 //! ```
@@ -16,6 +16,12 @@
 //! would be reported, without contacting anything. `--forticlient` shows whether an installed
 //! FortiClient manages this device on that EMS (values masked; contacts nothing). Secrets are
 //! never printed. `--caps N` overrides the `CAPS` header for an experiment.
+//!
+//! `--sysinfo KEY=VAL` (repeatable) is the debug SYSINFO override: it replaces or adds a SYSINFO
+//! key in what REGISTER and keepalives report, for testing how an EMS reacts (e.g.
+//! `--sysinfo "OSVER=macOS 26.1.0"` for the golden_gate / Tahoe test). These values may not be
+//! truthful; use only against an EMS you are authorised to test. See
+//! the design notes.
 
 use std::process::ExitCode;
 
@@ -35,6 +41,28 @@ fn arg<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn has(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
+}
+
+/// The value after every occurrence of `name` (for repeatable flags).
+fn args_all<'a>(args: &'a [String], name: &str) -> Vec<&'a str> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, a)| a.as_str() == name)
+        .filter_map(|(i, _)| args.get(i + 1))
+        .map(String::as_str)
+        .collect()
+}
+
+/// Debug SYSINFO overrides from `--sysinfo KEY=VAL` flags.
+fn parse_overrides(args: &[String]) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut map = std::collections::BTreeMap::new();
+    for item in args_all(args, "--sysinfo") {
+        let (k, v) = item
+            .split_once('=')
+            .ok_or_else(|| format!("--sysinfo needs KEY=VALUE, got {item:?}"))?;
+        map.insert(k.to_owned(), v.to_owned());
+    }
+    Ok(map)
 }
 
 #[tokio::main]
@@ -62,8 +90,10 @@ async fn run() -> Result<(), String> {
     let server: EmsServer = target.parse().map_err(|e| format!("EMS address: {e}"))?;
 
     let facts = fortino_platform::facts::collect().map_err(|e| e.to_string())?;
+    let overrides = parse_overrides(&args)?;
     if has(&args, "--facts") {
         let s = report::full(&facts, &Compat::default(), None).map_err(|e| e.to_string())?;
+        let s = fortino_ems::debug_override::apply(s, &overrides);
         for (k, v) in s.iter() {
             println!("{k}={v}");
         }
@@ -130,6 +160,7 @@ async fn run() -> Result<(), String> {
         facts,
         uid: Uid::parse(&uid).map_err(|e| e.to_string())?,
         store: Store::open(state).map_err(|e| e.to_string())?,
+        overrides,
     };
 
     if has(&args, "--register") {

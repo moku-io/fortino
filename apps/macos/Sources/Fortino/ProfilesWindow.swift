@@ -354,6 +354,8 @@ struct Draft {
     var username = ""
     var description = ""
     var policy: IpPolicy = .splitIpv4
+    /// Debug only: EMS SYSINFO overrides. See DebugOverridesBox.swift.
+    var debugOverrides: [DebugKV] = []
 
     init() {}
 
@@ -367,6 +369,7 @@ struct Draft {
         username = s.usernameHint ?? ""
         description = s.description ?? ""
         policy = s.ipPolicy
+        debugOverrides = debugOverrideRows(s.debugEmsSysinfo)
     }
 
     var errors: [String: String] {
@@ -376,6 +379,7 @@ struct Draft {
         if case let .error(m) = checkPort(port) { e["port"] = m }
         if case let .failure(err) = parseEms(ems) { e["ems"] = err.message }
         if case let .error(m) = checkRealm(realm) { e["realm"] = m }
+        if let m = debugOverridesError(debugOverrides) { e["debug"] = m }
         return e
     }
 
@@ -401,6 +405,7 @@ struct Draft {
         s.usernameHint = t(username)
         s.description = t(description)
         s.ipPolicy = policy
+        s.debugEmsSysinfo = debugOverridesMap(debugOverrides)
         return s
     }
 }
@@ -482,7 +487,11 @@ struct ProfileEditor: View {
                 Text("Server certificates are always verified. IPv6 traffic is never sent through the tunnel.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            DebugOverridesBox(rows: $draft.debugOverrides)
             if let s = serverError, s.field == nil {
+                errorText(s.message)
+            }
+            if let s = serverError, s.field == "debugEmsSysinfo" {
                 errorText(s.message)
             }
             if isActiveProfile {
