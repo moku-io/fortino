@@ -39,6 +39,21 @@ public enum IpPolicy: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Which resolvers answer while connected.
+public enum DnsMode: String, Codable, CaseIterable, Identifiable {
+    /// The gateway's DNS for the domains it names; everything else on this Mac's DNS.
+    case gateway
+    /// This Mac's own DNS for every name; the gateway's DNS is not applied.
+    case local
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .gateway: return "As the gateway sets it"
+        case .local: return "This Mac's DNS"
+        }
+    }
+}
+
 public struct ProfileSpec: Codable, Equatable {
     public var name: String
     public var description: String?
@@ -46,6 +61,9 @@ public struct ProfileSpec: Codable, Equatable {
     public var endpoint: Endpoint
     public var credentialMode: String
     public var ipPolicy: IpPolicy
+    /// `nil` means `.gateway`. Left out when it is the default, so an older service that doesn't
+    /// know the field still accepts the profile.
+    public var dnsMode: DnsMode?
     public var trustId: String
     /// Debug only: SYSINFO key/value overrides injected into what the EMS agent reports for this
     /// profile. `nil`/absent in normal use. Kept optional so
@@ -60,6 +78,7 @@ public struct ProfileSpec: Codable, Equatable {
         self.endpoint = endpoint
         self.credentialMode = "password"
         self.ipPolicy = .splitIpv4
+        self.dnsMode = nil
         self.trustId = "system"
         self.debugEmsSysinfo = nil
     }

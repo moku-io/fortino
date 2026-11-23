@@ -49,6 +49,7 @@ pub fn profile_details(p: &Profile) {
         s.username_hint.as_deref().unwrap_or("(ask)")
     );
     println!("Scope:       {}", s.ip_policy.describe());
+    println!("DNS:         {}", s.dns_mode.describe());
     println!("Trust:       {} (strict certificate checks)", s.trust_id);
 }
 

@@ -6,7 +6,7 @@ Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient E
 
 ## Current status
 
-Fortino 0.5.2 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
+Fortino 0.5.3 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
 
 ## Documentation
 
@@ -94,6 +94,8 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **One registration per EMS, selected by the VPN profile** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
 | FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
 | Per-domain split DNS | Yes (macOS controller) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
+| User-chosen split tunnel: only the subnets you list go through the VPN, the rest of the Internet stays on the Mac's own connection | Planned (today: the gateway's routes) | Partial (`--set-routes=0`, then your own routes) | Via vpnc-script or vpn-slice | Set by the gateway or EMS administrator |
+| DNS choice per profile: the gateway's DNS, or keep the Mac's own (like FortiClient's `inherit_local_dns`) | Yes: the gateway's DNS for the domains it names, or the Mac's DNS for every name; VPN DNS for every name is planned | `--set-dns=0` | Via vpnc-script | One global option, not per profile |
 | IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
 | Network rollback after crash | Yes (write-ahead journal) | Partial | Script-dependent | Yes |
 | macOS app | Native SwiftUI menu bar | Third-party GUIs | OpenConnect-GUI | Yes |

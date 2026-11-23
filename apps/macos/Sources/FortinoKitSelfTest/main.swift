@@ -78,6 +78,20 @@ if let d = try? JSONEncoder().encode(spec),
     check(false, "spec encodes")
 }
 
+// DNS mode: the default is left out (older services reject unknown fields); "local" round-trips.
+var localSpec = spec
+localSpec.dnsMode = .local
+if let d0 = try? JSONEncoder().encode(spec),
+   let o0 = try? JSONSerialization.jsonObject(with: d0) as? [String: Any],
+   let d1 = try? JSONEncoder().encode(localSpec),
+   let o1 = try? JSONSerialization.jsonObject(with: d1) as? [String: Any] {
+    check(o0["dnsMode"] == nil, "default DNS mode omitted")
+    check(o1["dnsMode"] as? String == "local", "local DNS mode encoded")
+    check((try? JSONDecoder().decode(ProfileSpec.self, from: d1))?.dnsMode == .local, "DNS mode decodes")
+} else {
+    check(false, "DNS mode encodes")
+}
+
 // Live daemon round trip, when FORTINO_SOCKET points at a development daemon.
 if let path = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] {
     let sem = DispatchSemaphore(value: 0)

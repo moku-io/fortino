@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use fortino_config::{EmsServer, Host, IpPolicy, Profile, ProfileSpec};
+use fortino_config::{DnsMode, EmsServer, Host, IpPolicy, Profile, ProfileSpec};
 use fortino_core::client::{Client, DEFAULT_SOCKET};
 use fortino_core::proto::{
     ChallengeKind, ConnectParams, Empty, Event, ProfileImportParams, State, Status,
@@ -106,6 +106,27 @@ struct AddArgs {
     /// Route all IPv4 traffic through the VPN (IPv6 is not tunneled).
     #[arg(long)]
     full_ipv4: bool,
+    /// Which DNS answers while connected.
+    #[arg(long, value_enum)]
+    dns: Option<DnsArg>,
+}
+
+/// `--dns`: which resolvers answer while connected.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum DnsArg {
+    /// As the gateway sets it (default): its DNS for the domains it names.
+    Gateway,
+    /// This Mac's own DNS for every name; the gateway's DNS is not applied.
+    Local,
+}
+
+impl From<DnsArg> for DnsMode {
+    fn from(a: DnsArg) -> Self {
+        match a {
+            DnsArg::Gateway => DnsMode::Gateway,
+            DnsArg::Local => DnsMode::Local,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -145,6 +166,9 @@ struct EditArgs {
     /// Route only gateway-pushed networks through the VPN.
     #[arg(long)]
     split_ipv4: bool,
+    /// Which DNS answers while connected.
+    #[arg(long, value_enum)]
+    dns: Option<DnsArg>,
 }
 
 #[derive(Debug, Args)]
@@ -341,12 +365,16 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
             if a.full_ipv4 {
                 spec.ip_policy = IpPolicy::FullIpv4;
             }
+            if let Some(d) = a.dns {
+                spec.dns_mode = d.into();
+            }
             let p = c.profile_create(spec).await?;
             if json {
                 print_json(&p);
             } else {
                 println!("Created profile {} ({})", p.spec.name, p.id);
                 println!("Scope: {}", p.spec.ip_policy.describe());
+                println!("DNS:   {}", p.spec.dns_mode.describe());
             }
         }
         ProfileCmd::List => {
@@ -434,6 +462,9 @@ fn apply_edit(p: &Profile, e: EditArgs) -> Result<ProfileSpec, Failure> {
     }
     if e.split_ipv4 {
         s.ip_policy = IpPolicy::SplitIpv4;
+    }
+    if let Some(d) = e.dns {
+        s.dns_mode = d.into();
     }
     Ok(s)
 }

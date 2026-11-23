@@ -6,7 +6,7 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use fortino_config::IpPolicy;
+use fortino_config::{DnsMode, IpPolicy};
 use fortino_core::worker::TunnelConfig;
 use fortino_platform::journal::Journaled;
 use fortino_platform::{DnsConfig, IpNet, NetChange, NetPlatform, Route, RouteVia};
@@ -60,6 +60,23 @@ fn valid_unicast(a: Ipv4Addr) -> bool {
 fn valid_domain(d: &str) -> bool {
     d.parse::<fortino_config::Host>()
         .is_ok_and(|h| matches!(h, fortino_config::Host::Dns(_)))
+}
+
+/// The tunnel settings to apply under a profile's DNS choice. With [`DnsMode::Local`] the
+/// gateway's resolvers and match domains are dropped, so the Mac's own DNS answers every name;
+/// routes are unchanged.
+pub fn for_dns_mode(mut tc: TunnelConfig, mode: DnsMode) -> TunnelConfig {
+    if mode == DnsMode::Local {
+        if !tc.dns_servers.is_empty() || !tc.split_dns.is_empty() {
+            tracing::info!(
+                "profile keeps this Mac's DNS; the gateway's DNS settings are not applied"
+            );
+        }
+        tc.dns_servers.clear();
+        tc.dns_domains.clear();
+        tc.split_dns.clear();
+    }
+    tc
 }
 
 /// Validates tunnel settings and builds the ordered change list.
@@ -279,6 +296,42 @@ mod tests {
             gateway_ip: Ipv4Addr::new(203, 0, 113, 10),
             block_ipv6: true,
         }
+    }
+
+    #[test]
+    fn local_dns_applies_no_gateway_resolvers() {
+        let dns =
+            |c: &NetChange| matches!(c, NetChange::AddSplitDns { .. } | NetChange::SetDns { .. });
+        let mut t = tc();
+        t.split_dns = vec![SplitDnsRule {
+            domains: vec!["other.example".into()],
+            servers: vec![Ipv4Addr::new(10, 0, 0, 54)],
+        }];
+        let gateway = plan(
+            &for_dns_mode(t.clone(), DnsMode::Gateway),
+            IpPolicy::SplitIpv4,
+        )
+        .unwrap();
+        assert_eq!(gateway.iter().filter(|c| dns(c)).count(), 2);
+
+        for policy in [IpPolicy::SplitIpv4, IpPolicy::FullIpv4] {
+            let local = plan(&for_dns_mode(t.clone(), DnsMode::Local), policy).unwrap();
+            assert!(!local.iter().any(dns), "{policy:?}: {local:?}");
+            // Routes and the IPv6 block are unchanged.
+            let plain = plan(&t, policy).unwrap();
+            let routes =
+                |v: &[NetChange]| v.iter().filter(|c| !dns(c)).cloned().collect::<Vec<_>>();
+            assert_eq!(routes(&local), routes(&plain));
+        }
+
+        // A full tunnel whose gateway sends DNS without domains needs full-tunnel DNS (not
+        // available on macOS); keeping the Mac's DNS plans no DNS change at all.
+        let mut t = tc();
+        t.dns_domains.clear();
+        let full = plan(&t, IpPolicy::FullIpv4).unwrap();
+        assert!(full.iter().any(|c| matches!(c, NetChange::SetDns { .. })));
+        let local = plan(&for_dns_mode(t, DnsMode::Local), IpPolicy::FullIpv4).unwrap();
+        assert!(!local.iter().any(dns));
     }
 
     #[test]

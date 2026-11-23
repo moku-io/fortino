@@ -49,6 +49,7 @@ Unix socket paths are limited to about 100 bytes, so keep `socket_path` short.
 export FORTINO_SOCKET=$PWD/target/dev/fortinod.sock
 fortino profile add demo-vpn --host vpn.example.org --port 10443 --realm staff --ems-server ems.example.org:9016
 fortino profile list
+fortino profile edit demo-vpn --dns local                 # keep this Mac's DNS while connected (default: gateway)
 fortino connect demo-vpn                                  # prompts on the terminal
 fortino connect demo-vpn --password-fd 3 --otp-fd 4 3<pw 4<otp   # headless
 fortino status --watch --json

@@ -243,6 +243,29 @@ impl IpPolicy {
     }
 }
 
+/// Which resolvers answer while connected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DnsMode {
+    /// As the gateway sets it: its DNS servers answer the domains it names (all names in a
+    /// full tunnel); everything else keeps the Mac's resolvers.
+    #[default]
+    Gateway,
+    /// The Mac's own resolvers answer every name; the gateway's DNS settings are not applied.
+    /// Names only the VPN's DNS knows then do not resolve.
+    Local,
+}
+
+impl DnsMode {
+    /// Human-readable DNS choice.
+    pub fn describe(self) -> &'static str {
+        match self {
+            DnsMode::Gateway => "as the gateway sets it",
+            DnsMode::Local => "this Mac's own DNS (gateway DNS not applied)",
+        }
+    }
+}
+
 /// Default trust configuration ID: the shipped CA store.
 pub const DEFAULT_TRUST_ID: &str = "system";
 
@@ -270,6 +293,9 @@ pub struct ProfileSpec {
     /// IPv4 routing policy.
     #[serde(default)]
     pub ip_policy: IpPolicy,
+    /// Which resolvers answer while connected.
+    #[serde(default)]
+    pub dns_mode: DnsMode,
     /// Administrator-provisioned trust configuration (CA bundle) ID.
     #[serde(default = "default_trust")]
     pub trust_id: String,
@@ -359,6 +385,7 @@ impl ProfileSpec {
             },
             credential_mode: CredentialMode::Password,
             ip_policy: IpPolicy::SplitIpv4,
+            dns_mode: DnsMode::Gateway,
             trust_id: default_trust(),
             debug_ems_sysinfo: BTreeMap::new(),
         }
@@ -416,6 +443,22 @@ pub struct Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_mode_defaults_to_the_gateway_and_round_trips() {
+        let old = r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443}}"#;
+        let spec: ProfileSpec = serde_json::from_str(old).unwrap();
+        assert_eq!(spec.dns_mode, DnsMode::Gateway);
+        let mut local = spec.clone();
+        local.dns_mode = DnsMode::Local;
+        let json = serde_json::to_value(&local).unwrap();
+        assert_eq!(json["dnsMode"], "local");
+        let back: ProfileSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(back.dns_mode, DnsMode::Local);
+        let unknown =
+            r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443},"dnsMode":"vpn"}"#;
+        assert!(serde_json::from_str::<ProfileSpec>(unknown).is_err());
+    }
 
     #[test]
     fn hosts() {

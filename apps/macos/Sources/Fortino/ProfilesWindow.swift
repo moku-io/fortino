@@ -363,6 +363,7 @@ struct Draft {
     var username = ""
     var description = ""
     var policy: IpPolicy = .splitIpv4
+    var dns: DnsMode = .gateway
     /// Debug only: EMS SYSINFO overrides. See DebugOverridesBox.swift.
     var debugOverrides: [DebugKV] = []
 
@@ -378,6 +379,7 @@ struct Draft {
         username = s.usernameHint ?? ""
         description = s.description ?? ""
         policy = s.ipPolicy
+        dns = s.dnsMode ?? .gateway
         debugOverrides = debugOverrideRows(s.debugEmsSysinfo)
     }
 
@@ -414,6 +416,7 @@ struct Draft {
         s.usernameHint = t(username)
         s.description = t(description)
         s.ipPolicy = policy
+        s.dnsMode = dns == .gateway ? nil : dns
         s.debugEmsSysinfo = debugOverridesMap(debugOverrides)
         return s
     }
@@ -490,11 +493,19 @@ struct ProfileEditor: View {
                 Picker("Routing", selection: $draft.policy) {
                     ForEach(IpPolicy.allCases) { Text($0.label).tag($0) }
                 }
+                Picker("DNS", selection: $draft.dns) {
+                    ForEach(DnsMode.allCases) { Text($0.label).tag($0) }
+                }
             } header: {
                 Text("Network")
             } footer: {
-                Text("Server certificates are always verified. IPv6 traffic is never sent through the tunnel.")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    if draft.dns == .local {
+                        Text("This Mac's DNS answers every name. Names only the VPN's DNS knows won't resolve.")
+                    }
+                    Text("Server certificates are always verified. IPv6 traffic is never sent through the tunnel.")
+                }
+                .font(.caption).foregroundStyle(.secondary)
             }
             DebugOverridesBox(rows: $draft.debugOverrides)
             if let s = serverError, s.field == nil {

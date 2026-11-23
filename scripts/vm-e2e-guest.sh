@@ -2,7 +2,7 @@
 # Runs inside the disposable VM as root (called by scripts/macos-vm-e2e.sh). Full stack:
 # mock gateway on the VM's own address → fortinod (macOS controller) → fortino-sslvpn-worker (utun)
 # → fortino connect; then checks routes, DNS, the IPv6 block and traffic, disconnects and checks
-# that everything is restored.
+# that everything is restored. A second round repeats it with the profile keeping the Mac's DNS.
 set -uo pipefail
 B="${1:?binary dir}"
 W="$(mktemp -d /tmp/fortino-e2e.XXXX)"
@@ -61,6 +61,23 @@ sleep 1
 snapshot "$W/after"
 check "network restored after disconnect" 'diff -u "$W/before" "$W/after"'
 check "no utun left" '! ifconfig "$IF" >/dev/null 2>&1'
+
+# The same profile keeping the Mac's DNS: same routes, none of the gateway's DNS settings.
+"$W/fortino" profile edit Lab --dns local >/dev/null
+check "profile shows the Mac's own DNS" '"$W/fortino" profile show Lab | grep -q "^DNS:.*own DNS"'
+UTUNS_BEFORE=$(ifconfig -l | tr ' ' '\n' | grep '^utun' | sort)
+"$W/fortino" connect Lab --password-fd 3 --otp-fd 4 3< <(printf 'hunter2\n') 4< <(printf '123456\n')
+check "local DNS: connect succeeds" '"$W/fortino" status | grep -qi connected'
+IF=$(comm -13 <(echo "$UTUNS_BEFORE") <(ifconfig -l | tr ' ' '\n' | grep '^utun' | sort) | head -1)
+check "local DNS: split route 10.99/16 still via the tunnel ($IF)" 'route -n get 10.99.1.1 | grep -q "interface: $IF"'
+check "local DNS: no resolver for intra.example" '! scutil --dns | grep -q "intra.example"'
+check "local DNS: no Fortino resolver keys" '! echo "list State:/Network/Service/.*/DNS" | scutil | grep -qi fortino'
+check "local DNS: IPv6 block still loaded" 'pfctl -a com.apple/250.Fortino -s rules 2>/dev/null | grep -q "block drop quick inet6"'
+check "local DNS: ping through the tunnel" 'ping -c 2 -t 5 10.99.0.1 >/dev/null'
+"$W/fortino" disconnect
+sleep 1
+snapshot "$W/after-local"
+check "local DNS: network restored after disconnect" 'diff -u "$W/before" "$W/after-local"'
 
 kill $DAEMON $MOCK 2>/dev/null
 if [[ $fail != 0 ]]; then

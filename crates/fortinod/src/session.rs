@@ -794,6 +794,7 @@ impl Session {
             WorkerEvent::Up(tc) => {
                 a.progress_deadline = None;
                 let policy = a.profile.spec.ip_policy;
+                let tc = crate::netctl::for_dns_mode(tc, a.profile.spec.dns_mode);
                 g.state = State::Configuring;
                 self.publish(&mut g);
                 let res = lock(&self.net).apply(&tc, policy);
