@@ -64,21 +64,8 @@ impl PackageApprovals {
     /// certificate, which the administrator accepted after a warning (for an EMS reached by an
     /// address its certificate doesn't name). Any other content is refused.
     fn trust_for(&self, server: &EmsServer) -> Option<Trust> {
-        use sha2::{Digest, Sha256};
-        use std::os::unix::fs::MetadataExt;
-        let protected = |meta: &std::fs::Metadata| meta.uid() == 0 && meta.mode() & 0o022 == 0;
-        if !std::fs::symlink_metadata(&self.directory).is_ok_and(|m| m.is_dir() && protected(&m)) {
-            return None;
-        }
-        let marker = self
-            .directory
-            .join(hex::encode(Sha256::digest(server_key(server))));
-        if !std::fs::symlink_metadata(&marker)
-            .is_ok_and(|m| m.is_file() && protected(&m) && m.len() <= 256)
-        {
-            return None;
-        }
-        let content = std::fs::read_to_string(&marker).ok()?;
+        let (_, content) =
+            fortino_tls::markers::read_protected(&self.directory, &server_key(server), 0)?;
         marker_trust(&content, &self.ca_file)
     }
 }

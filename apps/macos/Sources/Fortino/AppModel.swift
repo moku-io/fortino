@@ -38,6 +38,8 @@ final class AppModel: ObservableObject {
     /// The failed attempt whose EMS certificate the user has since approved, so the row stops
     /// offering the review until a new attempt fails.
     @Published var reviewedEmsFailure: String?
+    /// The failed attempt whose gateway certificate the user has since trusted.
+    @Published var reviewedGatewayFailure: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -328,10 +330,43 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// The profile whose last attempt failed on the gateway certificate and hasn't been
+    /// reviewed since; nil otherwise.
+    var gatewayTrustFailure: Profile? {
+        guard state == .idle, let st = status, let r = st.lastResult, r.code == "trust_failure",
+              r.message.hasPrefix("gateway certificate"), r.attemptId != reviewedGatewayFailure
+        else { return nil }
+        return profiles.first { $0.id == st.profileId }
+    }
+
+    /// Shows the gateway's certificate and, if the user trusts it, pins it on this Mac
+    /// (administrator password). Connecting again then trusts exactly that certificate.
+    func reviewGatewayCertificate(_ profile: Profile) {
+        actionError = nil
+        let failed = status?.lastResult?.attemptId
+        let endpoint = profile.spec.endpoint
+        Task {
+            do {
+                let cert = try await ServerCertificate.fetch(
+                    host: endpoint.host, port: endpoint.port, kind: "VPN gateway")
+                // macOS may trust a chain Fortino's CA bundle can't complete; say so instead.
+                let reason = cert.trusted
+                    ? "macOS trusts this certificate, but Fortino could not verify it against its CA bundle."
+                    : nil
+                guard cert.confirmTrust(kind: "VPN gateway", server: "\(endpoint.host):\(endpoint.port)",
+                                        reason: reason) else { return }
+                try GatewayPin(endpoint: endpoint).write(pin: cert.sha256)
+                reviewedGatewayFailure = failed
+            } catch {
+                report(error)
+            }
+        }
+    }
+
     /// Checks the server's certificate, warns once if macOS doesn't trust it, and writes the
     /// approval (pinning the certificate the user accepted). False when the user cancelled.
     func approveWithCertificateCheck(_ server: EmsServer) async throws -> Bool {
-        let cert = try await EmsCertificate.fetch(server)
+        let cert = try await ServerCertificate.fetch(server)
         var pin: String?
         if !cert.trusted {
             guard cert.confirmTrust(for: server) else { return false }

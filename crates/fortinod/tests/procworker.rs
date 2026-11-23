@@ -45,6 +45,7 @@ fn harness(misbehave: Option<&str>, f: impl FnOnce(&mut FakeWorkerConfig)) -> H 
             path: env!("CARGO_BIN_EXE_fortino-stub-worker").into(),
             args: vec![],
             ca_dir: dir.path().into(),
+            gateway_pins: None,
             env,
         }),
         Box::new(JournaledController::new(
@@ -207,6 +208,7 @@ async fn missing_executable_fails_cleanly() {
             path: dir.path().join("does-not-exist"),
             args: vec![],
             ca_dir: dir.path().into(),
+            gateway_pins: None,
             env: vec![],
         }),
         Box::new(JournaledController::new(

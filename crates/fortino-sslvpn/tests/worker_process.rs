@@ -58,6 +58,7 @@ async fn harness(pin_ok: bool) -> H {
             path: env!("CARGO_BIN_EXE_fortino-sslvpn-worker").into(),
             args: vec![],
             ca_dir: dir.path().into(),
+            gateway_pins: None,
             env: vec![("FORTINO_WORKER_MEMORY_DEVICE".into(), "1".into())],
         }),
         Box::new(JournaledController::new(

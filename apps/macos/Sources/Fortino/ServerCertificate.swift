@@ -1,7 +1,7 @@
-// Checks an EMS server's certificate with the system's trust policy before the administrator
-// approves the server. An untrusted certificate (typically an EMS reached by an address its
-// certificate doesn't name) is shown once with its SHA-256; if accepted, the approval pins
-// exactly that certificate. Only the TLS handshake is sent.
+// Checks an EMS server's or VPN gateway's certificate with the system's trust policy. An
+// untrusted certificate (typically a server reached by an address its certificate doesn't
+// name) is shown once with its SHA-256; if accepted, the administrator's approval pins exactly
+// that certificate. Only the TLS handshake is sent.
 
 import AppKit
 import CryptoKit
@@ -9,7 +9,7 @@ import Foundation
 import FortinoKit
 import Security
 
-struct EmsCertificate {
+struct ServerCertificate {
     /// Whether macOS trusts the certificate for this host name or address.
     let trusted: Bool
     /// Why it isn't trusted, from the system's evaluation.
@@ -27,9 +27,14 @@ struct EmsCertificate {
     }
 
     /// Opens a TLS connection to `server`, evaluates its certificate and closes the connection.
-    static func fetch(_ server: EmsServer) async throws -> EmsCertificate {
-        guard let url = URL(string: "https://\(server.host):\(server.port)/") else {
-            throw ProtoError(code: "invalid_request", message: "Invalid EMS address.")
+    static func fetch(_ server: EmsServer) async throws -> ServerCertificate {
+        try await fetch(host: server.host, port: server.port, kind: "EMS server")
+    }
+
+    /// Opens a TLS connection to `host:port`, evaluates its certificate and closes the connection.
+    static func fetch(host: String, port: Int, kind: String) async throws -> ServerCertificate {
+        guard let url = URL(string: "https://\(host):\(port)/") else {
+            throw ProtoError(code: "invalid_request", message: "Invalid \(kind) address.")
         }
         let grab = Grab()
         let session = URLSession(configuration: .ephemeral, delegate: grab, delegateQueue: nil)
@@ -39,7 +44,7 @@ struct EmsCertificate {
         _ = try? await session.data(for: request)
         guard let cert = grab.result else {
             throw ProtoError(code: "transport_failure",
-                             message: "Could not reach the EMS server \(server.display) to check its certificate.")
+                             message: "Could not reach the \(kind) \(host):\(port) to check its certificate.")
         }
         return cert
     }
@@ -47,8 +52,8 @@ struct EmsCertificate {
     /// Captures the server trust at the TLS challenge and cancels before any request is sent.
     private final class Grab: NSObject, URLSessionDelegate, @unchecked Sendable {
         private let lock = NSLock()
-        private var captured: EmsCertificate?
-        var result: EmsCertificate? { lock.withLock { captured } }
+        private var captured: ServerCertificate?
+        var result: ServerCertificate? { lock.withLock { captured } }
 
         func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -61,7 +66,7 @@ struct EmsCertificate {
             let trusted = SecTrustEvaluateWithError(trust, &error)
             if let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = chain.first {
                 let der = SecCertificateCopyData(leaf) as Data
-                let cert = EmsCertificate(
+                let cert = ServerCertificate(
                     trusted: trusted,
                     reason: error.map { CFErrorCopyDescription($0) as String },
                     subject: (SecCertificateCopySubjectSummary(leaf) as String?) ?? "unknown",
@@ -73,15 +78,16 @@ struct EmsCertificate {
     }
 }
 
-extension EmsCertificate {
-    /// Asks whether to trust this untrusted certificate permanently for `server`.
+extension ServerCertificate {
+    /// Asks whether to trust this certificate permanently for `server` (`host:port`), described
+    /// as `kind` ("EMS server", "VPN gateway"). `reason` replaces the system's explanation.
     @MainActor
-    func confirmTrust(for server: EmsServer) -> Bool {
+    func confirmTrust(kind: String, server: String, reason override: String? = nil) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "The certificate of EMS server \(server.display) is not trusted"
+        alert.messageText = "The certificate of \(kind) \(server) is not trusted"
         alert.informativeText = """
-        \(reason ?? "macOS could not verify it.")
+        \(override ?? reason ?? "macOS could not verify it.")
 
         Issued to: \(subject)
         SHA-256: \(displayFingerprint)
@@ -94,5 +100,11 @@ extension EmsCertificate {
         alert.addButton(withTitle: "Trust Permanently")
         NSApp.activate(ignoringOtherApps: true)
         return alert.runModal() == .alertSecondButtonReturn
+    }
+
+    /// The EMS form of [`confirmTrust(kind:server:reason:)`].
+    @MainActor
+    func confirmTrust(for server: EmsServer) -> Bool {
+        confirmTrust(kind: "EMS server", server: server.display)
     }
 }

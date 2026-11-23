@@ -35,6 +35,8 @@ pub struct ProcessWorker {
     pub args: Vec<String>,
     /// Directory with `<trust-id>.pem` CA bundles.
     pub ca_dir: PathBuf,
+    /// Gateway certificate pins the administrator accepted in the app, or `None`.
+    pub gateway_pins: Option<GatewayPins>,
     /// Extra environment (tests only; production passes none).
     pub env: Vec<(String, String)>,
 }
@@ -130,6 +132,52 @@ pub fn ca_file_for(ca_dir: &std::path::Path, trust_id: &str) -> PathBuf {
         return PathBuf::from(SYSTEM_CA_BUNDLE);
     }
     f
+}
+
+/// Root-created gateway pin markers: one file per gateway (`host:port`), named by its SHA-256
+/// and holding `sha256:<hex>`, written by the app after the administrator accepted a gateway
+/// certificate macOS doesn't trust (typically a gateway reached by an address its certificate
+/// doesn't name). The worker then trusts exactly that leaf certificate for that gateway.
+#[derive(Debug, Clone)]
+pub struct GatewayPins {
+    /// Marker directory.
+    pub dir: PathBuf,
+    /// Required owner of the directory and markers (root in production).
+    pub owner: u32,
+}
+
+/// Default gateway pin directory.
+pub const GATEWAY_PIN_DIR: &str = "/private/var/db/fortino-gateway-pins";
+
+impl GatewayPins {
+    /// The protected pin marker for `host:port`, if one holds a valid pin.
+    pub fn marker_for(&self, host: &str, port: u16) -> Option<PathBuf> {
+        let key = format!("{}:{port}", host.to_ascii_lowercase());
+        let (path, content) = fortino_tls::markers::read_protected(&self.dir, &key, self.owner)?;
+        if fortino_tls::markers::gateway_pin(&content).is_none() {
+            tracing::warn!("gateway pin marker does not hold a SHA-256 pin; ignoring it");
+            return None;
+        }
+        Some(path)
+    }
+}
+
+/// The worker's trust file: an accepted gateway pin when the profile uses the default trust,
+/// otherwise [`ca_file_for`]. An administrator-provisioned trust ID always wins.
+pub fn trust_file_for(
+    ca_dir: &std::path::Path,
+    pins: Option<&GatewayPins>,
+    trust_id: &str,
+    host: &str,
+    port: u16,
+) -> PathBuf {
+    if trust_id == fortino_config::DEFAULT_TRUST_ID
+        && let Some(marker) = pins.and_then(|p| p.marker_for(host, port))
+    {
+        tracing::info!("using the gateway certificate pin accepted in the app");
+        return marker;
+    }
+    ca_file_for(ca_dir, trust_id)
 }
 
 /// Checks that the worker executable is a root-owned regular file not writable by others.
@@ -248,11 +296,18 @@ impl ProcessWorker {
             }
         };
         let (mut rd, mut wr) = stream.into_split();
-        let ca_file = ca_file_for(&self.ca_dir, &cfg.trust_id);
+        let host = cfg.endpoint.host.to_string();
+        let ca_file = trust_file_for(
+            &self.ca_dir,
+            self.gateway_pins.as_ref(),
+            &cfg.trust_id,
+            &host,
+            cfg.endpoint.port,
+        );
         let start = DaemonMsg::Start {
             v: WORKER_PROTOCOL_VERSION,
             attempt: cfg.attempt_id.clone(),
-            host: cfg.endpoint.host.to_string(),
+            host,
             port: cfg.endpoint.port,
             realm: cfg.endpoint.realm.clone(),
             username: cfg.username.clone(),
@@ -382,5 +437,39 @@ mod tests {
             dir.path().join("system.pem")
         );
         assert_eq!(ca_file_for(dir.path(), "tg2"), dir.path().join("tg2.pem"));
+    }
+
+    #[test]
+    fn an_accepted_gateway_pin_replaces_the_default_trust_only() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let d = tempfile::tempdir().unwrap();
+        let ca = d.path().join("ca");
+        let dir = d.path().join("pins");
+        std::fs::create_dir_all(&ca).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let pins = GatewayPins {
+            owner: std::fs::metadata(&dir).unwrap().uid(),
+            dir: dir.clone(),
+        };
+        let marker = dir.join(fortino_tls::markers::marker_name("vpn.example.com:443"));
+        let sys = PathBuf::from(SYSTEM_CA_BUNDLE);
+
+        let f = |trust: &str, host: &str, port| trust_file_for(&ca, Some(&pins), trust, host, port);
+        assert_eq!(f("system", "vpn.example.com", 443), sys);
+
+        std::fs::write(&marker, format!("sha256:{}\n", "ab".repeat(32))).unwrap();
+        std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(f("system", "vpn.example.com", 443), marker);
+        assert_eq!(f("system", "VPN.example.com", 443), marker);
+        assert_eq!(f("system", "vpn.example.com", 8443), sys);
+        assert_eq!(f("tg2", "vpn.example.com", 443), ca.join("tg2.pem"));
+        assert_eq!(
+            trust_file_for(&ca, None, "system", "vpn.example.com", 443),
+            sys
+        );
+
+        std::fs::write(&marker, "not a pin").unwrap();
+        assert_eq!(f("system", "vpn.example.com", 443), sys);
     }
 }

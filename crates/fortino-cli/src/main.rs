@@ -229,6 +229,13 @@ fn main() -> ExitCode {
                 if let Some(f) = &e.field {
                     eprintln!("  field: {f}");
                 }
+                if e.code == ErrorCode::TrustFailure && e.message.starts_with("gateway certificate")
+                {
+                    eprintln!(
+                        "  If you expected this certificate (for example, a gateway reached by an \
+                         address its certificate doesn't name), review and trust it in Fortino.app."
+                    );
+                }
             }
             ExitCode::from(u8::try_from(e.code.exit_code()).unwrap_or(1))
         }

@@ -86,6 +86,7 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
                 path: w.path.clone(),
                 args: Vec::new(),
                 ca_dir: w.ca_dir.clone(),
+                gateway_pins: None,
                 env: Vec::new(),
             })
         }
@@ -99,6 +100,10 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
                 path,
                 args: vec!["--worker".into()],
                 ca_dir: crate::config::DEFAULT_CA_DIR.into(),
+                gateway_pins: Some(crate::procworker::GatewayPins {
+                    dir: crate::procworker::GATEWAY_PIN_DIR.into(),
+                    owner: 0,
+                }),
                 env: Vec::new(),
             })
         }

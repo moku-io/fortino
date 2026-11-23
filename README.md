@@ -6,7 +6,7 @@ Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient E
 
 ## Current status
 
-Fortino 0.5.1 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
+Fortino 0.5.2 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
 
 ## Documentation
 
@@ -86,6 +86,7 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | FortiToken Mobile push | Planned | Yes | Not documented | Yes |
 | SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
 | Client certificate | Planned | Yes | Yes | Yes |
+| Gateway certificate checks | Strict; fetches intermediates a gateway leaves out; after a warning, trusts one specific certificate per gateway (app) | Strict, or `--trusted-cert` pin | Strict, or `--servercert` pin | Prompt |
 | PPP tunnel | Supported by the native worker (no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
 | Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
 | DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |

@@ -94,7 +94,19 @@ struct MenuView: View {
                 notice(e, symbol: "xmark.octagon.fill", tint: .red)
             } else if model.state == .idle, let r = model.status?.lastResult,
                       let code = r.code, code != "cancelled" {
-                notice("Last attempt: \(r.message)", symbol: "exclamationmark.circle", tint: .secondary)
+                if r.attemptId == model.reviewedGatewayFailure {
+                    notice("Gateway certificate trusted. Connect again.", symbol: "checkmark.shield", tint: .secondary)
+                } else {
+                    notice("Last attempt: \(r.message)", symbol: "exclamationmark.circle", tint: .secondary)
+                }
+                if let p = model.gatewayTrustFailure {
+                    Button("Review Certificate…") {
+                        closePanel()
+                        model.reviewGatewayCertificate(p)
+                    }
+                    .controlSize(.small)
+                    .padding(.horizontal, 8)
+                }
             }
 
             Divider().padding(.vertical, 2)

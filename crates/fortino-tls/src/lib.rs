@@ -2,6 +2,8 @@
 //! leaf pins, and the rustls client configuration built from them.
 
 pub mod issuers;
+#[cfg(unix)]
+pub mod markers;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;

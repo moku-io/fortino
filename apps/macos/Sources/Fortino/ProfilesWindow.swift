@@ -202,8 +202,17 @@ struct ConnectionSection: View {
                 LabeledContent("Last Attempt") {
                     if r.attemptId == model.reviewedEmsFailure {
                         Text("EMS certificate trusted. Connect again.").foregroundStyle(.secondary)
+                    } else if r.attemptId == model.reviewedGatewayFailure {
+                        Text("Gateway certificate trusted. Connect again.").foregroundStyle(.secondary)
                     } else {
-                        Text(r.message).foregroundStyle(.red)
+                        VStack(alignment: .trailing, spacing: 6) {
+                            Text(r.message).foregroundStyle(.red)
+                            if model.gatewayTrustFailure?.id == profile.id {
+                                Button("Review Certificate…") { model.reviewGatewayCertificate(profile) }
+                                    .controlSize(.small)
+                                    .help("Shows the gateway's certificate and lets you trust it on this Mac")
+                            }
+                        }
                     }
                 }
             }
