@@ -15,7 +15,7 @@
 # Nothing prints secret values or deployment names.
 set -euo pipefail
 
-export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
+export TART_HOME="${TART_HOME:-$HOME/.tart}"
 BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 STATE="$ROOT/target/vm-m3.state"

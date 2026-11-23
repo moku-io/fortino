@@ -5,11 +5,11 @@
 #   scripts/macos-vm-e2e.sh            # clone, boot, test, delete
 #   KEEP_VM=1 scripts/macos-vm-e2e.sh  # leave the clone running for debugging
 #
-# TART_HOME (default /Volumes/esterno1/tart) and FORTINO_VM_BASE (default ghcr.io/cirruslabs/macos-sequoia-xcode:26.6) as in
+# TART_HOME (default ~/.tart, Tart's own) and FORTINO_VM_BASE (default ghcr.io/cirruslabs/macos-sequoia-xcode:26.6) as in
 # scripts/macos-vm-test.sh.
 set -euo pipefail
 
-export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
+export TART_HOME="${TART_HOME:-$HOME/.tart}"
 BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 VM="fortino-e2e-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

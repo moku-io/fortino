@@ -1,4 +1,5 @@
-//! Debug-only SYSINFO overrides for EMS protocol testing. **Not a shipping feature.**
+//! Debug SYSINFO overrides for EMS protocol testing. Exposed in the app's profile editor for
+//! maintainers; empty by default, and every non-empty use is logged as a warning.
 //!
 //! This module lets the maintainer inject arbitrary SYSINFO key/values into what the EMS agent
 //! reports for one profile, to probe how an EMS reacts — for example an `OSVER` the deployment

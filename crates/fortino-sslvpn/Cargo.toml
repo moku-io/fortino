@@ -3,6 +3,7 @@ name = "fortino-sslvpn"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 description = "Native FortiGate SSL VPN worker: TLS login, tunnel settings and in-process PPP"

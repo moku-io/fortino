@@ -6,11 +6,11 @@
 #   KEEP_VM=1 scripts/macos-vm-test.sh  # leave the clone running for debugging
 #
 # Environment:
-#   TART_HOME  where Tart keeps VMs (default /Volumes/esterno1/tart)
+#   TART_HOME  where Tart keeps VMs (default ~/.tart, Tart's own)
 #   FORTINO_VM_BASE  base VM to clone (default ghcr.io/cirruslabs/macos-sequoia-xcode:26.6)
 set -euo pipefail
 
-export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
+export TART_HOME="${TART_HOME:-$HOME/.tart}"
 BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 VM="fortino-test-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

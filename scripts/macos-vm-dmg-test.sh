@@ -13,7 +13,7 @@
 # Environment as for scripts/macos-vm-test.sh (TART_HOME, FORTINO_VM_BASE).
 set -euo pipefail
 
-export TART_HOME="${TART_HOME:-/Volumes/esterno1/tart}"
+export TART_HOME="${TART_HOME:-$HOME/.tart}"
 BASE="${FORTINO_VM_BASE:-ghcr.io/cirruslabs/macos-sequoia-xcode:26.6}"
 VM="fortino-dmg-$$"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
