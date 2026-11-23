@@ -4,7 +4,7 @@
 
 # Fortino
 
-**The first open-source FortiClient alternative that speaks EMS.**
+**The first open-source FortiClient alternative with EMS support.**
 
 Connects to your company's FortiGate. Then gets out of your way.
 
@@ -15,7 +15,7 @@ Connects to your company's FortiGate. Then gets out of your way.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-dark.png">
-  <img src="docs/assets/menu-light.png" width="420" alt="Fortino menu-bar app">
+  <img src="docs/assets/menu-light.png" width="480" alt="Fortino menu-bar menu with three VPN profiles, one connected">
 </picture>
 
 </div>
