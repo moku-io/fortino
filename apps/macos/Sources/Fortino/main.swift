@@ -13,9 +13,34 @@ struct FortinoApp: App {
         Window("Profiles", id: "profiles") {
             ProfilesWindow(model: model)
                 .task {
-                    let ids = ProcessInfo.processInfo.environment["FORTINO_DEBUG_OPEN"]?
-                        .split(separator: ",").map(String.init) ?? []
+                    let env = ProcessInfo.processInfo.environment
+                    let ids = env["FORTINO_DEBUG_OPEN"]?.split(separator: ",").map(String.init) ?? []
                     for id in ids where id != "profiles" { openWindow(id: id) }
+                    // Development aid for scripts/screenshots.sh: a fixed appearance for this app
+                    // only, and the windows in front so they are drawn active.
+                    switch env["FORTINO_DEBUG_APPEARANCE"] {
+                    case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+                    case "light": NSApp.appearance = NSAppearance(named: .aqua)
+                    default: break
+                    }
+                    if !ids.isEmpty {
+                        NSApp.activate(ignoringOtherApps: true)
+                        // `org.fortino.debug.front` with a window title brings that window to
+                        // the front; with "menu" it opens the menu-bar panel, as a click would.
+                        DistributedNotificationCenter.default().addObserver(
+                            forName: .init("org.fortino.debug.front"), object: nil, queue: .main
+                        ) { note in
+                            let title = note.object as? String
+                            MainActor.assumeIsolated {
+                                NSApp.activate(ignoringOtherApps: true)
+                                if title == "menu" {
+                                    debugStatusButton()?.performClick(nil)
+                                } else {
+                                    NSApp.windows.first { $0.title == title }?.makeKeyAndOrderFront(nil)
+                                }
+                            }
+                        }
+                    }
                 }
         }
         .commands { FortinoCommands(model: model) }
@@ -52,8 +77,19 @@ struct FortinoApp: App {
         Window("Menu Preview", id: "menu-preview") {
             MenuView(model: model, service: delegate.service)
         }
+        .windowResizability(.contentSize)
         .commandsRemoved()
     }
+}
+
+/// The menu-bar item's button, for the debug hook above.
+@MainActor
+private func debugStatusButton() -> NSStatusBarButton? {
+    func find(_ v: NSView) -> NSStatusBarButton? {
+        if let b = v as? NSStatusBarButton { return b }
+        return v.subviews.lazy.compactMap(find).first
+    }
+    return NSApp.windows.lazy.compactMap { $0.contentView.flatMap(find) }.first
 }
 
 /// File and Help menu items for the actions that used to crowd the menu-bar panel.

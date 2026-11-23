@@ -6,10 +6,10 @@ use std::process::ExitCode;
 async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let (Some(kind), Some(path)) = (args.get(1), args.get(2)) else {
-        eprintln!("usage: fortino-mock fortigate <scenario.yaml> [--bind ADDR:PORT]");
+        eprintln!("usage: fortino-mock fortigate|ems <scenario.yaml> [--bind ADDR:PORT]");
         return ExitCode::from(2);
     };
-    if kind != "fortigate" {
+    if kind != "fortigate" && kind != "ems" {
         eprintln!("unknown mock kind {kind}");
         return ExitCode::from(2);
     }
@@ -20,21 +20,28 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let sc = match fortino_mock::fortigate::Scenario::from_yaml(&text) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
     let bind = args
         .iter()
         .position(|a| a == "--bind")
         .and_then(|i| args.get(i + 1))
         .and_then(|b| b.parse::<std::net::SocketAddr>().ok());
-    let started = match bind {
-        Some(b) => fortino_mock::fortigate::start_on(&sc, b).await,
-        None => fortino_mock::fortigate::start(&sc).await,
+    let started = if kind == "ems" {
+        match fortino_mock::ems::EmsScenario::from_yaml(&text) {
+            Ok(sc) => match bind {
+                Some(b) => fortino_mock::ems::start_on(&sc, b).await,
+                None => fortino_mock::ems::start(&sc).await,
+            }
+            .map(|m| m.handle),
+            Err(e) => Err(e),
+        }
+    } else {
+        match fortino_mock::fortigate::Scenario::from_yaml(&text) {
+            Ok(sc) => match bind {
+                Some(b) => fortino_mock::fortigate::start_on(&sc, b).await,
+                None => fortino_mock::fortigate::start(&sc).await,
+            },
+            Err(e) => Err(e),
+        }
     };
     let h = match started {
         Ok(h) => h,
