@@ -106,6 +106,7 @@ struct FortinoCommands: Commands {
             .keyboardShortcut("n")
             Button("Import from FortiClient…") { show("import") }
                 .keyboardShortcut("i", modifiers: [.command, .shift])
+            Button("Export to FortiClient…") { Task { await model.exportProfiles() } }
             Divider()
             Button("Enroll with EMS Package…") { show("enrollment") }
         }

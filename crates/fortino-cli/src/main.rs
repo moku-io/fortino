@@ -79,6 +79,8 @@ enum ProfileCmd {
     },
     /// Import profiles from a FortiClient XML export.
     Import(ImportArgs),
+    /// Export profiles as a FortiClient XML configuration (no usernames or passwords).
+    Export(ExportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -184,6 +186,15 @@ struct ImportArgs {
     /// Import only these entries (repeatable). Required with warnings in non-interactive use.
     #[arg(long, value_name = "NAME")]
     select: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct ExportArgs {
+    /// Profiles to export by name or ID (default: all).
+    names: Vec<String>,
+    /// Write to this file instead of standard output.
+    #[arg(short, long)]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -415,6 +426,7 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
             }
         }
         ProfileCmd::Import(a) => import(c, a, json).await?,
+        ProfileCmd::Export(a) => export(c, a, json).await?,
     }
     Ok(())
 }
@@ -474,6 +486,37 @@ fn read_import_preview(file: &std::path::Path) -> Result<fortino_config::import:
         std::fs::read(file).map_err(|e| invalid(format!("cannot read {}: {e}", file.display())))?;
     fortino_config::import::parse(&bytes)
         .map_err(|e| Failure(ProtoError::new(ErrorCode::InvalidProfile, e.to_string())))
+}
+
+async fn export(c: &Client, a: ExportArgs, json: bool) -> CmdResult {
+    let specs = if a.names.is_empty() {
+        c.profile_list()
+            .await?
+            .profiles
+            .into_iter()
+            .map(|p| p.spec)
+            .collect::<Vec<_>>()
+    } else {
+        let mut v = Vec::new();
+        for n in &a.names {
+            v.push(c.profile_get(n).await?.spec);
+        }
+        v
+    };
+    let xml = fortino_config::export::to_forticlient_xml(&specs);
+    match &a.output {
+        Some(path) => {
+            std::fs::write(path, &xml)
+                .map_err(|e| invalid(format!("cannot write {}: {e}", path.display())))?;
+            if json {
+                print_json(&serde_json::json!({"exported": specs.len()}));
+            } else {
+                println!("Exported {} profile(s) to {}", specs.len(), path.display());
+            }
+        }
+        None => print!("{xml}"),
+    }
+    Ok(())
 }
 
 async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {

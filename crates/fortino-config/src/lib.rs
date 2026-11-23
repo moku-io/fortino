@@ -1,5 +1,6 @@
 //! Profile model, validation and the daemon-owned profile store.
 
+pub mod export;
 pub mod import;
 pub mod model;
 pub mod store;

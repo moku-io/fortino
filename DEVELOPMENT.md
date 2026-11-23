@@ -10,7 +10,7 @@ How to run the daemon, CLI and desktop app on one Mac without root and without c
 | `crates/fortino-proto-ems` | Sans-IO FortiClient EMS codecs: requests, replies, `SYSINFO`, host-verification rules, tags. |
 | `crates/fortino-sslvpn` | The native tunnel worker and `fortino-sslvpn-probe`. |
 | `crates/fortino-ems` | The EMS agent, its per-server registration store and `fortino-ems-probe`. |
-| `crates/fortino-config` | Profile model and validation, the SQLite profile store and the FortiClient XML importer. |
+| `crates/fortino-config` | Profile model and validation, the SQLite profile store and the FortiClient XML importer and exporter. |
 | `crates/fortino-core` | Control protocol types, framing, error and exit codes, the worker interface and the fake worker. |
 | `crates/fortino-platform` | Network changes behind `NetPlatform`, with a write-ahead journal; the macOS controller. |
 | `crates/fortinod` | Daemon: socket server, peer authorization, session state machine, network controller. |
@@ -55,6 +55,7 @@ fortino connect demo-vpn --password-fd 3 --otp-fd 4 3<pw 4<otp   # headless
 fortino status --watch --json
 fortino disconnect
 fortino profile import export.xml --dry-run
+fortino profile export -o profiles.xml                    # FortiClient XML; all profiles, or name some
 fortino log-level debug                               # or error, warn, info, trace; no argument shows it
 ```
 

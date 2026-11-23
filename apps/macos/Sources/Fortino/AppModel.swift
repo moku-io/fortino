@@ -2,6 +2,7 @@
 
 import AppKit
 import Foundation
+import UniformTypeIdentifiers
 import FortinoKit
 
 /// Progress of bringing the VPN service to this app's build after an update.
@@ -471,6 +472,26 @@ final class AppModel: ObservableObject {
     func setEmsServer(for id: String) {
         select(id)
         focusEmsFor = id
+    }
+
+    // MARK: Export (written by fortino in this user's process)
+
+    /// Saves every profile as a FortiClient XML configuration. No usernames or passwords are
+    /// written; Fortino-only settings (EMS server, DNS, IP policy) have no FortiClient equivalent.
+    func exportProfiles() async {
+        let panel = NSSavePanel()
+        panel.title = "Export to FortiClient"
+        panel.message = "FortiClient can restore this file. Usernames and passwords are not included."
+        panel.nameFieldStringValue = "Fortino Profiles.xml"
+        panel.allowedContentTypes = [.xml]
+        NSApp.activate(ignoringOtherApps: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let (code, _, err) = await runCLI(["profile", "export", "--output", url.path])
+        guard code != 0 else { return }
+        let alert = NSAlert()
+        alert.messageText = "Export failed."
+        alert.informativeText = err.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.runModal()
     }
 
     // MARK: Import (parsed by fortino in this user's process)

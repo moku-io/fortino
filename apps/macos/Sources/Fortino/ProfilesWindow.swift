@@ -73,6 +73,8 @@ struct ProfilesWindow: View {
                 Menu {
                     Button("New Profile") { creating = true }
                     Button("Import from FortiClient…") { openWindow(id: "import") }
+                    Button("Export to FortiClient…") { Task { await model.exportProfiles() } }
+                        .disabled(model.profiles.isEmpty)
                 } label: {
                     Label("New Profile", systemImage: "plus")
                 } primaryAction: {
