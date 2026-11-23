@@ -222,5 +222,13 @@ if CommandLine.arguments.dropFirst().first == "--enroll-dmg" {
         exit(1)
     }
 } else {
+    // macOS puts a new status item to the left of all existing ones and remembers where the user
+    // drags it under this key. On a crowded menu bar that leftmost slot is covered by the active
+    // app's menus (ours included: the Profiles window opens at launch), so a fresh install shows
+    // no icon. Seed a position near the clock once; a user's later drag overwrites it.
+    let positionKey = "NSStatusItem Preferred Position Item-0"
+    if UserDefaults.standard.object(forKey: positionKey) == nil {
+        UserDefaults.standard.set(1, forKey: positionKey)
+    }
     FortinoApp.main()
 }
