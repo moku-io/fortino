@@ -1,5 +1,5 @@
-//! A PPP client (RFC 1661 LCP, RFC 1332 IPCP, RFC 1877 DNS options) for the SSL VPN tunnel
-//!. No pppd: the link runs inside the worker.
+//! A PPP client (RFC 1661 LCP, RFC 1332 IPCP, RFC 1877 DNS options) for the SSL VPN tunnel.
+//! No pppd: the link runs inside the worker.
 //!
 //! Observed on GATEWAY-2: the gateway stays silent until the client sends an LCP
 //! Configure-Request; it asks only for a Magic-Number; its frames carry no `ff 03`

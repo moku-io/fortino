@@ -1,4 +1,4 @@
-//! `/remote/logincheck` : request forms and classification of the gateway's answer.
+//! `/remote/logincheck`: request forms and classification of the gateway's answer.
 //!
 //! The forms are the ones a client of ours already used successfully on GATEWAY-1 and GATEWAY-2
 //! and match what FortiClient sends.

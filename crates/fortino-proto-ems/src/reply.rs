@@ -1,4 +1,4 @@
-//! Replies: `<REPLYTYPE>: KEY|value|…|` , and typed views of the four the agent
+//! Replies: `<REPLYTYPE>: KEY|value|…|`, and typed views of the four the agent
 //! uses.
 //!
 //! Every typed view sorts keys into three groups: understood, refused (remote commands,
