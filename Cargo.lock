@@ -602,12 +602,15 @@ name = "fortino-tls"
 version = "0.1.0"
 dependencies = [
  "fortino-config",
+ "proptest",
+ "rcgen",
  "rustls",
  "rustls-pki-types",
  "sha2",
  "thiserror",
  "tokio",
  "tokio-rustls",
+ "tracing",
 ]
 
 [[package]]

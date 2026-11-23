@@ -1,9 +1,12 @@
 //! TLS trust shared by the SSL VPN worker and the EMS agent: CA bundles, explicit SHA-256
 //! leaf pins, and the rustls client configuration built from them.
 
+pub mod issuers;
+
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use fortino_config::Host;
 use rustls::RootCertStore;
@@ -11,6 +14,7 @@ use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 
 /// TLS setup errors.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -205,6 +209,262 @@ pub fn client_config(trust: &Trust) -> Result<rustls::ClientConfig, Failure> {
             .with_root_certificates(load_roots(trust)?)
             .with_no_client_auth(),
     })
+}
+
+/// Issuer certificates fetched per [`TlsClient`], at most.
+const MAX_FETCHED: usize = 16;
+/// Issuer URLs tried per [`TlsClient`], at most.
+const MAX_TRIED: usize = 8;
+/// Handshake retries after fetching issuers, per connection.
+const MAX_FETCH_ROUNDS: usize = 3;
+
+/// The CA-bundle verifier, plus intermediate certificates fetched because the server left
+/// them out (see [`issuers`]).
+#[derive(Debug)]
+struct CompletingVerifier {
+    inner: Arc<rustls::client::WebPkiServerVerifier>,
+    /// Fetched intermediates, offered alongside the ones the server sent.
+    fetched: Mutex<Vec<CertificateDer<'static>>>,
+    /// The chain of the last handshake that failed with an unknown issuer.
+    unknown_issuer_chain: Mutex<Option<Vec<CertificateDer<'static>>>>,
+    /// Issuer URLs already tried.
+    tried: Mutex<Vec<String>>,
+}
+
+impl CompletingVerifier {
+    /// After a handshake failed with an unknown issuer, fetches the issuer certificates named by
+    /// that chain and by earlier fetched ones. True when a new certificate was added, so a retry
+    /// can succeed.
+    async fn fetch_missing(&self, timeout: Duration, connect_override: Option<SocketAddr>) -> bool {
+        let Some(chain) = self
+            .unknown_issuer_chain
+            .lock()
+            .ok()
+            .and_then(|mut c| c.take())
+        else {
+            return false;
+        };
+        let fetched = self.fetched.lock().map(|f| f.clone()).unwrap_or_default();
+        let mut urls: Vec<String> = Vec::new();
+        for cert in chain.iter().chain(fetched.iter()) {
+            for u in issuers::ca_issuer_urls(cert) {
+                if !urls.contains(&u) {
+                    urls.push(u);
+                }
+            }
+        }
+        let mut added = false;
+        for url in urls {
+            {
+                let Ok(mut tried) = self.tried.lock() else {
+                    return added;
+                };
+                if tried.contains(&url) || tried.len() >= MAX_TRIED {
+                    continue;
+                }
+                tried.push(url.clone());
+            }
+            match issuers::fetch(&url, timeout, connect_override).await {
+                Ok(certs) => {
+                    let Ok(mut f) = self.fetched.lock() else {
+                        return added;
+                    };
+                    let before = f.len();
+                    for cert in certs {
+                        if f.len() < MAX_FETCHED && !f.contains(&cert) && !chain.contains(&cert) {
+                            f.push(cert);
+                        }
+                    }
+                    let new = f.len().saturating_sub(before);
+                    if new > 0 {
+                        tracing::info!(
+                            "server sent an incomplete certificate chain; fetched {new} issuing \
+                             CA certificate(s) it names"
+                        );
+                        added = true;
+                    }
+                }
+                Err(e) => {
+                    tracing::info!("could not fetch the server's issuing CA certificate: {e}")
+                }
+            }
+        }
+        added
+    }
+}
+
+impl rustls::client::danger::ServerCertVerifier for CompletingVerifier {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp: &[u8],
+        now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        let fetched = self.fetched.lock().map(|f| f.clone()).unwrap_or_default();
+        let result = if fetched.is_empty() {
+            self.inner
+                .verify_server_cert(end_entity, intermediates, server_name, ocsp, now)
+        } else {
+            let mut all: Vec<CertificateDer<'_>> = intermediates.to_vec();
+            all.extend(fetched);
+            self.inner
+                .verify_server_cert(end_entity, &all, server_name, ocsp, now)
+        };
+        if matches!(
+            result,
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::UnknownIssuer
+            ))
+        ) && let Ok(mut c) = self.unknown_issuer_chain.lock()
+        {
+            *c = Some(
+                std::iter::once(end_entity)
+                    .chain(intermediates)
+                    .map(|d| d.clone().into_owned())
+                    .collect(),
+            );
+        }
+        result
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+
+    fn root_hint_subjects(&self) -> Option<&[rustls::DistinguishedName]> {
+        self.inner.root_hint_subjects()
+    }
+}
+
+/// A TLS client for one server. With a CA trust it completes a chain the server sent without
+/// its intermediate CA certificates, fetching them from the URL the certificates name
+/// (Authority Information Access), as macOS and browsers do. Fetched certificates are kept for
+/// later connections from the same client.
+pub struct TlsClient {
+    connector: TlsConnector,
+    completer: Option<Arc<CompletingVerifier>>,
+    /// Fetch issuer certificates from this address instead of the URL's host (tests).
+    pub issuer_fetch_override: Option<SocketAddr>,
+}
+
+impl std::fmt::Debug for TlsClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TlsClient")
+            .field("completes_chains", &self.completer.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl TlsClient {
+    /// Builds the client; the trust store must load before anything is sent.
+    pub fn new(trust: &Trust) -> Result<Self, Failure> {
+        if let Trust::Pinned(_) = trust {
+            return Ok(Self {
+                connector: TlsConnector::from(Arc::new(client_config(trust)?)),
+                completer: None,
+                issuer_fetch_override: None,
+            });
+        }
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let inner = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            Arc::new(load_roots(trust)?),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|e| Failure::Backend(format!("tls verifier: {e}")))?;
+        let completer = Arc::new(CompletingVerifier {
+            inner,
+            fetched: Mutex::new(Vec::new()),
+            unknown_issuer_chain: Mutex::new(None),
+            tried: Mutex::new(Vec::new()),
+        });
+        let cfg = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| Failure::Backend(format!("tls config: {e}")))?
+            .dangerous()
+            .with_custom_certificate_verifier(completer.clone())
+            .with_no_client_auth();
+        Ok(Self {
+            connector: TlsConnector::from(Arc::new(cfg)),
+            completer: Some(completer),
+            issuer_fetch_override: None,
+        })
+    }
+
+    /// Connects to `addr` and completes the handshake for `name`, each step within `timeout`.
+    /// A certificate failure is reported as `Trust("<what>: …")`.
+    pub async fn connect(
+        &self,
+        addr: SocketAddr,
+        name: &ServerName<'static>,
+        timeout: Duration,
+        what: &str,
+    ) -> Result<TlsStream<TcpStream>, Failure> {
+        let mut rounds = 0;
+        loop {
+            let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+                .await
+                .map_err(|_| Failure::Transport("connect timed out".into()))?
+                .map_err(|e| Failure::Transport(format!("connect: {e}")))?;
+            let _ = tcp.set_nodelay(true);
+            let e = match tokio::time::timeout(timeout, self.connector.connect(name.clone(), tcp))
+                .await
+                .map_err(|_| Failure::Transport("TLS handshake timed out".into()))?
+            {
+                Ok(s) => return Ok(s),
+                Err(e) => classify(e, what),
+            };
+            let retry = match (&e, &self.completer) {
+                (Failure::Trust(_), Some(c)) if rounds < MAX_FETCH_ROUNDS => {
+                    c.fetch_missing(timeout, self.issuer_fetch_override).await
+                }
+                _ => false,
+            };
+            if !retry {
+                return Err(e);
+            }
+            rounds += 1;
+        }
+    }
+}
+
+/// Maps a handshake error: certificate problems to `Trust("<what>: …")`, the rest to
+/// `Transport`.
+pub fn classify(e: std::io::Error, what: &str) -> Failure {
+    let cert = e
+        .get_ref()
+        .and_then(|i| i.downcast_ref::<rustls::Error>())
+        .is_some_and(|r| {
+            matches!(
+                r,
+                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
+            )
+        });
+    if cert {
+        Failure::Trust(format!("{what}: {e}"))
+    } else {
+        Failure::Transport(format!("TLS: {e}"))
+    }
 }
 
 fn load_roots(trust: &Trust) -> Result<RootCertStore, Failure> {

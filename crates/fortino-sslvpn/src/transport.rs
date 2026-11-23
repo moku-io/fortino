@@ -2,19 +2,19 @@
 //! (each request on a new connection).
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 
 use fortino_config::Host;
 use fortino_proto_sslvpn::http::{self, Parsed, Request, Response};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 
 use crate::Failure;
 
-pub use fortino_tls::{Trust, client_config, fetch_leaf, fingerprint, parse_pin, server_name};
+pub use fortino_tls::{
+    TlsClient, Trust, client_config, fetch_leaf, fingerprint, parse_pin, server_name,
+};
 
 /// Where and how to connect.
 pub struct Gateway {
@@ -24,7 +24,8 @@ pub struct Gateway {
     pub port: u16,
     /// Connect here instead of resolving `host` (tests).
     pub connect_override: Option<SocketAddr>,
-    tls: TlsConnector,
+    /// TLS client; completes a chain the gateway sent without its intermediates.
+    pub tls: TlsClient,
     /// Address actually connected to, once known.
     pub resolved: Option<SocketAddr>,
     /// Per-request timeout.
@@ -49,14 +50,13 @@ impl std::fmt::Debug for Gateway {
 impl Gateway {
     /// Builds the TLS client. The trust store must load before anything is sent.
     pub fn new(host: Host, port: u16, trust: &Trust) -> Result<Self, Failure> {
-        let cfg = client_config(trust)?;
         Ok(Self {
             host,
             port,
             connect_override: None,
             keep_alive: false,
             conn: None,
-            tls: TlsConnector::from(Arc::new(cfg)),
+            tls: TlsClient::new(trust)?,
             resolved: None,
             timeout: Duration::from_secs(30),
         })
@@ -122,19 +122,15 @@ impl Gateway {
     /// Opens a verified TLS connection.
     pub async fn connect(&mut self) -> Result<TlsStream<TcpStream>, Failure> {
         let addr = self.resolve().await?;
-        let tcp = tokio::time::timeout(self.timeout, TcpStream::connect(addr))
-            .await
-            .map_err(|_| Failure::Transport("connect timed out".into()))?
-            .map_err(|e| Failure::Transport(format!("connect: {e}")))?;
-        let _ = tcp.set_nodelay(true);
-        if self.resolved.is_none() {
-            self.resolved = tcp.peer_addr().ok();
-        }
         let name = server_name(&self.host)?;
-        tokio::time::timeout(self.timeout, self.tls.connect(name, tcp))
-            .await
-            .map_err(|_| Failure::Transport("TLS handshake timed out".into()))?
-            .map_err(classify_tls)
+        let s = self
+            .tls
+            .connect(addr, &name, self.timeout, "gateway certificate")
+            .await?;
+        if self.resolved.is_none() {
+            self.resolved = s.get_ref().0.peer_addr().ok();
+        }
+        Ok(s)
     }
 
     /// Sends one request and reads the response: on a fresh connection, or on the kept-alive
@@ -273,22 +269,5 @@ pub async fn read_response<S: tokio::io::AsyncRead + Unpin>(
             Ok(Parsed::Incomplete) => {}
             Err(e) => return Err(Failure::Backend(format!("gateway HTTP: {e}"))),
         }
-    }
-}
-
-fn classify_tls(e: std::io::Error) -> Failure {
-    let cert = e
-        .get_ref()
-        .and_then(|i| i.downcast_ref::<rustls::Error>())
-        .is_some_and(|r| {
-            matches!(
-                r,
-                rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
-            )
-        });
-    if cert {
-        Failure::Trust(format!("gateway certificate: {e}"))
-    } else {
-        Failure::Transport(format!("TLS: {e}"))
     }
 }
