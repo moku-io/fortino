@@ -12,7 +12,7 @@ Fortino is a native client for FortiGate SSL VPN and FortiClient EMS (macOS firs
 ## Secrets and deployment data
 
 - Never print, log, commit or copy passwords, OTPs, session cookies (`SVPNCOOKIE`, `SVPNTMPCOOKIE`), EMS keys or credentials-file values. Debug logging records status codes, cookie names and paths only.
-- Real gateway names, addresses, site labels, usernames and captures stay out of the repository. Refer to gateways as GATEWAY-1, GATEWAY-2, … Fixtures are synthetic.
+- Real gateway names, addresses, site labels, usernames and captures stay out of the repository. Use synthetic fixtures and example domains in documentation.
 - For live tests the maintainer may provide a credentials file outside the repository ([DEVELOPMENT.md](DEVELOPMENT.md#against-a-real-gateway)). Inspect it only by key names, never by printing its values.
 
 ## Root and the host network

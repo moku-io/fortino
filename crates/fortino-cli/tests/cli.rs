@@ -91,7 +91,8 @@ fn json(o: &Output) -> serde_json::Value {
 #[test]
 fn profile_lifecycle_and_exit_codes() {
     let d = daemon();
-    let o = d.run("profile add GATEWAY-2 --host tg2.example.org --ems-server ems2.example.org:9016");
+    let o =
+        d.run("profile add GATEWAY-2 --host tg2.example.org --ems-server ems2.example.org:9016");
     assert_eq!(code(&o), 0, "{o:?}");
     let o = d.run("profile add gateway-2 --host x.example.org");
     assert_eq!(code(&o), 3); // name taken

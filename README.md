@@ -4,13 +4,9 @@ Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient E
 
 **Built for people who use more than one organization's VPN.** Each VPN profile names its own EMS server, and Fortino keeps a separate EMS registration for each. Connecting to a gateway uses that gateway's EMS, so switching between organizations needs no unregistering and re-registering, unlike FortiClient, which holds one EMS registration per machine.
 
-**Scope of the first release.** Users create or import a FortiGate SSL VPN profile, connect with a password and one-time code, see the connection status and disconnect, from the macOS menu-bar app or the headless CLI (`fortino`). Both drive the same root service (`fortinod`), and the VPN stays up after the terminal closes. The maintainer is authorized to use the target gateways (GATEWAY-1 to GATEWAY-4), and the deployments will officially support Fortino. Each gateway has its own EMS, whose address is set in the gateway's profile.
+## Current status
 
-**Build status.**
-
-- The daemon, CLI and app work end to end against a fake tunnel (milestone 2): profile store, kernel-credential peer checks, one serialized session, journaled network changes, password/OTP prompts.
-- The native SSL VPN worker (`crates/fortino-sslvpn`) has connected to a real gateway (GATEWAY-3) with its own PPP and carried TCP and ICMP through the tunnel, using an in-memory tun device. It is not yet wired to the daemon as a separate process, and the macOS network controller (routes, DNS, IPv6 block) has not yet run as root in a VM.
-- Not started: TUN tunnel mode, DTLS, the EMS agent and packaging.
+Fortino 0.5.1 includes a macOS menu-bar app, a CLI, and a privileged service. The native SSL VPN worker supports PPP, and the macOS network controller applies routes, split DNS and an IPv6 block. EMS registration is selected per VPN profile and reports the client's actual state. Raw-IP TUN transport and DTLS are planned.
 
 ## Documentation
 
@@ -19,8 +15,6 @@ Fortino is an open-source, native client for FortiGate SSL VPN and FortiClient E
 | Run and test the daemon, CLI and app locally | [DEVELOPMENT.md](DEVELOPMENT.md) |
 | Contributing and licensing of contributions | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Rules for coding agents | [AGENTS.md](AGENTS.md) |
-
-The first delivery target is GATEWAY-2 on Apple Silicon and macOS 15. GATEWAY-1 additionally requires the client's own EMS registration before it admits a tunnel, so the EMS agent follows the native SSL VPN worker. openfortivpn is kept only as a lab reference for comparing behaviour.
 
 ## Build and try it
 
@@ -36,8 +30,8 @@ Run the development daemon with the fake worker (unprivileged, no network change
 ```sh
 cargo run -p fortinod -- --config fixtures/dev/fortinod-fake.toml   # allowed_uids must list your UID
 export FORTINO_SOCKET=$PWD/target/dev/fortinod.sock
-cargo run -p fortino-cli -- profile add GATEWAY-2 --host vpn.example.org --ems-server ems.example.org:9016
-cargo run -p fortino-cli -- connect GATEWAY-2        # password hunter2, code 123456
+cargo run -p fortino-cli -- profile add demo-vpn --host vpn.example.org --ems-server ems.example.org:9016
+cargo run -p fortino-cli -- connect demo-vpn        # password hunter2, code 123456
 swift run --package-path apps/macos Fortino
 ```
 
@@ -76,7 +70,7 @@ The synthetic TLS gateway still runs with `cargo run --locked -p fortino-mock --
 
 Fortino stands on the shoulders of the open-source clients that made FortiGate SSL VPNs usable without the vendor client. Thank you to:
 
-- **[openfortivpn](https://github.com/adrienverge/openfortivpn)** (Adrien Vergé and contributors). Its clear implementation of the SSL VPN login and PPP tunnel was our reference for early debugging, and its pinned build proved the PPP path on a real gateway (milestone 1).
+- **[openfortivpn](https://github.com/adrienverge/openfortivpn)** (Adrien Vergé and contributors). Its clear implementation of the SSL VPN login and PPP tunnel was our reference for early debugging, and its pinned build proved the PPP path.
 - **[OpenConnect](https://www.infradead.org/openconnect/fortinet.html)** (David Woodhouse, Daniel Lenski and contributors), whose Fortinet support documents the protocol, PPP-over-DTLS and the challenge forms.
 - The projects around them: **[openfortivpn-webview](https://github.com/gm-vm/openfortivpn-webview)** for SAML login, **[NetworkManager-fortisslvpn](https://gitlab.gnome.org/GNOME/NetworkManager-fortisslvpn)** for Linux desktop integration, and GUIs such as **OpenFortiGUI**, **[OpenFortiVPN GUI](https://e1z0.net/software/openfortivpn-gui)** and **[fcovpn](https://github.com/jiriteach/fcovpn)**.
 
@@ -92,13 +86,13 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | FortiToken Mobile push | Planned | Yes | Not documented | Yes |
 | SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
 | Client certificate | Planned | Yes | Yes | Yes |
-| PPP tunnel | Working on one live gateway (in-process, no pppd); not yet in a release | Yes (pppd) | Yes (built-in PPP) | Yes |
+| PPP tunnel | Supported by the native worker (no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
 | Raw-IP "tun" tunnel (FortiOS ≥ 5.6.6 v2 protocol) | Planned | No | No | Yes |
 | DTLS | Planned | No | Yes (preferred, TLS fallback) | Yes |
-| EMS registration (needed by some gateways) | In development: agent works against the mock EMS; truthful posture only | No | No | Yes |
-| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **By design; registration store and agent in place, daemon wiring next** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
+| EMS registration (needed by some gateways) | Per-profile registration and truthful posture | No | No | Yes |
+| **Switching gateways switches EMS** (one registration per EMS, chosen by the VPN profile) | **One registration per EMS, selected by the VPN profile** | No EMS | No EMS | No: one EMS per machine; changing to a gateway with another EMS means re-registering |
 | FortiClient request headers (`FSV_*`, User-Agent) | In development, default | No | No | Yes |
-| Per-domain split DNS | Yes (macOS controller, not yet live-tested) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
+| Per-domain split DNS | Yes (macOS controller) | Limited (two servers, one suffix) | Via vpnc-script | Yes |
 | IPv6 block during IPv4 tunnels | Yes (pf anchor, not yet live-tested) | No | Via script | Yes |
 | Network rollback after crash | Yes (write-ahead journal) | Partial | Script-dependent | Yes |
 | macOS app | Native SwiftUI menu bar | Third-party GUIs | OpenConnect-GUI | Yes |
