@@ -1,4 +1,6 @@
 // Renders Resources/AppIcon.iconset from Resources/AppIcon.svg (full-bleed artwork on a 1024 canvas).
+// The iconset is the fallback for builds without Xcode; the primary icon is Resources/AppIcon.icon
+// (Icon Composer: fill #4A86C8 plus the Shield.svg layer). Keep the two in step.
 // The artwork is placed on the macOS icon grid: an 824 x 824 body centered on the 1024 canvas with a
 // soft drop shadow, so the icon matches the size of other apps in the Dock and Finder.
 // Run after changing the artwork; the PNGs are committed.

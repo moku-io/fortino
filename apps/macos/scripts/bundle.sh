@@ -37,9 +37,20 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Library/La
 # App icon from Resources/AppIcon.iconset (make-app-icon.swift); disk-image background drawn by make-art.swift.
 art="$here/.build/art"
 swift "$here/scripts/make-art.swift" "$art" >&2
-iconutil -c icns "$here/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
 cp "$here"/Resources/ShieldStatusBar*.png "$app/Contents/Resources/"
 cp "$here/Resources/Info.plist" "$app/Contents/Info.plist"
+# Layered Liquid Glass icon (Resources/AppIcon.icon, Icon Composer) when Xcode's actool is available:
+# it writes Assets.car plus a pre-rendered AppIcon.icns for older systems (up to 256 px @2x). Target 26.0
+# because actool 26.6 crashes rendering the legacy variants for older targets on a Sequoia host.
+# Without Xcode, the flat iconset is used.
+if actool=$(xcrun --find actool 2>/dev/null); then
+    "$actool" "$here/Resources/AppIcon.icon" --compile "$app/Contents/Resources" \
+        --app-icon AppIcon --platform macosx --minimum-deployment-target 26.0 \
+        --output-partial-info-plist "$here/.build/icon-partial.plist" >/dev/null
+    /usr/libexec/PlistBuddy -c "Add :CFBundleIconName string AppIcon" "$app/Contents/Info.plist"
+else
+    iconutil -c icns "$here/Resources/AppIcon.iconset" -o "$app/Contents/Resources/AppIcon.icns"
+fi
 /usr/libexec/PlistBuddy -c "Add :FortinoBuildID string $FORTINO_BUILD_ID" "$app/Contents/Info.plist"
 cp "$here/Resources/org.fortino.fortinod.plist" "$app/Contents/Library/LaunchDaemons/"
 cp "$here/.build/$config/Fortino" "$app/Contents/MacOS/Fortino"
