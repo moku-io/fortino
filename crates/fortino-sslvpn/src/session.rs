@@ -3,7 +3,9 @@
 use std::future::Future;
 
 use fortino_core::proto::ChallengeKind;
-use fortino_core::worker::{Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStage};
+use fortino_core::worker::{
+    EMS_REGISTRATION_REQUIRED, Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStage,
+};
 use fortino_proto_sslvpn::config::{self, TunnelSettings};
 use fortino_proto_sslvpn::identity::{self, Body, ClientIdentity};
 use fortino_proto_sslvpn::info::{self, ServerInfo};
@@ -184,9 +186,14 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
             None,
         )))
         .await?;
-    // A non-200 login page is only logged; the login is still sent.
+    // A non-200 login page is only logged; the login is still sent. The exception: a gateway
+    // that asked for an EMS serial we lack and answers 503 refuses the login too (observed),
+    // so stop before asking for the password.
     if page.status != 200 {
         tracing::info!(status = page.status, "login page status");
+    }
+    if page.status == 503 && ems_required {
+        return Err(ems_serial_refused());
     }
     if page.text().contains("CheckHostXML") {
         return Err(Failure::Unsupported("gateway requires a host check".into()));
@@ -263,6 +270,19 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
             LoginOutcome::Denied { message } => {
                 return Err(Failure::AuthDenied(
                     message.unwrap_or_else(|| "credentials rejected".into()),
+                ));
+            }
+            LoginOutcome::Unexpected { status: 503 } if ems_required => {
+                return Err(ems_serial_refused());
+            }
+            LoginOutcome::Unexpected { status: 503 } if identity.ems.is_some() => {
+                return Err(Failure::Backend(
+                    "gateway refused the login with this Mac's EMS serial (HTTP 503)".into(),
+                ));
+            }
+            LoginOutcome::Unexpected { status: 503 } => {
+                return Err(Failure::Backend(
+                    "gateway login is unavailable (HTTP 503)".into(),
                 ));
             }
             LoginOutcome::Unexpected { status } => {
@@ -347,7 +367,7 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     };
     if xml.status != 200 {
         let f = if xml.status == 403 && ems_required {
-            Failure::Unsupported("gateway requires EMS registration".into())
+            Failure::Unsupported(EMS_REGISTRATION_REQUIRED.into())
         } else if xml.status == 403 {
             Failure::Unsupported("gateway refused tunnel access for this device".into())
         } else {
@@ -403,6 +423,14 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
 }
 
 /// Takes a new non-empty `SVPNCOOKIE` from a response.
+/// The gateway set `/remote/info` `0x100`, this attempt has no EMS serial, and the login
+/// answered 503.
+fn ems_serial_refused() -> Failure {
+    Failure::Unsupported(format!(
+        "{EMS_REGISTRATION_REQUIRED}: it refused the login without this Mac's EMS serial (HTTP 503)"
+    ))
+}
+
 fn refresh_cookie(r: &fortino_proto_sslvpn::http::Response, cookie: &mut Zeroizing<String>) {
     if let Some(c) = r.cookie("SVPNCOOKIE").filter(|c| !c.is_empty()) {
         *cookie = Zeroizing::new(c.to_owned());

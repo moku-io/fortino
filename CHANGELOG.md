@@ -2,6 +2,16 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
+## 0.7.0
+
+- **EMS Setup.** A guided checklist for each profile's EMS server: the server, permission on this Mac, registration, compliance and the VPN gateway, each with a tick or a cross. The first step that needs you comes first, with the buttons that fix it. Open it from the profile's EMS row, from **File → EMS Setup…**, or from a failed connection. **Copy Details for IT** gives your administrator what they need.
+- **Register now.** Register this Mac with the EMS before connecting, so problems show up before you type your VPN password. Also `fortino ems-register <server>`.
+- **FortiClient on the same Mac.** An EMS keeps one registration per Mac. When FortiClient is registered with the same EMS, Fortino no longer registers alongside it (the two would push each other out). EMS Setup offers the ways out: disconnect FortiClient from the EMS, uninstall it, or keep it for that VPN, and updates by itself once FortiClient lets go.
+- **Clearer failures.** A gateway that refuses the login because this Mac isn't registered with its EMS now says so, before asking for your password, and suggests why. When the EMS refuses a registration, its own reason is shown.
+- **Deployment packages checked.** Enrolling with a FortiClient package for a different EMS than the profile's is blocked, and FortiClient's standard installers, which carry no EMS settings, are explained instead of failing.
+- **Registration kept during a session.** If the EMS drops this Mac while the VPN is connected, Fortino registers again and carries on.
+- **Profiles window after an update.** The profile list no longer disappears while the "Fortino was updated" notice is shown.
+
 ## 0.6.0
 
 The first public release.

@@ -100,6 +100,17 @@ struct MenuView: View {
                 } else {
                     notice("Last attempt: \(r.message)", symbol: "exclamationmark.circle", tint: .secondary)
                 }
+                if let p = model.profiles.first(where: { $0.id == model.status?.profileId }),
+                   model.lastAttemptNeedsEms(p) {
+                    Button("Open EMS Setup…") {
+                        closePanel()
+                        model.emsSetupProfileId = p.id
+                        openWindow(id: "ems-setup")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    .controlSize(.small)
+                    .padding(.horizontal, 8)
+                }
                 if let p = model.gatewayTrustFailure {
                     Button("Review Certificate…") {
                         closePanel()

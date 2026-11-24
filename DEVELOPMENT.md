@@ -57,6 +57,8 @@ fortino disconnect
 fortino profile import export.xml --dry-run
 fortino profile export -o profiles.xml                    # FortiClient XML; all profiles, or name some
 fortino log-level debug                               # or error, warn, info, trace; no argument shows it
+fortino ems-status ems.example.org:8013                  # registration state and the next step
+fortino ems-register ems.example.org:8013                # register now (server must be approved)
 ```
 
 `fortinod` starts at `RUST_LOG` (default `info`); `fortino log-level` and the app's **Log level** setting change it at runtime until the daemon restarts. At every level, logs go through a redacting writer and never carry passwords, codes or cookie values. The installed service logs to `/var/log/fortinod.log`.
@@ -74,7 +76,7 @@ apps/macos/scripts/bundle.sh            # unsigned Fortino.app, fortino CLI in C
 swift run --package-path apps/macos FortinoKitSelfTest
 ```
 
-The app parses XML imports by running `fortino --json profile import … --dry-run` in the user's own process, so there is a single importer. `FORTINO_DEBUG_OPEN=profiles,menu-preview,import` opens those windows at launch.
+The app parses XML imports by running `fortino --json profile import … --dry-run` in the user's own process, so there is a single importer. `FORTINO_DEBUG_OPEN=profiles,menu-preview,import,ems-setup` opens those windows at launch. `FORTINO_DEBUG_SERVICE_UPDATE=after-disconnect` shows the service-update notice without a second build, for layout checks.
 
 ## Tests
 

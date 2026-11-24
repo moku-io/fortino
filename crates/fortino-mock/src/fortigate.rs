@@ -70,9 +70,11 @@ pub struct LoginCfg {
     pub require_ems_sn: Option<String>,
     /// Answer the login page with a host-check script.
     pub host_check: bool,
-    /// Answer `GET /remote/login` with this status instead of the page, as a gateway whose
-    /// login service is down does (observed: 503 while `/remote/info` still answers 200).
+    /// Answer `GET /remote/login` with this status instead of the page.
     pub login_page_status: Option<u16>,
+    /// With `require_ems_sn`, `/remote/login` and `/remote/logincheck` answer 503 to a request
+    /// without that `FSV_EMS_SN` (GATEWAY-7, which sets `/remote/info` `0x100`).
+    pub ems_sn_gates_login: bool,
 }
 
 impl Default for LoginCfg {
@@ -83,6 +85,7 @@ impl Default for LoginCfg {
             require_ems_sn: None,
             host_check: false,
             login_page_status: None,
+            ems_sn_gates_login: false,
         }
     }
 }
@@ -256,11 +259,15 @@ pub fn router(sc: &Scenario) -> Router {
     let (s3, c3) = (st.clone(), sc.clone());
     let (s4, c4) = (st.clone(), sc.clone());
     let s5 = st.clone();
+    let c0 = sc.clone();
     Router::new()
         .route("GET", "/remote/info", move |_| {
             Response::ok("application/xml", info.clone()).into()
         })
-        .route("GET", "/remote/login", move |_| {
+        .route("GET", "/remote/login", move |req| {
+            if !login_ems_ok(&c0, req) {
+                return Response::status(503).into();
+            }
             match login_page_status {
                 Some(status) => Response::status(status),
                 None => Response::ok("text/html", login_page),
@@ -268,6 +275,9 @@ pub fn router(sc: &Scenario) -> Router {
             .into()
         })
         .route("POST", "/remote/logincheck", move |req| {
+            if !login_ems_ok(&c1, req) {
+                return Response::status(503).into();
+            }
             logincheck(&s1, &c1, req).into()
         })
         .route("GET", "/remote/hostcheck_install", move |req| {
@@ -347,6 +357,16 @@ fn admitted(st: &Mutex<State>, sc: &Scenario, req: &Request) -> bool {
         .as_ref()
         .is_none_or(|want| req.header("FSV_EMS_SN") == Some(want.as_str()));
     ok && ems_ok
+}
+
+/// Whether the login paths serve `req` (see [`LoginCfg::ems_sn_gates_login`]).
+fn login_ems_ok(sc: &Scenario, req: &Request) -> bool {
+    !sc.login.ems_sn_gates_login
+        || sc
+            .login
+            .require_ems_sn
+            .as_ref()
+            .is_none_or(|want| req.header("FSV_EMS_SN") == Some(want.as_str()))
 }
 
 fn logincheck(st: &Mutex<State>, sc: &Scenario, req: &Request) -> Response {

@@ -73,6 +73,11 @@ struct FortinoApp: App {
             EnrollmentWindow(model: model)
         }
         .commandsRemoved()
+        Window("EMS Setup", id: "ems-setup") {
+            EmsSetupWindow(model: model)
+        }
+        .defaultSize(width: 560, height: 640)
+        .commandsRemoved()
 
         Settings {
             SettingsView(model: model, service: delegate.service, updater: delegate.updater)
@@ -118,7 +123,14 @@ struct FortinoCommands: Commands {
                 .keyboardShortcut("i", modifiers: [.command, .shift])
             Button("Export to FortiClient…") { Task { await model.exportProfiles() } }
             Divider()
-            Button("Enroll with EMS Package…") { show("enrollment") }
+            Button("EMS Setup…") {
+                model.emsSetupProfileId = nil
+                show("ems-setup")
+            }
+            Button("Enroll with EMS Package…") {
+                model.emsSetupProfileId = nil
+                show("enrollment")
+            }
         }
         CommandGroup(replacing: .help) {
             Button("Open Service Log in Console") { ServiceLog.openInConsole() }

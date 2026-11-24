@@ -10,7 +10,10 @@ use std::time::Duration;
 use fortino_config::{Endpoint, IpPolicy};
 use fortino_core::ErrorCode;
 use fortino_core::proto::ChallengeKind;
-use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerHandle};
+use fortino_core::worker::{
+    EMS_REGISTRATION_REQUIRED, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory,
+    WorkerHandle,
+};
 use fortino_ems::forticlient::FortiClientState;
 use fortino_ems::service::{EmsWorkers, ServerSettings, Settings};
 use fortino_ems::store::Store;
@@ -260,10 +263,117 @@ async fn without_permission_to_register_nothing_is_created() {
     let mut r = start(false, None, ems_scenario()).await;
     // The gateway requires the serial, so the tunnel is refused, but no device record appears.
     let ev = until_up_or_end(&mut r).await;
-    assert!(matches!(ev, WorkerEvent::Terminated(_)), "{ev:?}");
+    let WorkerEvent::Terminated(t) = ev else {
+        panic!("{ev:?}")
+    };
+    // The message says why there was no serial.
+    assert!(t.message.contains("isn't enabled"), "{}", t.message);
+    assert!(!t.message.contains("FortiClient"), "{}", t.message);
     let st = r.ems.state.lock().unwrap();
     assert!(st.seen.iter().all(|s| s.kind != "REGISTER"));
     assert!(st.endpoints.is_empty());
+}
+
+#[tokio::test]
+async fn forticlient_under_another_uid_is_named_when_the_serial_is_missing() {
+    let mut fc = forticlient(SERIAL, &[("ems.test", 8013)]);
+    fc.uid = Some(Uid::parse("277963E3DEAC437E9BB2B91DE1C49AFE").unwrap());
+    let mut r = start_fc(false, None, ems_scenario(), Some(fc)).await;
+    let ev = until_up_or_end(&mut r).await;
+    let WorkerEvent::Terminated(t) = ev else {
+        panic!("{ev:?}")
+    };
+    assert_eq!(t.code, Some(ErrorCode::UnsupportedPolicy));
+    assert!(
+        t.message.starts_with(EMS_REGISTRATION_REQUIRED),
+        "{}",
+        t.message
+    );
+    assert!(t.message.contains("FortiClient"), "{}", t.message);
+    // Its serial was not borrowed: nothing reached the EMS either.
+    assert!(r.ems.state.lock().unwrap().seen.is_empty());
+}
+
+#[tokio::test]
+async fn forticlient_under_another_uid_keeps_fortino_from_registering() {
+    // The EMS keeps one registration per Mac: registering here would end FortiClient's.
+    let mut fc = forticlient(SERIAL, &[("ems.test", 8013)]);
+    fc.uid = Some(Uid::parse("277963E3DEAC437E9BB2B91DE1C49AFE").unwrap());
+    let mut r = start_fc(true, Some("k3y"), ems_scenario(), Some(fc)).await;
+    let ev = until_up_or_end(&mut r).await;
+    let WorkerEvent::Terminated(t) = ev else {
+        panic!("{ev:?}")
+    };
+    assert!(
+        t.message.contains("one registration per Mac"),
+        "{}",
+        t.message
+    );
+    assert!(r.ems.state.lock().unwrap().seen.is_empty());
+}
+
+#[tokio::test]
+async fn forticlient_under_another_uid_found_by_probe_also_holds() {
+    let mut fc = forticlient(SERIAL, &[("192.0.2.50", 8013)]);
+    fc.uid = Some(Uid::parse("277963E3DEAC437E9BB2B91DE1C49AFE").unwrap());
+    let mut r = start_fc(true, Some("k3y"), ems_scenario(), Some(fc)).await;
+    let ev = until_up_or_end(&mut r).await;
+    assert!(matches!(ev, WorkerEvent::Terminated(_)), "{ev:?}");
+    let kinds: Vec<_> = r
+        .ems
+        .state
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .map(|s| s.kind.clone())
+        .collect();
+    assert_eq!(kinds, ["PROBE"]);
+}
+
+#[test]
+fn status_counts_forticlient_only_with_this_uid() {
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let status = |fc: FortiClientState| {
+        EmsWorkers::new(
+            Arc::new(fortino_sslvpn::NativeWorker {
+                trust: Trust::Roots(vec![]),
+                identity: ClientIdentity::forticlient("mac-01"),
+                devices: Arc::new(MemoryDevices::default()),
+                connect_override: None,
+            }),
+            Settings {
+                package_approvals: None,
+                state_dir: dir.path().join("ems"),
+                uid: None,
+                compat: Default::default(),
+                servers: HashMap::from([(
+                    "ems.test:8013".to_owned(),
+                    ServerSettings {
+                        trust: Trust::Roots(vec![]),
+                        key_file: None,
+                        register: true,
+                    },
+                )]),
+                settle: Duration::ZERO,
+                min_ka_interval: Duration::ZERO,
+            },
+            Arc::new(|| Some(base_facts())),
+        )
+        .with_forticlient(Arc::new(move || Some(fc.clone())))
+        .status(&server)
+        .unwrap()
+        .state
+        .as_str()
+    };
+    let same = forticlient(SERIAL, &[("ems.test", 8013)]);
+    assert_eq!(status(same.clone()), "managed-by-forticlient");
+    let mut other = same;
+    other.uid = Some(Uid::parse("277963E3DEAC437E9BB2B91DE1C49AFE").unwrap());
+    assert_eq!(status(other.clone()), "held-by-forticlient");
+    other.running = false;
+    assert_eq!(status(other), "not-registered");
 }
 
 #[tokio::test]
@@ -501,26 +611,32 @@ async fn package_enrollment_is_scoped_and_idempotent() {
     workers.connect_override = Some(mock.handle.addr);
     assert!(
         workers
-            .enroll_package("other.test".parse().unwrap(), "pkg-a")
+            .enroll("other.test".parse().unwrap(), Some("pkg-a"))
             .await
             .is_err()
     );
     assert!(
         workers
-            .enroll_package(server.clone(), "bad\nvalue")
+            .enroll(server.clone(), Some("bad\nvalue"))
             .await
             .is_err()
     );
     let (a, b) = tokio::join!(
-        workers.enroll_package(server.clone(), "pkg-a"),
-        workers.enroll_package(server.clone(), "pkg-a")
+        workers.enroll(server.clone(), Some("pkg-a")),
+        workers.enroll(server.clone(), Some("pkg-a"))
     );
     assert_eq!(a.unwrap().0, "registered");
     assert_eq!(b.unwrap().0, "registered");
     assert_eq!(
-        workers.enroll_package(server, "pkg-b").await.unwrap().0,
+        workers
+            .enroll(server.clone(), Some("pkg-b"))
+            .await
+            .unwrap()
+            .0,
         "existing-registration"
     );
+    // Register Now (no package) keeps the existing registration.
+    assert_eq!(workers.enroll(server, None).await.unwrap().0, "registered");
     let state = mock.state.lock().unwrap();
     assert_eq!(
         state.seen.iter().filter(|r| r.kind == "REGISTER").count(),
@@ -543,4 +659,100 @@ async fn package_enrollment_is_scoped_and_idempotent() {
         .unwrap();
     let ka = fortino_ems::report::full(&base_facts(), &Default::default(), Some(&r)).unwrap();
     assert_eq!(ka.get("INSTALLUID"), Some("pkg-a"));
+}
+
+/// Counts the requests of `kind` the mock EMS has seen.
+fn seen(r: &Rig, kind: &str) -> usize {
+    r.ems
+        .state
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|s| s.kind == kind)
+        .count()
+}
+
+/// Waits until `cond` holds, failing after five seconds.
+async fn until(r: &Rig, what: &str, cond: impl Fn(&Rig) -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !cond(r) {
+        assert!(tokio::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Makes the mock EMS forget every device, so its next keepalive is answered `CONT|0`.
+fn forget_devices(r: &Rig) {
+    r.ems.state.lock().unwrap().endpoints.clear();
+}
+
+#[tokio::test]
+async fn dropped_during_a_session_registers_again() {
+    let sc = EmsScenario {
+        ka_interval: 1,
+        ..ems_scenario()
+    };
+    let mut r = start(true, Some("k3y"), sc).await;
+    assert!(matches!(until_up_or_end(&mut r).await, WorkerEvent::Up(_)));
+    until(&r, "first keepalive", |r| seen(r, "KA") >= 1).await;
+    assert_eq!(seen(&r, "REGISTER"), 1);
+    forget_devices(&r);
+    until(&r, "a new registration", |r| seen(r, "REGISTER") == 2).await;
+    // Keepalives go on for the new registration, and the EMS knows the device again.
+    let kas = seen(&r, "KA");
+    until(&r, "keepalives after registering again", |r| {
+        seen(r, "KA") > kas
+    })
+    .await;
+    assert_eq!(r.ems.state.lock().unwrap().endpoints.len(), 1);
+    stop(&mut r).await;
+}
+
+#[tokio::test]
+async fn dropped_again_soon_after_stops_the_keepalives() {
+    let sc = EmsScenario {
+        ka_interval: 1,
+        ..ems_scenario()
+    };
+    let mut r = start(true, Some("k3y"), sc).await;
+    assert!(matches!(until_up_or_end(&mut r).await, WorkerEvent::Up(_)));
+    until(&r, "first keepalive", |r| seen(r, "KA") >= 1).await;
+    forget_devices(&r);
+    until(&r, "a new registration", |r| seen(r, "REGISTER") == 2).await;
+    let kas = seen(&r, "KA");
+    until(&r, "a keepalive after registering again", |r| {
+        seen(r, "KA") > kas
+    })
+    .await;
+    forget_devices(&r);
+    // The next keepalive is dropped; no third registration, and the keepalives stop.
+    let kas = seen(&r, "KA");
+    until(&r, "the dropped keepalive", |r| seen(r, "KA") > kas).await;
+    let settled = seen(&r, "KA");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(seen(&r, "REGISTER"), 2);
+    assert_eq!(seen(&r, "KA"), settled);
+    stop(&mut r).await;
+}
+
+#[tokio::test]
+async fn dropped_while_forticlient_is_on_the_ems_is_left_to_it() {
+    let sc = EmsScenario {
+        ka_interval: 1,
+        ..ems_scenario()
+    };
+    let mut r = start(true, Some("k3y"), sc).await;
+    assert!(matches!(until_up_or_end(&mut r).await, WorkerEvent::Up(_)));
+    until(&r, "first keepalive", |r| seen(r, "KA") >= 1).await;
+    // FortiClient registers this Mac with the same EMS under its own UID, which ends ours.
+    let mut fc = forticlient(SERIAL, &[("ems.test", 8013)]);
+    fc.uid = Some(Uid::parse("277963E3DEAC437E9BB2B91DE1C49AFE").unwrap());
+    *r.fc.lock().unwrap() = Some(fc);
+    forget_devices(&r);
+    let kas = seen(&r, "KA");
+    until(&r, "the dropped keepalive", |r| seen(r, "KA") > kas).await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(seen(&r, "REGISTER"), 1);
+    stop(&mut r).await;
 }

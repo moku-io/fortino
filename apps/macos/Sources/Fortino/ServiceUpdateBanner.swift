@@ -54,8 +54,12 @@ struct ServiceUpdateBanner: View {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: u.symbol).foregroundStyle(u.tint).imageScale(.large)
+                    // No fixedSize here: inside a window's safe-area inset it made the
+                    // Profiles split view lay out taller than the window, pushing the profile
+                    // list out of sight. Two lines fit every message at the window's minimum width.
                     Text(u.message(state: model.state))
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Spacer(minLength: 8)
                     if u == .restarting {
                         ProgressView().controlSize(.small)
