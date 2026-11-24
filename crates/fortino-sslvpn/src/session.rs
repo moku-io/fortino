@@ -184,6 +184,10 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
             None,
         )))
         .await?;
+    // A non-200 login page is only logged; the login is still sent.
+    if page.status != 200 {
+        tracing::info!(status = page.status, "login page status");
+    }
     if page.text().contains("CheckHostXML") {
         return Err(Failure::Unsupported("gateway requires a host check".into()));
     }

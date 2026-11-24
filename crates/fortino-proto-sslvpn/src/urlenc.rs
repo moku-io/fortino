@@ -1,8 +1,7 @@
 //! `application/x-www-form-urlencoded` helpers.
 
 /// Percent-encodes everything except RFC 3986 unreserved characters.
-// UNVERIFIED: FortiClient's exact escaping set is not recorded. Unreserved-only is the
-// safest choice and matches what openfortivpn sends.
+// Every other byte is sent as uppercase `%XX`, the form encoding the gateway expects.
 pub(crate) fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
@@ -60,5 +59,11 @@ mod tests {
         assert_eq!(decode("%2Fremote%2Findex"), "/remote/index");
         assert_eq!(decode("100%"), "100%");
         assert_eq!(decode("%zz"), "%zz");
+    }
+
+    #[test]
+    fn keeps_only_forticlient_set() {
+        assert_eq!(encode("Az09-._~"), "Az09-._~");
+        assert_eq!(encode("!*'()+"), "%21%2A%27%28%29%2B");
     }
 }

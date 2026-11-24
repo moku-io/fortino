@@ -5,7 +5,7 @@ Fortino is a native client for FortiGate SSL VPN and FortiClient EMS (macOS firs
 ## Truthfulness
 
 - Anything inferred rather than observed carries an `UNVERIFIED` comment in code and must match the mock's assumption.
-- Code comments explain what goes on the wire and why. Never copy vendor code, binaries, keys, certificates, assets or long vendor strings into the repository. Protocol tokens (paths, header and field names) are fine.
+- Code comments explain what goes on the wire and why, never where it was learned (no client versions, component names or symbols). Never copy vendor code, binaries, keys, certificates, assets or long vendor strings into the repository. Protocol tokens (paths, header and field names) are fine.
 - Each VPN profile names its own EMS server; registrations are kept per EMS and the one used follows the profile being connected. Never design an EMS flow that requires unregistering to switch gateways.
 - Wire identity may match FortiClient (headers, order, frame layouts). Posture never lies: no claimed AV, firewall, host-check result or EMS feature the client doesn't have. Don't present an EMS serial unless this client is registered to that EMS.
 
