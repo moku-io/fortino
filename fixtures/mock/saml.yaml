@@ -1,0 +1,8 @@
+# Synthetic mock FortiGate with single sign-on (SAML). No real deployment data.
+#   cargo run -p fortino-mock -- fortigate fixtures/mock/saml.yaml --bind 127.0.0.1:10443
+# The mock plays the identity provider: its sign-in page has one button, and the browser is then
+# redirected to http://127.0.0.1:8020/?id=… for the client to collect.
+info:
+  sso_port: 8020
+saml:
+  idp_form: true
