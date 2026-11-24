@@ -15,11 +15,21 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.5.3</string>
+	<string>0.6.0</string>
 	<key>CFBundleVersion</key>
-	<string>15</string>
+	<string>16</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/moku-io/fortino/releases/latest/download/appcast.xml</string>
+	<key>SURequireSignedFeed</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SUPublicEDKey</key>
+	<string>BgoIOAV7yTIITl7vO7jB7mKbsqGnf0GCuL+ZotrhdfI=</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Moku S.r.l. GPL-3.0-or-later.</string>
 </dict>

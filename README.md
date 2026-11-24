@@ -9,9 +9,9 @@
 Connects to your company's FortiGate. Then gets out of your way.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
-![macOS Apple silicon](https://img.shields.io/badge/macOS-Apple%20silicon-black)
+![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black)
 ![Rust](https://img.shields.io/badge/Rust-2024-orange)
-![Version](https://img.shields.io/badge/version-0.5.3-green)
+![Version](https://img.shields.io/badge/version-0.6.0-green)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/menu-dark.png">
@@ -29,6 +29,7 @@ Connects to your company's FortiGate. Then gets out of your way.
 - **A sleek native menu-bar app** (SwiftUI) **and a headless `fortino` CLI.**
 - **Dark mode**, matching both your terminal and your mood about corporate VPNs.
 - **You can quit it.** No icon squatting in your menu bar forever.
+- **Signed, notarized, self-updating.** New versions arrive with their release notes; install now, later, or skip.
 - **macOS Keychain** for saved passwords: coming soon.
 
 ## No backdoor, by design
@@ -40,11 +41,11 @@ Posture is truthful too. Fortino never reports an antivirus, a firewall or a hos
 
 ## Platforms
 
-macOS on Apple silicon today. Want Linux or Intel? [Open an issue](https://github.com/moku-io/fortino/issues) and react with 👍
+macOS 13 or later on Apple silicon. The download runs on Intel Macs too, but hasn't been tested on Intel hardware yet. Want Linux? [Open an issue](https://github.com/moku-io/fortino/issues) and react with 👍
 
 ## Install
 
-Download the DMG from [Releases](https://github.com/moku-io/fortino/releases), drag Fortino to Applications, open it and allow its VPN service once in System Settings → General → Login Items. To uninstall, drag it to the Trash.
+Download the DMG from the [latest release](https://github.com/moku-io/fortino/releases/latest), drag Fortino to Applications, open it and allow its VPN service once in System Settings → General → Login Items. Fortino checks for updates once a day ([changelog](CHANGELOG.md)). To uninstall, drag it to the Trash.
 
 Building from source? See [DEVELOPMENT.md](DEVELOPMENT.md): dev daemon, mock gateway, tests and the signed DMG.
 
@@ -54,7 +55,8 @@ Building from source? See [DEVELOPMENT.md](DEVELOPMENT.md): dev daemon, mock gat
 | --- | --- |
 | [DEVELOPMENT.md](DEVELOPMENT.md) | Build, run and test locally |
 | [docs/comparison.md](docs/comparison.md) | Fortino vs openfortivpn, OpenConnect and FortiClient |
-| [docs/releasing.md](docs/releasing.md) | Signed DMG and release checklist |
+| [CHANGELOG.md](CHANGELOG.md) | What changed in each release |
+| [docs/releasing.md](docs/releasing.md) | Notarized DMG, updates and release checklist |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contributing and licensing |
 | [AGENTS.md](AGENTS.md) | Rules for coding agents |
 
@@ -68,7 +70,7 @@ Need help with a VPN? <a href="https://www.moku.io/en/contact">Get in touch</a>.
 
 ## Thanks
 
-Built on what [openfortivpn](https://github.com/adrienverge/openfortivpn), [OpenConnect](https://www.infradead.org/openconnect/fortinet.html) and their friends taught us. [Full credits](docs/comparison.md#thanks).
+Built on what [openfortivpn](https://github.com/adrienverge/openfortivpn), [OpenConnect](https://www.infradead.org/openconnect/fortinet.html) and their friends taught us. [Full credits](docs/comparison.md#thanks). Updates are delivered by [Sparkle](https://sparkle-project.org) (MIT).
 
 ---
 

@@ -48,10 +48,10 @@ struct FortinoApp: App {
                     }
                 }
         }
-        .commands { FortinoCommands(model: model) }
+        .commands { FortinoCommands(model: model, updater: delegate.updater) }
 
         MenuBarExtra {
-            MenuView(model: model, service: delegate.service)
+            MenuView(model: model, service: delegate.service, updater: delegate.updater)
         } label: {
             MenuBarIcon(state: model.state)
                 // Opening Fortino again (Finder, Spotlight) shows the Profiles window, so the app
@@ -75,12 +75,12 @@ struct FortinoApp: App {
         .commandsRemoved()
 
         Settings {
-            SettingsView(model: model, service: delegate.service)
+            SettingsView(model: model, service: delegate.service, updater: delegate.updater)
         }
 
         // Development aid: the menu content in a normal window (see FORTINO_DEBUG_OPEN).
         Window("Menu Preview", id: "menu-preview") {
-            MenuView(model: model, service: delegate.service)
+            MenuView(model: model, service: delegate.service, updater: delegate.updater)
         }
         .windowResizability(.contentSize)
         .commandsRemoved()
@@ -100,9 +100,14 @@ private func debugStatusButton() -> NSStatusBarButton? {
 /// File and Help menu items for the actions that used to crowd the menu-bar panel.
 struct FortinoCommands: Commands {
     let model: AppModel
+    @ObservedObject var updater: AppUpdater
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
+        }
         CommandGroup(replacing: .newItem) {
             Button("New Profile") {
                 model.newProfileRequested = true
@@ -134,9 +139,11 @@ extension Notification.Name {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let service = VPNService()
+    let updater = AppUpdater()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         service.ensureRegistered()
+        updater.start()
         _ = OptionKey.shared
         // The Dock icon is shown only while an app window is open; otherwise Fortino lives in the
         // menu bar alone, like other menu-bar apps.

@@ -16,7 +16,7 @@ How to run the daemon, CLI and desktop app on one Mac without root and without c
 | `crates/fortinod` | Daemon: socket server, peer authorization, session state machine, network controller. |
 | `crates/fortino-cli` | `fortino`. |
 | `crates/fortino-mock` | Synthetic FortiGate and EMS servers for tests. |
-| `apps/macos` | SwiftUI/AppKit menu-bar app (`Fortino`) and its protocol kit (`FortinoKit`). |
+| `apps/macos` | SwiftUI/AppKit menu-bar app (`Fortino`) and its protocol kit (`FortinoKit`). Updates through Sparkle, a Swift package dependency. |
 | `fixtures/` | Synthetic configurations and scenarios. |
 
 ## Development daemon
@@ -95,12 +95,16 @@ The macOS network controller changes routes, resolvers and pf, so its live tests
 ## Installer
 
 ```sh
-scripts/package-macos.sh        # target/package/Fortino-<version>.dmg, unsigned, this Mac's architecture
+scripts/package-macos.sh        # target/package/Fortino-<version>.dmg, unsigned, universal
 SIGN_APP="Developer ID Application: …" \
   scripts/package-macos.sh      # signed: needed for the service to register
-NOTARY_PROFILE=fortino …        # add to also notarize and staple the DMG
+NOTARY_PROFILE=fortino …        # add to also notarize and staple the app and the DMG
+FORTINO_UNIVERSAL=0 …           # this Mac's architecture only
 scripts/macos-vm-dmg-test.sh    # install from the DMG in a disposable VM and test
+scripts/release-macos.sh        # publish a release on GitHub; see docs/releasing.md
 ```
+
+Universal builds need rustup with the `aarch64-apple-darwin` and `x86_64-apple-darwin` targets.
 
 The release version is `CFBundleShortVersionString` in `apps/macos/Resources/Info.plist` (which names the DMG) and `version` under `[workspace.package]` in `Cargo.toml` (which `fortino -V` reports); bump both together, and `cargo test` fails if they differ.
 
@@ -111,11 +115,12 @@ The release version is `CFBundleShortVersionString` in `apps/macos/Resources/Inf
 | `Contents/MacOS/Fortino` | Menu-bar app, runs as the user |
 | `Contents/MacOS/fortinod` | Root VPN service, and the tunnel worker as `fortinod --worker` |
 | `Contents/Helpers/fortino` | CLI |
+| `Contents/Frameworks/Sparkle.framework` | App updates (without its XPC services, which only sandboxed apps need) |
 | `Contents/Library/LaunchDaemons/org.fortino.fortinod.plist` | launchd job, log `/var/log/fortinod.log` |
 
 **Install.** Drag the app to Applications and open it. It registers the service with `SMAppService`; the user approves it once in System Settings → General → Login Items. Settings → Command Line links `/usr/local/bin/fortino` to the bundle. macOS registers the service only from a Developer ID-signed bundle.
 
-**Update.** Drag the new app over the old one and open it. The app compares its build ID with the running service's and asks an older service to restart, right away when disconnected or after the next disconnect.
+**Update.** The app checks the feed in `SUFeedURL` (the `appcast.xml` of the latest GitHub release) once a day and on **Check for Updates…**. Sparkle accepts the feed and the DMG only when they are signed with the EdDSA key whose public half is `SUPublicEDKey`, shows the release notes with **Install Update**, **Remind Me Later** and **Skip This Version**, replaces the app and relaunches it. When a scheduled check finds an update while no Fortino window is in front, the menu-bar panel shows **Update to Fortino …** instead of opening a window. Dragging a new app over the old one works too. Either way, the new app compares its build ID with the running service's and asks an older service to restart, right away when disconnected or after the next disconnect, so a connected VPN stays up during the update. Settings → General turns automatic checks off. `FORTINO_UPDATE_FEED` points a copy at another (still signed) feed for testing.
 
 **Uninstall.** Move Fortino to the Trash; macOS removes the service with it. Profiles and settings stay in `/Library/Application Support/Fortino`.
 
