@@ -6,7 +6,7 @@
 use std::io;
 use std::os::fd::AsFd;
 
-use fortino_config::{Endpoint, IpPolicy};
+use fortino_config::{CredentialMode, Endpoint, IpPolicy};
 use fortino_core::framing::{read_frame, write_frame};
 use fortino_core::worker::{
     FakeWorker, FakeWorkerConfig, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory,
@@ -62,6 +62,7 @@ async fn main() -> io::Result<()> {
         port,
         realm,
         username,
+        saml,
         ..
     } = &start
     else {
@@ -74,6 +75,11 @@ async fn main() -> io::Result<()> {
         realm.clone(),
         username.clone(),
     );
+    let credential_mode = if *saml {
+        CredentialMode::Saml
+    } else {
+        CredentialMode::Password
+    };
     if misbehave == "exit-early" {
         return Ok(());
     }
@@ -87,6 +93,7 @@ async fn main() -> io::Result<()> {
         attempt_id: attempt.clone(),
         endpoint,
         username,
+        credential_mode,
         trust_id: "stub".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
@@ -117,9 +124,10 @@ async fn main() -> io::Result<()> {
                 let v = WORKER_PROTOCOL_VERSION;
                 let (msg, last) = match ev {
                     WorkerEvent::Stage(stage) => (WorkerMsg::Stage { v, attempt: a, seq, stage }, false),
-                    WorkerEvent::Challenge { id, kind, prompt } => {
-                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt }, false)
-                    }
+                    WorkerEvent::Challenge { id, kind, prompt, callback_port } => (
+                        WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt, callback_port },
+                        false,
+                    ),
                     WorkerEvent::Up(tc) => (
                         WorkerMsg::Up {
                             v,

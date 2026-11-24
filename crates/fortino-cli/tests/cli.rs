@@ -21,18 +21,20 @@ struct Daemon {
 }
 
 fn daemon() -> Daemon {
+    daemon_with(FakeWorkerConfig {
+        password: Some("hunter2".into()),
+        step_delay_ms: 5,
+        ..Default::default()
+    })
+}
+
+fn daemon_with(config: FakeWorkerConfig) -> Daemon {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("d.sock");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let session = Session::new(
         ProfileStore::in_memory().unwrap(),
-        Box::new(FakeWorker {
-            config: FakeWorkerConfig {
-                password: Some("hunter2".into()),
-                step_delay_ms: 5,
-                ..Default::default()
-            },
-        }),
+        Box::new(FakeWorker { config }),
         Box::new(JournaledController::new(
             Journaled::open(
                 FakeNet::new(Arc::new(Mutex::new(FakeState::typical_host()))),
@@ -160,6 +162,90 @@ fn missing_otp_without_terminal_is_interaction_required() {
     assert_eq!(json(&o)["error"]["code"], "interaction_required");
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
     assert_eq!(json(&d.run("--json status"))["status"]["state"], "idle");
+}
+
+/// A loopback port nothing listens on right now.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn sso_daemon(port: u16) -> Daemon {
+    daemon_with(FakeWorkerConfig {
+        step_delay_ms: 5,
+        saml_port: port,
+        saml_id: Some("abc-1".into()),
+        ..Default::default()
+    })
+}
+
+#[test]
+fn connect_with_single_sign_on() {
+    use std::io::{Read, Write};
+    let port = free_port();
+    let d = sso_daemon(port);
+    assert_eq!(
+        code(&d.run("profile add SSO --host sso.example.org --port 10443 --auth saml")),
+        0
+    );
+    let v = json(&d.run("--json profile show SSO"));
+    assert_eq!(v["result"]["spec"]["credentialMode"], "saml");
+    assert!(stdout(&d.run("profile list")).contains("sso"));
+
+    // The browser: once the CLI listens, the gateway's redirect lands on it.
+    let browser = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            match std::net::TcpStream::connect(("127.0.0.1", port)) {
+                Ok(mut s) => {
+                    write!(
+                        s,
+                        "GET /?id=abc-1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"
+                    )
+                    .unwrap();
+                    let mut page = String::new();
+                    s.read_to_string(&mut page).unwrap();
+                    return page;
+                }
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("the CLI never listened: {e}"),
+            }
+        }
+    });
+    let o = d.run("--json connect SSO --no-browser");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert_eq!(json(&o)["status"]["state"], "connected");
+    let page = browser.join().unwrap();
+    assert!(page.starts_with("HTTP/1.1 200"), "{page}");
+    assert!(!page.contains("abc-1"), "the page must not echo the id");
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("https://sso.example.org:10443/remote/saml/start?redirect=1"),
+        "{err}"
+    );
+    assert!(!err.contains("abc-1"), "{err}");
+    assert_eq!(code(&d.run("disconnect")), 0);
+}
+
+#[test]
+fn single_sign_on_without_the_port_or_a_terminal_is_interaction_required() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port();
+    let d = sso_daemon(port);
+    assert_eq!(
+        code(&d.run("profile add SSO --host sso.example.org --auth saml")),
+        0
+    );
+    let o = d.run("--json connect SSO --no-browser");
+    assert_eq!(code(&o), 4, "{o:?}");
+    assert_eq!(json(&o)["error"]["code"], "interaction_required");
+    assert_eq!(json(&d.run("--json status"))["status"]["state"], "idle");
+    drop(taken);
 }
 
 #[test]

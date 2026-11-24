@@ -14,6 +14,7 @@ fortino-ems.workspace = true
 fortino-proto-ems.workspace = true
 fortino-tls.workspace = true
 fortino-platform.workspace = true
+fortino-proto-sslvpn.workspace = true
 fortino-secret.workspace = true
 fortino-sslvpn.workspace = true
 nix = { workspace = true, features = ["user", "fs", "signal"] }

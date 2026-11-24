@@ -11,9 +11,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Notify, broadcast, mpsc, watch};
 use tokio::time::Instant;
 
-use fortino_config::{IpPolicy, Profile, ProfileId, ProfileStore, StoreError};
+use fortino_config::{CredentialMode, IpPolicy, Profile, ProfileId, ProfileStore, StoreError};
 use fortino_core::proto::{
-    Challenge, ChallengeKind, ConnectParams, ConnectResult, LastResult, RestartWhen, State, Status,
+    Challenge, ChallengeKind, ConnectParams, ConnectResult, LastResult, RestartWhen, SamlLogin,
+    State, Status,
 };
 use fortino_core::worker::{
     Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerStage,
@@ -31,6 +32,8 @@ pub const EVENT_CAPACITY: usize = 64;
 const MAX_REQUEST_KEYS: usize = 1024;
 /// Maximum length of a username, request key or ID in a request.
 pub const MAX_TOKEN_LEN: usize = 256;
+/// Longest answer to a single sign-on challenge (the browser callback's query string).
+pub const MAX_SAML_ANSWER: usize = fortino_proto_sslvpn::saml::MAX_QUERY;
 
 #[derive(Debug, Clone)]
 struct PendingChallenge {
@@ -38,6 +41,8 @@ struct PendingChallenge {
     kind: ChallengeKind,
     prompt: String,
     deadline: Instant,
+    /// Where to sign in, for a single sign-on.
+    saml: Option<SamlLogin>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +145,7 @@ impl Snapshot {
                         .deadline
                         .saturating_duration_since(Instant::now())
                         .as_secs(),
+                    saml: c.saml.clone(),
                 });
             }
         } else if let Some(f) = &self.last
@@ -499,11 +505,17 @@ impl Session {
             }));
         }
         let attempt_id = format!("a-{}", uuid::Uuid::new_v4().simple());
-        let username = username.or_else(|| profile.spec.username_hint.clone());
+        let credential_mode = profile.spec.credential_mode;
+        // A single sign-on names the account at the identity provider, not here.
+        let username = match credential_mode {
+            CredentialMode::Password => username.or_else(|| profile.spec.username_hint.clone()),
+            CredentialMode::Saml => None,
+        };
         let handle = self.workers.spawn(WorkerConfig {
             attempt_id: attempt_id.clone(),
             endpoint: profile.spec.endpoint.clone(),
             username,
+            credential_mode,
             trust_id: profile.spec.trust_id.clone(),
             ip_policy: profile.spec.ip_policy,
             ems: None,
@@ -562,10 +574,14 @@ impl Session {
         if a.attempt_id != attempt_id || a.owner != peer.uid {
             return Err(stale());
         }
-        if a.challenge.as_ref().is_none_or(|c| c.id != challenge_id) {
+        let Some(pending) = a.challenge.as_ref().filter(|c| c.id == challenge_id) else {
             return Err(stale());
-        }
-        if value.expose().len() > MAX_TOKEN_LEN {
+        };
+        let max = match pending.kind {
+            ChallengeKind::Saml => MAX_SAML_ANSWER,
+            _ => MAX_TOKEN_LEN,
+        };
+        if value.expose().len() > max {
             return Err(ProtoError::new(
                 ErrorCode::InvalidRequest,
                 "answer too long",
@@ -749,10 +765,22 @@ impl Session {
             state,
             State::Starting | State::Authenticating | State::AwaitingInput | State::Configuring
         );
+        // A single sign-on is asked only for a profile that uses it.
+        let saml_profile = a.profile.spec.credential_mode == CredentialMode::Saml;
         let fits = match &ev {
             WorkerEvent::Stage(WorkerStage::Transport) => state == State::Starting,
             WorkerEvent::Stage(_) => pre_connect && a.challenge.is_none(),
-            WorkerEvent::Challenge { .. } => pre_connect && a.challenge.is_none(),
+            WorkerEvent::Challenge {
+                kind,
+                callback_port,
+                ..
+            } => {
+                let kind_ok = match kind {
+                    ChallengeKind::Saml => saml_profile && callback_port.is_some_and(|p| p != 0),
+                    _ => !saml_profile && callback_port.is_none(),
+                };
+                pre_connect && a.challenge.is_none() && kind_ok
+            }
             WorkerEvent::Up(_) => pre_connect && a.challenge.is_none() && !a.network_applied,
             WorkerEvent::Terminated(_) => true,
         };
@@ -778,15 +806,29 @@ impl Session {
                 };
                 self.publish(&mut g);
             }
-            WorkerEvent::Challenge { id, kind, prompt } => {
+            WorkerEvent::Challenge {
+                id,
+                kind,
+                prompt,
+                callback_port,
+            } => {
                 let id = id.chars().take(64).collect();
                 let prompt = sanitize_prompt(&prompt);
+                // The sign-in page comes from the profile, never from the worker.
+                let saml = callback_port
+                    .filter(|_| kind == ChallengeKind::Saml)
+                    .map(|port| saml_login(&a.profile, port));
+                let timeout = match kind {
+                    ChallengeKind::Saml => self.timeouts.saml,
+                    _ => self.timeouts.challenge,
+                };
                 a.progress_deadline = None;
                 a.challenge = Some(PendingChallenge {
                     id,
                     kind,
                     prompt,
-                    deadline: Instant::now() + self.timeouts.challenge,
+                    deadline: Instant::now() + timeout,
+                    saml,
                 });
                 g.state = State::AwaitingInput;
                 self.publish(&mut g);
@@ -909,6 +951,15 @@ impl Session {
 
 fn sanitize_prompt(p: &str) -> String {
     p.chars().filter(|c| !c.is_control()).take(128).collect()
+}
+
+/// The single sign-on page for `profile`'s gateway, ending at the local `callback_port`.
+fn saml_login(profile: &Profile, callback_port: u16) -> SamlLogin {
+    let e = &profile.spec.endpoint;
+    SamlLogin {
+        url: fortino_proto_sslvpn::saml::start_url(&e.host.to_string(), e.port, e.realm.as_deref()),
+        callback_port,
+    }
 }
 
 fn uuid_like() -> String {

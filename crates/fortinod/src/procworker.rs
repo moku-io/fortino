@@ -16,6 +16,7 @@ use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use fortino_config::CredentialMode;
 use fortino_core::ErrorCode;
 use fortino_core::framing::{read_frame, write_frame};
 use fortino_core::worker::{
@@ -315,6 +316,7 @@ impl ProcessWorker {
             ems_serial: cfg.ems.as_ref().map(|e| e.serial.clone()),
             ems_tenant: cfg.ems.as_ref().map(|e| e.tenant.clone()),
             fct_uid: cfg.fct_uid.clone(),
+            saml: cfg.credential_mode == CredentialMode::Saml,
         };
         if !send(&mut wr, &start).await {
             reap(&mut child, pgid, false).await;

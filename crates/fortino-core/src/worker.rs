@@ -9,7 +9,7 @@
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use fortino_config::{Endpoint, IpPolicy};
+use fortino_config::{CredentialMode, Endpoint, IpPolicy};
 use fortino_platform::IpNet;
 use fortino_secret::Secret;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,8 @@ pub struct WorkerConfig {
     pub endpoint: Endpoint,
     /// Username if known; otherwise the worker asks for it.
     pub username: Option<String>,
+    /// How the user signs in.
+    pub credential_mode: CredentialMode,
     /// Trust configuration ID.
     pub trust_id: String,
     /// IP policy.
@@ -117,6 +119,8 @@ pub enum WorkerEvent {
         kind: ChallengeKind,
         /// Sanitized prompt.
         prompt: String,
+        /// For [`ChallengeKind::Saml`] only: the local port the gateway redirects the browser to.
+        callback_port: Option<u16>,
     },
     /// Tunnel interface is up with these settings. The daemon applies and verifies them.
     Up(TunnelConfig),
@@ -193,6 +197,11 @@ pub struct FakeWorkerConfig {
     pub step_delay_ms: u64,
     /// Scripted failure.
     pub fail: Option<FakeFailure>,
+    /// Single sign-on profiles: the callback port the fake gateway names.
+    pub saml_port: u16,
+    /// Single sign-on profiles: the only session id accepted. `None` accepts any well-formed
+    /// id.
+    pub saml_id: Option<String>,
 }
 
 impl Default for FakeWorkerConfig {
@@ -212,6 +221,8 @@ impl Default for FakeWorkerConfig {
             block_ipv6: true,
             step_delay_ms: 50,
             fail: None,
+            saml_port: fortino_proto_sslvpn::saml::DEFAULT_CALLBACK_PORT,
+            saml_id: None,
         }
     }
 }
@@ -283,12 +294,22 @@ impl FakeRun {
     }
 
     async fn ask(&mut self, kind: ChallengeKind, prompt: &str) -> Result<Secret, Stop> {
+        self.ask_at(kind, prompt, None).await
+    }
+
+    async fn ask_at(
+        &mut self,
+        kind: ChallengeKind,
+        prompt: &str,
+        callback_port: Option<u16>,
+    ) -> Result<Secret, Stop> {
         self.next_challenge += 1;
         let id = format!("c{}", self.next_challenge);
         self.emit(WorkerEvent::Challenge {
             id: id.clone(),
             kind,
             prompt: prompt.into(),
+            callback_port,
         })
         .await?;
         loop {
@@ -331,28 +352,10 @@ impl FakeRun {
         }
         self.emit(WorkerEvent::Stage(WorkerStage::Authenticating))
             .await?;
-        if cfg.username.is_none() {
-            let u = self.ask(ChallengeKind::Username, "Username").await?;
-            if u.is_empty() {
-                return Err(fail(ErrorCode::AuthDenied, "username required"));
-            }
-        }
-        let pw = self.ask(ChallengeKind::Password, "Password").await?;
-        self.step().await?;
-        let ok = match &s.password {
-            Some(p) => pw.expose() == p,
-            None => !pw.is_empty(),
-        };
-        drop(pw);
-        if !ok {
-            return Err(fail(ErrorCode::AuthDenied, "credentials rejected"));
-        }
-        if let Some(expected) = &s.otp {
-            let otp = self.ask(ChallengeKind::Otp, "Token code").await?;
-            self.step().await?;
-            if otp.expose() != expected {
-                return Err(fail(ErrorCode::AuthDenied, "token code rejected"));
-            }
+        if cfg.credential_mode == CredentialMode::Saml {
+            self.single_sign_on(s).await?;
+        } else {
+            self.password_login(s, &cfg).await?;
         }
         if s.fail == Some(FakeFailure::UnsupportedPolicy) {
             return Err(fail(
@@ -393,6 +396,54 @@ impl FakeRun {
             }
         }
     }
+
+    async fn password_login(
+        &mut self,
+        s: &FakeWorkerConfig,
+        cfg: &WorkerConfig,
+    ) -> Result<(), Stop> {
+        if cfg.username.is_none() {
+            let u = self.ask(ChallengeKind::Username, "Username").await?;
+            if u.is_empty() {
+                return Err(fail(ErrorCode::AuthDenied, "username required"));
+            }
+        }
+        let pw = self.ask(ChallengeKind::Password, "Password").await?;
+        self.step().await?;
+        let ok = match &s.password {
+            Some(p) => pw.expose() == p,
+            None => !pw.is_empty(),
+        };
+        drop(pw);
+        if !ok {
+            return Err(fail(ErrorCode::AuthDenied, "credentials rejected"));
+        }
+        if let Some(expected) = &s.otp {
+            let otp = self.ask(ChallengeKind::Otp, "Token code").await?;
+            self.step().await?;
+            if otp.expose() != expected {
+                return Err(fail(ErrorCode::AuthDenied, "token code rejected"));
+            }
+        }
+        Ok(())
+    }
+
+    async fn single_sign_on(&mut self, s: &FakeWorkerConfig) -> Result<(), Stop> {
+        let answer = self
+            .ask_at(ChallengeKind::Saml, "Single sign-on", Some(s.saml_port))
+            .await?;
+        self.step().await?;
+        let ok = fortino_proto_sslvpn::saml::session_id(answer.expose())
+            .is_some_and(|id| s.saml_id.as_deref().is_none_or(|want| id.as_str() == want));
+        drop(answer);
+        if !ok {
+            return Err(fail(
+                ErrorCode::AuthDenied,
+                "single sign-on session not accepted",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -409,6 +460,7 @@ mod tests {
                 ems: None,
             },
             username: username.map(Into::into),
+            credential_mode: CredentialMode::Password,
             trust_id: "system".into(),
             ip_policy: IpPolicy::SplitIpv4,
             ems: None,
@@ -482,6 +534,51 @@ mod tests {
         let (up, t) = until_end(&mut h).await;
         assert!(!up);
         assert_eq!(t.code, Some(ErrorCode::AuthDenied));
+    }
+
+    #[tokio::test]
+    async fn single_sign_on_asks_once_with_the_callback_port() {
+        let w = FakeWorker {
+            config: FakeWorkerConfig {
+                step_delay_ms: 1,
+                saml_port: 8021,
+                saml_id: Some("good-1".into()),
+                ..Default::default()
+            },
+        };
+        for (answer, connected) in [("id=good-1", true), ("id=other", false), ("x", false)] {
+            let mut c = cfg(None);
+            c.credential_mode = CredentialMode::Saml;
+            let mut h = w.spawn(c);
+            loop {
+                match h.events.recv().await.unwrap() {
+                    WorkerEvent::Challenge {
+                        id,
+                        kind,
+                        callback_port,
+                        ..
+                    } => {
+                        assert_eq!(kind, ChallengeKind::Saml);
+                        assert_eq!(callback_port, Some(8021));
+                        h.commands
+                            .send(WorkerCommand::Respond {
+                                challenge_id: id,
+                                value: answer.into(),
+                            })
+                            .await
+                            .unwrap();
+                        break;
+                    }
+                    WorkerEvent::Terminated(t) => panic!("terminated: {t:?}"),
+                    _ => {}
+                }
+            }
+            let (up, t) = until_end(&mut h).await;
+            assert_eq!(up, connected, "{answer}");
+            if !connected {
+                assert_eq!(t.code, Some(ErrorCode::AuthDenied));
+            }
+        }
     }
 
     #[tokio::test]

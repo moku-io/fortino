@@ -99,6 +99,49 @@ pub fn ask(kind: ChallengeKind, prompt: &str) -> Option<String> {
     }
 }
 
+/// Whether someone is at a terminal: standard input is one and the controlling terminal opens.
+/// A command run from a script (input redirected) is not asked optional questions.
+pub fn interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+        && File::options()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .is_ok()
+}
+
+/// Reads the address a browser ended on after a single sign-on (`http://127.0.0.1:…/?id=…`),
+/// asking again until a line holds a session id. `None` without a terminal or at end of input.
+pub fn pasted_callback(label: &str) -> Option<Zeroizing<String>> {
+    let tty = File::options()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+        .ok()?;
+    let mut out = tty.try_clone().ok()?;
+    let mut input = BufReader::new(tty);
+    loop {
+        out.write_all(label.as_bytes()).ok()?;
+        let mut line = Zeroizing::new(String::new());
+        if input.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        match fortino_proto_sslvpn::saml::pasted_callback(&line) {
+            Some(q) => return Some(q),
+            None => {
+                let _ = writeln!(
+                    out,
+                    "That isn't the address the sign-in ends on; it looks like http://127.0.0.1:…/?id=…"
+                );
+            }
+        }
+    }
+}
+
 /// Yes/no on the terminal; `false` without a terminal.
 pub fn confirm(question: &str) -> bool {
     let Ok(mut tty) = File::options().read(true).write(true).open("/dev/tty") else {

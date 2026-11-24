@@ -67,6 +67,9 @@ pub enum DaemonMsg {
         /// This device's `FCTUID`, sent to the gateway only if it asks (`0x80`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         fct_uid: Option<String>,
+        /// Sign in with single sign-on (SAML) instead of a username and password.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        saml: bool,
     },
     /// Answer to a challenge. `value` is secret.
     Respond {
@@ -195,6 +198,7 @@ pub enum WorkerMsg {
         stage: WorkerStage,
     },
     /// Needs input.
+    #[serde(rename_all = "camelCase")]
     Challenge {
         /// Protocol version.
         v: u32,
@@ -208,6 +212,10 @@ pub enum WorkerMsg {
         kind: ChallengeKind,
         /// Prompt text from the gateway.
         prompt: String,
+        /// For a `saml` challenge, and only then: the local port the gateway redirects the
+        /// browser to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        callback_port: Option<u16>,
     },
     /// PPP interface is up with these settings.
     #[serde(rename_all = "camelCase")]
@@ -324,17 +332,33 @@ impl WorkerMsg {
         Ok(match self {
             WorkerMsg::Stage { stage, .. } => WorkerEvent::Stage(stage),
             WorkerMsg::Challenge {
-                id, kind, prompt, ..
+                id,
+                kind,
+                prompt,
+                callback_port,
+                ..
             } => {
                 if !short(&id) {
                     return Err(Violation("challenge id"));
+                }
+                let port_ok = match kind {
+                    ChallengeKind::Saml => callback_port.is_some_and(|p| p != 0),
+                    _ => callback_port.is_none(),
+                };
+                if !port_ok {
+                    return Err(Violation("challenge callback port"));
                 }
                 let prompt: String = prompt
                     .chars()
                     .filter(|c| !c.is_control())
                     .take(MAX_SHORT)
                     .collect();
-                WorkerEvent::Challenge { id, kind, prompt }
+                WorkerEvent::Challenge {
+                    id,
+                    kind,
+                    prompt,
+                    callback_port,
+                }
             }
             WorkerMsg::Up {
                 interface,
@@ -462,6 +486,69 @@ mod tests {
             block_ipv6: false,
         };
         assert!(many.into_event("a", &mut last).is_err());
+    }
+
+    #[test]
+    fn saml_challenges_carry_a_callback_port_and_nothing_else_does() {
+        let j = r#"{"type":"challenge","v":1,"attempt":"a","seq":1,"id":"c1","kind":"saml","prompt":"Single sign-on","callbackPort":8020}"#;
+        let m: WorkerMsg = serde_json::from_str(j).unwrap();
+        let mut last = 0;
+        assert_eq!(
+            m.into_event("a", &mut last),
+            Ok(WorkerEvent::Challenge {
+                id: "c1".into(),
+                kind: ChallengeKind::Saml,
+                prompt: "Single sign-on".into(),
+                callback_port: Some(8020),
+            })
+        );
+        let msg = |seq, kind, callback_port| WorkerMsg::Challenge {
+            v: 1,
+            attempt: "a".into(),
+            seq,
+            id: "c".into(),
+            kind,
+            prompt: "p".into(),
+            callback_port,
+        };
+        for (seq, kind, port) in [
+            (2, ChallengeKind::Saml, None),
+            (3, ChallengeKind::Saml, Some(0)),
+            (4, ChallengeKind::Password, Some(8020)),
+        ] {
+            assert_eq!(
+                msg(seq, kind, port).into_event("a", &mut last),
+                Err(Violation("challenge callback port")),
+                "{kind:?} {port:?}"
+            );
+        }
+        let pw = serde_json::to_string(&msg(5, ChallengeKind::Password, None)).unwrap();
+        assert!(!pw.contains("callbackPort"), "{pw}");
+    }
+
+    #[test]
+    fn start_names_single_sign_on_only_when_used() {
+        let start = |saml| DaemonMsg::Start {
+            v: 1,
+            attempt: "a".into(),
+            host: "vpn.example.org".into(),
+            port: 443,
+            realm: None,
+            username: None,
+            ca_file: "/etc/ssl/cert.pem".into(),
+            ems_serial: None,
+            ems_tenant: None,
+            fct_uid: None,
+            saml,
+        };
+        let plain = serde_json::to_string(&start(false)).unwrap();
+        assert!(!plain.contains("saml"), "{plain}");
+        let sso = serde_json::to_string(&start(true)).unwrap();
+        assert!(sso.contains(r#""saml":true"#), "{sso}");
+        match serde_json::from_str::<DaemonMsg>(&sso).unwrap() {
+            DaemonMsg::Start { saml, .. } => assert!(saml),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

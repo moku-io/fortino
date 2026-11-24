@@ -3,11 +3,14 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fortino_config::import::Preview;
-use fortino_config::{DEFAULT_EMS_PORT, Profile};
+use fortino_config::{CredentialMode, DEFAULT_EMS_PORT, Profile};
 use fortino_core::proto::{State, Status};
 
 pub fn profile_table(ps: &[Profile]) {
-    println!("{:<24} {:<32} {:<8} EMS", "NAME", "GATEWAY", "SCOPE");
+    println!(
+        "{:<24} {:<32} {:<8} {:<9} EMS",
+        "NAME", "GATEWAY", "SCOPE", "SIGN-IN"
+    );
     for p in ps {
         let e = &p.spec.endpoint;
         let gw = match &e.realm {
@@ -18,11 +21,18 @@ pub fn profile_table(ps: &[Profile]) {
             fortino_config::IpPolicy::SplitIpv4 => "split",
             fortino_config::IpPolicy::FullIpv4 => "full",
         };
+        let auth = match p.spec.credential_mode {
+            CredentialMode::Password => "password",
+            CredentialMode::Saml => "sso",
+        };
         let ems = e
             .ems
             .as_ref()
             .map_or_else(|| "-".into(), ToString::to_string);
-        println!("{:<24} {:<32} {:<8} {ems}", p.spec.name, gw, scope);
+        println!(
+            "{:<24} {:<32} {:<8} {auth:<9} {ems}",
+            p.spec.name, gw, scope
+        );
     }
 }
 
@@ -44,10 +54,13 @@ pub fn profile_details(p: &Profile) {
             s.name
         ),
     }
-    println!(
-        "Username:    {}",
-        s.username_hint.as_deref().unwrap_or("(ask)")
-    );
+    println!("Sign-in:     {}", s.credential_mode.describe());
+    if s.credential_mode == CredentialMode::Password {
+        println!(
+            "Username:    {}",
+            s.username_hint.as_deref().unwrap_or("(ask)")
+        );
+    }
     println!("Scope:       {}", s.ip_policy.describe());
     println!("DNS:         {}", s.dns_mode.describe());
     println!("Trust:       {} (strict certificate checks)", s.trust_id);
@@ -93,6 +106,9 @@ pub fn status(s: &Status) {
     }
     if let Some(c) = &s.challenge {
         println!("Waiting for: {} ({}s left)", c.prompt, c.expires_in_secs);
+        if let Some(sso) = &c.saml {
+            println!("Sign in at:  {}", sso.url);
+        }
     }
     if let Some(r) = &s.last_result
         && s.state == State::Idle

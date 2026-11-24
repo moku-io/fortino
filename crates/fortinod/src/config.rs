@@ -40,6 +40,8 @@ pub struct DaemonConfig {
     pub transport_timeout_secs: u64,
     /// Seconds to answer one challenge.
     pub challenge_timeout_secs: u64,
+    /// Seconds to finish a single sign-on in the browser.
+    pub saml_timeout_secs: u64,
     /// Seconds for a graceful worker shutdown. Keep above the process supervisor's own
     /// 5 s grace plus kill time, so a hung worker is reaped before the slot is released.
     pub shutdown_timeout_secs: u64,
@@ -102,6 +104,11 @@ pub struct WorkerSection {
     /// Skip the ownership check (development only).
     #[serde(default)]
     pub allow_unowned: bool,
+    /// Development only: the worker brings the tunnel up on an in-memory device instead of a
+    /// real interface, so it runs unprivileged and changes nothing on the host. Requires
+    /// `fake_network = true`.
+    #[serde(default)]
+    pub memory_device: bool,
 }
 
 impl Default for DaemonConfig {
@@ -115,6 +122,7 @@ impl Default for DaemonConfig {
             admin_uids: Vec::new(),
             transport_timeout_secs: 30,
             challenge_timeout_secs: 120,
+            saml_timeout_secs: 300,
             shutdown_timeout_secs: 10,
             fake: None,
             worker: None,
@@ -172,6 +180,7 @@ impl DaemonConfig {
         Timeouts {
             transport: Duration::from_secs(self.transport_timeout_secs),
             challenge: Duration::from_secs(self.challenge_timeout_secs),
+            saml: Duration::from_secs(self.saml_timeout_secs),
             shutdown: Duration::from_secs(self.shutdown_timeout_secs),
         }
     }
@@ -184,6 +193,8 @@ pub struct Timeouts {
     pub transport: Duration,
     /// Per challenge.
     pub challenge: Duration,
+    /// A single sign-on in the browser, which can take longer than typing a code.
+    pub saml: Duration,
     /// Graceful worker shutdown.
     pub shutdown: Duration,
 }
@@ -211,8 +222,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(c.allowed_uids, vec![501]);
-        assert_eq!(c.fake.unwrap().otp.as_deref(), Some("654321"));
+        assert_eq!(c.fake.as_ref().unwrap().otp.as_deref(), Some("654321"));
         assert_eq!(c.challenge_timeout_secs, 120);
+        assert_eq!(c.timeouts().saml, Duration::from_secs(300));
         assert!(toml::from_str::<DaemonConfig>("bogus = 1").is_err());
     }
 
@@ -253,6 +265,21 @@ mod tests {
         let s = &c.ems.servers["ems.example.org:8013"];
         assert!(s.register && s.key_file.is_none());
         assert!(toml::from_str::<DaemonConfig>("[ems.servers.x]\nbogus = 1").is_err());
+    }
+
+    #[test]
+    fn worker_memory_device() {
+        let c: DaemonConfig = toml::from_str(
+            r#"
+            fake_network = true
+            [worker]
+            path = "target/debug/fortino-sslvpn-worker"
+            ca_dir = "target/dev"
+            memory_device = true
+            "#,
+        )
+        .unwrap();
+        assert!(c.worker.is_some_and(|w| w.memory_device));
     }
 
     #[test]

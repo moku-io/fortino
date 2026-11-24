@@ -54,6 +54,7 @@ fn harness(misbehave: Option<&str>, f: impl FnOnce(&mut FakeWorkerConfig)) -> H 
         Timeouts {
             transport: Duration::from_secs(5),
             challenge: Duration::from_secs(5),
+            saml: Duration::from_secs(5),
             shutdown: Duration::from_secs(8),
         },
     );
