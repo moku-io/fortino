@@ -2,8 +2,9 @@
 //!
 //! Writes the subset of a FortiClient configuration the importer in [`crate::import`] reads:
 //! `forticlient_configuration/vpn/sslvpn/connections/connection` with `name`, `description`,
-//! `server` (`host:port[/realm]`) and `sso_enabled`. FortiClient can import the result with
-//! "Restore" and Fortino re-imports it unchanged.
+//! `server` (`host:port[/realm]`) and `sso_enabled`; a single sign-on profile also gets
+//! `use_external_browser`, since Fortino signs in through the system browser. FortiClient can
+//! import the result with "Restore" and Fortino re-imports it unchanged.
 //!
 //! Nothing secret is written: no username, password or EMS registration data. Fortino-only
 //! settings (IP policy, DNS choice, trust configuration, the per-profile EMS server) have no
@@ -11,7 +12,7 @@
 
 use quick_xml::escape::escape;
 
-use crate::model::ProfileSpec;
+use crate::model::{CredentialMode, ProfileSpec};
 
 /// Renders `profiles` as a plain FortiClient XML configuration.
 pub fn to_forticlient_xml<'a>(profiles: impl IntoIterator<Item = &'a ProfileSpec>) -> String {
@@ -47,7 +48,15 @@ pub fn to_forticlient_xml<'a>(profiles: impl IntoIterator<Item = &'a ProfileSpec
             "          <server>{}</server>\n",
             escape(server.as_str())
         ));
-        out.push_str("          <sso_enabled>0</sso_enabled>\n");
+        match p.credential_mode {
+            CredentialMode::Password => {
+                out.push_str("          <sso_enabled>0</sso_enabled>\n");
+            }
+            CredentialMode::Saml => {
+                out.push_str("          <sso_enabled>1</sso_enabled>\n");
+                out.push_str("          <use_external_browser>1</use_external_browser>\n");
+            }
+        }
         out.push_str("        </connection>\n");
     }
     out.push_str(
@@ -74,12 +83,17 @@ mod tests {
         a.username_hint = Some("someone".into());
         a.endpoint.ems = Some("ems.example.test".parse::<EmsServer>().unwrap());
         let b = ProfileSpec::new("Plain", Host::Ipv4("192.0.2.1".parse().unwrap()));
-        let xml = to_forticlient_xml([&a, &b]);
+        let mut c = ProfileSpec::new("Single sign-on", "sso.example.test".parse().unwrap());
+        c.credential_mode = CredentialMode::Saml;
+        let xml = to_forticlient_xml([&a, &b, &c]);
         assert!(!xml.contains("someone"));
         assert!(!xml.contains("ems.example.test"));
         let p = import::parse(xml.as_bytes()).unwrap();
         let got: Vec<_> = p.eligible().map(|e| e.spec.clone()).collect();
-        assert_eq!(got.len(), 2);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].credential_mode, CredentialMode::Password);
+        assert_eq!(got[2].credential_mode, CredentialMode::Saml);
+        assert_eq!(got[2].endpoint, c.endpoint);
         assert_eq!(got[0].name, a.name);
         assert_eq!(got[0].description, a.description);
         assert_eq!(got[0].endpoint.host, a.endpoint.host);
