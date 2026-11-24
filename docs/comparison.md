@@ -8,7 +8,7 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | Language | Rust daemon, Swift app | C | C | — |
 | Password + token code | Yes (password live on one gateway; codes tested against the mock) | Yes | Yes (tokeninfo and HTML forms) | Yes |
 | FortiToken Mobile push | Planned | Yes | Not documented | Yes |
-| SAML | In development: sign-in in the default browser, from the app and the CLI (tested against the mock); a built-in sign-in window is planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
+| SAML | In development: sign-in in the default browser, from the app and the CLI (tested against the mock, and live on one gateway with the probe); a built-in sign-in window is planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
 | Client certificate | Planned | Yes | Yes | Yes |
 | Gateway certificate checks | Strict; fetches intermediates a gateway leaves out; after a warning, trusts one specific certificate per gateway (app) | Strict, or `--trusted-cert` pin | Strict, or `--servercert` pin | Prompt |
 | PPP tunnel | Supported by the native worker (no pppd) | Yes (pppd) | Yes (built-in PPP) | Yes |
