@@ -11,7 +11,7 @@ How to run the daemon, CLI and desktop app on one Mac without root and without c
 | `crates/fortino-sslvpn` | The native tunnel worker and `fortino-sslvpn-probe`. |
 | `crates/fortino-ems` | The EMS agent, its per-server registration store and `fortino-ems-probe`. |
 | `crates/fortino-config` | Profile model and validation, the SQLite profile store and the FortiClient XML importer and exporter. |
-| `crates/fortino-core` | Control protocol types, framing, error and exit codes, the worker interface and the fake worker. |
+| `crates/fortino-core` | Control protocol types, framing, error and exit codes, the worker interface and the fake worker, and the local listener a single sign-on ends at. |
 | `crates/fortino-platform` | Network changes behind `NetPlatform`, with a write-ahead journal; the macOS controller. |
 | `crates/fortinod` | Daemon: socket server, peer authorization, session state machine, network controller. |
 | `crates/fortino-cli` | `fortino`. |
@@ -41,7 +41,23 @@ ca_dir = "target/dev"
 allow_unowned = true   # development only; production requires a root-owned executable
 ```
 
+To run the real worker without root against a gateway (the mock or a real one), point `[worker]` at `target/debug/fortino-sslvpn-worker` and add `memory_device = true`: the tunnel then comes up on an in-memory device, and with `fake_network = true` nothing on the host changes. The daemon refuses `memory_device` without `fake_network`. Put `sha256:<hex>` pin lines or a CA bundle for the gateway in `<ca_dir>/system.pem` for profiles with the default trust.
+
 Unix socket paths are limited to about 100 bytes, so keep `socket_path` short.
+
+### Single sign-on
+
+A profile created with `--auth saml` (or **Sign in with: Single sign-on** in the app) signs in through the default browser. The worker asks the daemon for a single sign-on with the port the gateway redirects to (`sso_port` from `/remote/info`, 8020 when absent). The client that started the connection listens on `127.0.0.1` at that port and opens the gateway's sign-in page. After the sign-in, the gateway redirects the browser to `http://127.0.0.1:<port>/?id=…`. The client answers with that query string, and the worker exchanges the id for the session. Neither the daemon nor the worker ever listens on a network port. The sign-in has 300 seconds (`saml_timeout_secs`).
+
+The fake worker signs in this way for single sign-on profiles and accepts any well-formed id (`[fake] saml_port`, `saml_id`). For a person at a browser, the mock gateway plays the identity provider too:
+
+```sh
+cargo run -p fortino-mock -- fortigate fixtures/mock/saml.yaml --bind 127.0.0.1:10443
+fortino profile add mock-sso --host localhost --port 10443 --auth saml
+fortino connect mock-sso
+```
+
+The browser warns about the mock's self-signed certificate. The mock's sign-in page has one button.
 
 ## CLI
 
@@ -52,6 +68,8 @@ fortino profile list
 fortino profile edit demo-vpn --dns local                 # keep this Mac's DNS while connected (default: gateway)
 fortino connect demo-vpn                                  # prompts on the terminal
 fortino connect demo-vpn --password-fd 3 --otp-fd 4 3<pw 4<otp   # headless
+fortino profile add sso-vpn --host vpn.example.org --auth saml    # single sign-on in the browser
+fortino connect sso-vpn --no-browser                      # print the sign-in page instead of opening it
 fortino status --watch --json
 fortino disconnect
 fortino profile import export.xml --dry-run
@@ -60,6 +78,8 @@ fortino log-level debug                               # or error, warn, info, tr
 ```
 
 `fortinod` starts at `RUST_LOG` (default `info`); `fortino log-level` and the app's **Log level** setting change it at runtime until the daemon restarts. At every level, logs go through a redacting writer and never carry passwords, codes or cookie values. The installed service logs to `/var/log/fortinod.log`.
+
+For a single sign-on, `fortino connect` listens on `127.0.0.1` for the browser's final redirect and opens the sign-in page. When the browser runs on another machine or the port is taken, paste the address the browser ends on (`http://127.0.0.1:8020/?id=…`) at the prompt instead. Without the port and without a terminal it cancels with interaction-required.
 
 Exit codes: 0 success, 2 invalid input or profile, 3 busy or stale revision, 4 authentication or required input, 5 trust failure, 6 network/backend failure, 7 service unavailable or permission denied, 8 unsupported policy, 9 cancellation. With `--json`, errors are printed as `{"v":1,"error":{"code":…}}`.
 
@@ -74,7 +94,7 @@ apps/macos/scripts/bundle.sh            # unsigned Fortino.app, fortino CLI in C
 swift run --package-path apps/macos FortinoKitSelfTest
 ```
 
-The app parses XML imports by running `fortino --json profile import … --dry-run` in the user's own process, so there is a single importer. `FORTINO_DEBUG_OPEN=profiles,menu-preview,import` opens those windows at launch.
+The app parses XML imports by running `fortino --json profile import … --dry-run` in the user's own process, so there is a single importer. `FORTINO_DEBUG_OPEN=profiles,menu-preview,import` opens those windows at launch. With it set, the distributed notification `org.fortino.debug.front` takes a window title to bring forward, `menu` to open the menu-bar panel, `close` to close the windows, or `connect` to connect the selected profile.
 
 ## Tests
 
@@ -90,7 +110,7 @@ The macOS network controller changes routes, resolvers and pf, so its live tests
 
 ### Against a real gateway
 
-`fortino-sslvpn-probe` runs the native worker in-process with an in-memory tun device, so it needs no root and changes nothing on the host. It reads a credentials file kept outside the repository (`gateway`, `username`, `password`, optional `otp`, `pin` and a test URL inside the VPN) and never prints secrets. `fortino-sslvpn-probe CREDS --info` sends only the unauthenticated `/remote/info` request. Only use gateways and EMS servers you are authorised to test; registering with an EMS creates a device record.
+`fortino-sslvpn-probe` runs the native worker in-process with an in-memory tun device, so it needs no root and changes nothing on the host. It reads a credentials file kept outside the repository (`gateway`, `username`, `password`, optional `otp`, `pin` and a test URL inside the VPN) and never prints secrets. `fortino-sslvpn-probe CREDS --info` sends only the unauthenticated `/remote/info` request and shows the single sign-on redirect port. With `--saml` (or `auth: saml` in the file) the probe signs in through the browser instead: no username or password is needed, and it listens on `127.0.0.1` for the redirect. Only use gateways and EMS servers you are authorised to test; registering with an EMS creates a device record.
 
 ## Installer
 
