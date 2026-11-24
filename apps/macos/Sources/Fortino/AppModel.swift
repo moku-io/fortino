@@ -46,6 +46,10 @@ final class AppModel: ObservableObject {
     private var client: DaemonClient?
     private var connecting = false
     private let challenges = ChallengePanelController()
+    private let samlSignIn = SamlSignInController()
+    /// Attempts this app started (the latest few): their single sign-on starts on its own.
+    /// One started elsewhere is only offered.
+    private var ownAttempts: [String] = []
     /// This app's build (`FortinoBuildID`, stamped by bundle.sh). Nil for development runs and
     /// with a development daemon (FORTINO_SOCKET), where there is nothing to compare.
     private let appBuild: String? = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] == nil
@@ -62,6 +66,7 @@ final class AppModel: ObservableObject {
             ?? defaultSocketPath
         selectedProfileId = UserDefaults.standard.string(forKey: "selectedProfileId")
         challenges.model = self
+        samlSignIn.model = self
         Task { await self.connectLoop() }
     }
 
@@ -203,6 +208,7 @@ final class AppModel: ObservableObject {
         let changed = status?.state != s.state
         status = s
         challenges.update(status: s)
+        samlSignIn.update(status: s, ownAttempt: s.attemptId.map(ownAttempts.contains) ?? false)
         // Keepalives run while connected, so the EMS state moves on connect and disconnect.
         if changed && (s.state == .connected || s.state == .idle) {
             Task { await self.refreshEmsStatus() }
@@ -305,9 +311,14 @@ final class AppModel: ObservableObject {
                 await refreshProfiles()
                 let cur = profiles.first { $0.id == p.id } ?? p
                 guard try await approveEmsBeforeConnecting(cur, client: c) else { return }
-                _ = try await c.connect(ConnectParams(
+                let r = try await c.connect(ConnectParams(
                     profileId: cur.id, revision: cur.revision,
                     requestKey: UUID().uuidString, username: nil))
+                ownAttempts.append(r.attemptId)
+                if ownAttempts.count > 8 { ownAttempts.removeFirst() }
+                if let s = status, s.attemptId == r.attemptId {
+                    samlSignIn.update(status: s, ownAttempt: true)
+                }
             } catch {
                 report(error)
             }

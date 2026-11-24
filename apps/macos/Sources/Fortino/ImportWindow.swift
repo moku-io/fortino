@@ -41,7 +41,6 @@ func importReason(skipped: String?, blocked: String?) -> String? {
     switch blocked ?? skipped {
     case nil: return nil
     case "ssl_vpn_disabled": return "Skipped: SSL VPN is turned off in this file."
-    case "saml_unsupported": return "Skipped: uses single sign-on (SAML), which Fortino doesn't support yet."
     case "client_certificate_unsupported":
         return "Can't import: uses a client certificate, which Fortino can't import yet."
     case "multiple_gateways_unsupported":

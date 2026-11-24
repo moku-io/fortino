@@ -54,6 +54,21 @@ public enum DnsMode: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// How the user signs in (`credentialMode`).
+public enum CredentialMode: String, CaseIterable, Identifiable {
+    /// Username and password, plus a one-time code if the gateway asks for one.
+    case password
+    /// Single sign-on (SAML) in the default browser.
+    case saml
+    public var id: String { rawValue }
+    public var label: String {
+        switch self {
+        case .password: return "Password"
+        case .saml: return "Single sign-on"
+        }
+    }
+}
+
 public struct ProfileSpec: Codable, Equatable {
     public var name: String
     public var description: String?
@@ -81,6 +96,12 @@ public struct ProfileSpec: Codable, Equatable {
         self.dnsMode = nil
         self.trustId = "system"
         self.debugEmsSysinfo = nil
+    }
+
+    /// `credentialMode` as a known method; an unknown one reads as password.
+    public var signIn: CredentialMode {
+        get { CredentialMode(rawValue: credentialMode) ?? .password }
+        set { credentialMode = newValue.rawValue }
     }
 }
 
@@ -130,7 +151,17 @@ public enum ChallengeKind: String, Codable {
     case username
     case password
     case otp
+    /// Single sign-on in the browser; see `SamlLogin`.
+    case saml
     public var isSecret: Bool { self != .username }
+}
+
+/// A single sign-on in the default browser. The app listens on 127.0.0.1:`callbackPort`, opens
+/// `url`, and answers the challenge with the query string of the request the gateway finally
+/// redirects the browser with (`/?id=…`).
+public struct SamlLogin: Codable, Equatable {
+    public var url: String
+    public var callbackPort: Int
 }
 
 public struct Challenge: Codable, Equatable {
@@ -138,6 +169,8 @@ public struct Challenge: Codable, Equatable {
     public var kind: ChallengeKind
     public var prompt: String
     public var expiresInSecs: Int
+    /// Where to sign in, for a `.saml` challenge.
+    public var saml: SamlLogin?
 }
 
 public struct LastResult: Codable, Equatable {
