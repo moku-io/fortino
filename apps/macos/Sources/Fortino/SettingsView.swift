@@ -1,5 +1,5 @@
-// Settings window (⌘,): the VPN service, the command-line tool and troubleshooting. Things used
-// rarely live here so the menu-bar panel stays about connecting.
+// Settings window (⌘,): the VPN service, the menu-bar item, the command-line tool and
+// troubleshooting. Things used rarely live here so the menu-bar panel stays about connecting.
 
 import FortinoKit
 import SwiftUI
@@ -13,7 +13,7 @@ struct SettingsView: View {
         // Each tab has its own height, so the window fits it like the system's Settings panes.
         TabView {
             GeneralSettings(model: model, service: service, updater: updater)
-                .frame(width: 500, height: updater.isAvailable ? 300 : 205)
+                .frame(width: 500, height: updater.isAvailable ? 360 : 265)
                 .tabItem { Label("General", systemImage: "gearshape") }
             CommandLineSettings(model: model, service: service)
                 .frame(width: 500, height: 305)
@@ -31,6 +31,7 @@ struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: VPNService
     @ObservedObject var updater: AppUpdater
+    @AppStorage(MenuBarItem.visibleKey) private var showMenuBarItem = true
 
     var body: some View {
         Form {
@@ -65,6 +66,12 @@ struct GeneralSettings: View {
                          : "Disconnect first. Asks for an administrator's password.")
                 }
                 .disabled(!service.isManaged)
+            }
+            Section {
+                Toggle(isOn: $showMenuBarItem) {
+                    Text("Show in menu bar")
+                    Text("When hidden, open Fortino from Finder or Spotlight to reach its windows. The VPN stays connected.")
+                }
             }
             Section {
                 LabeledContent("Version") {

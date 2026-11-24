@@ -8,10 +8,12 @@ struct FortinoApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(MenuBarItem.visibleKey) private var showMenuBarItem = true
 
     var body: some Scene {
         Window("Profiles", id: "profiles") {
             ProfilesWindow(model: model)
+                .onAppear { delegate.showProfiles = showProfiles }
                 .task {
                     let env = ProcessInfo.processInfo.environment
                     let ids = env["FORTINO_DEBUG_OPEN"]?.split(separator: ",").map(String.init) ?? []
@@ -50,16 +52,12 @@ struct FortinoApp: App {
         }
         .commands { FortinoCommands(model: model, updater: delegate.updater) }
 
-        MenuBarExtra {
+        // Settings → General can take the item out of the menu bar.
+        MenuBarExtra(isInserted: $showMenuBarItem) {
             MenuView(model: model, service: delegate.service, updater: delegate.updater)
         } label: {
             MenuBarIcon(state: model.state)
-                // Opening Fortino again (Finder, Spotlight) shows the Profiles window, so the app
-                // stays reachable when the menu-bar item is hidden behind the notch.
-                .onReceive(NotificationCenter.default.publisher(for: .fortinoShowProfiles)) { _ in
-                    openWindow(id: "profiles")
-                    NSApp.activate(ignoringOtherApps: true)
-                }
+                .onAppear { delegate.showProfiles = showProfiles }
         }
         .menuBarExtraStyle(.window)
 
@@ -89,6 +87,24 @@ struct FortinoApp: App {
         }
         .windowResizability(.contentSize)
         .commandsRemoved()
+    }
+
+    /// Opening Fortino again (Finder, Spotlight) shows the Profiles window, so the app stays
+    /// reachable when the menu-bar item is hidden: by the setting or behind the notch. Handed to
+    /// the delegate from whichever of the Profiles window and the menu-bar item appears first,
+    /// since either may be absent.
+    private func showProfiles() {
+        openWindow(id: "profiles")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Whether the menu-bar item is shown (Settings → General). On by default.
+enum MenuBarItem {
+    static let visibleKey = "showMenuBarItem"
+
+    static var isVisible: Bool {
+        UserDefaults.standard.object(forKey: visibleKey) as? Bool ?? true
     }
 }
 
@@ -144,14 +160,12 @@ struct FortinoCommands: Commands {
     }
 }
 
-extension Notification.Name {
-    static let fortinoShowProfiles = Notification.Name("org.fortino.showProfiles")
-}
-
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let service = VPNService()
     let updater = AppUpdater()
+    /// Opens the Profiles window; set by the app once one of its views appears.
+    var showProfiles: (() -> Void)?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         service.ensureRegistered()
@@ -186,14 +200,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// none is open.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         let open = NSApp.windows.contains { Self.isAppWindow($0) && $0.isVisible }
-        if !open { NotificationCenter.default.post(name: .fortinoShowProfiles, object: nil) }
+        guard !open else { return false }
+        // Not set yet: no view has appeared, so let SwiftUI open its default window.
+        guard let showProfiles else { return true }
+        showProfiles()
         return false
     }
 
     /// "Quit" from the Dock closes the windows and leaves Fortino in the menu bar. Quit from the
-    /// menu-bar menu, logout and shutdown still terminate.
+    /// menu-bar menu, the app menu, logout and shutdown still terminate, and so does the Dock when
+    /// the menu-bar item is hidden: there is nothing to leave behind.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard Self.isQuitFromDock() else { return .terminateNow }
+        guard Self.isQuitFromDock(), MenuBarItem.isVisible else { return .terminateNow }
         for window in NSApp.windows where Self.isAppWindow(window) && window.isVisible {
             window.close()
         }
