@@ -7,12 +7,13 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: VPNService
+    @ObservedObject var updater: AppUpdater
 
     var body: some View {
         // Each tab has its own height, so the window fits it like the system's Settings panes.
         TabView {
-            GeneralSettings(model: model, service: service)
-                .frame(width: 500, height: 205)
+            GeneralSettings(model: model, service: service, updater: updater)
+                .frame(width: 500, height: updater.isAvailable ? 300 : 205)
                 .tabItem { Label("General", systemImage: "gearshape") }
             CommandLineSettings(model: model, service: service)
                 .frame(width: 500, height: 305)
@@ -29,6 +30,7 @@ struct SettingsView: View {
 struct GeneralSettings: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: VPNService
+    @ObservedObject var updater: AppUpdater
 
     var body: some View {
         Form {
@@ -68,10 +70,27 @@ struct GeneralSettings: View {
                 LabeledContent("Version") {
                     Text(verbatim: Self.version).textSelection(.enabled)
                 }
+                if updater.isAvailable {
+                    Toggle("Check for updates automatically", isOn: Binding(
+                        get: { updater.automaticallyChecksForUpdates },
+                        set: { updater.automaticallyChecksForUpdates = $0 }))
+                    LabeledContent {
+                        Button("Check Now") { updater.checkForUpdates() }
+                            .disabled(!updater.canCheckForUpdates)
+                    } label: {
+                        Text("Updates")
+                        Text(lastChecked)
+                    }
+                }
             }
         }
         .formStyle(.grouped)
         .onAppear { service.refresh() }
+    }
+
+    private var lastChecked: String {
+        guard let date = updater.lastUpdateCheckDate else { return "Not checked yet" }
+        return "Last checked " + date.formatted(.relative(presentation: .named))
     }
 
     private var canRestart: Bool {

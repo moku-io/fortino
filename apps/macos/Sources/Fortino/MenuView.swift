@@ -54,6 +54,7 @@ struct ConnectionSummary: View {
 struct MenuView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var service: VPNService
+    @ObservedObject var updater: AppUpdater
     @ObservedObject private var optionKey = OptionKey.shared
     @Environment(\.openWindow) private var openWindow
     @State private var host = WindowRef()
@@ -122,6 +123,12 @@ struct MenuView: View {
                     closePanel()
                     openWindow(id: "import")
                     NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+            if let version = updater.availableUpdate {
+                MenuRow(title: "Update to Fortino \(version)…") {
+                    closePanel()
+                    updater.checkForUpdates()
                 }
             }
             SettingsRow(willOpen: closePanel)
