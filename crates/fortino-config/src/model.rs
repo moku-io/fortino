@@ -220,6 +220,19 @@ pub enum CredentialMode {
     /// Username and password, plus an OTP if the gateway asks for one.
     #[default]
     Password,
+    /// Single sign-on (SAML) in the user's browser: the gateway hands the sign-in to the
+    /// organization's identity provider. No username or password is asked here.
+    Saml,
+}
+
+impl CredentialMode {
+    /// Human-readable sign-in method.
+    pub fn describe(self) -> &'static str {
+        match self {
+            CredentialMode::Password => "password",
+            CredentialMode::Saml => "single sign-on (SAML) in the browser",
+        }
+    }
 }
 
 /// Which IPv4 traffic the tunnel carries. Both are IPv4-only; tunneling IPv6 is unsupported.
@@ -443,6 +456,24 @@ pub struct Profile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_mode_defaults_to_password_and_saml_round_trips() {
+        let old = r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443}}"#;
+        let spec: ProfileSpec = serde_json::from_str(old).unwrap();
+        assert_eq!(spec.credential_mode, CredentialMode::Password);
+        let mut sso = spec.clone();
+        sso.credential_mode = CredentialMode::Saml;
+        let json = serde_json::to_value(&sso).unwrap();
+        assert_eq!(json["credentialMode"], "saml");
+        let back: ProfileSpec = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.validate().unwrap().credential_mode,
+            CredentialMode::Saml
+        );
+        let unknown = r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443},"credentialMode":"certificate"}"#;
+        assert!(serde_json::from_str::<ProfileSpec>(unknown).is_err());
+    }
 
     #[test]
     fn dns_mode_defaults_to_the_gateway_and_round_trips() {

@@ -14,7 +14,8 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::model::{
-    DEFAULT_VPN_PORT, Endpoint, Host, ProfileSpec, name_key, normalize_name, validate_realm,
+    CredentialMode, DEFAULT_VPN_PORT, Endpoint, Host, ProfileSpec, name_key, normalize_name,
+    validate_realm,
 };
 
 /// Maximum input size.
@@ -75,7 +76,7 @@ pub struct PreviewEntry {
     pub warnings: Vec<String>,
     /// Source settings that were dropped.
     pub omitted: Vec<String>,
-    /// Reason the entry is skipped (not applicable, e.g. disabled or SAML).
+    /// Reason the entry is skipped (not applicable, e.g. a disabled SSL VPN group).
     pub skipped: Option<String>,
     /// Reason the entry is blocked (needs something this client does not support).
     pub blocked: Option<String>,
@@ -317,6 +318,9 @@ const SCALARS: &[&str] = &[
     "username",
     "password",
     "sso_enabled",
+    "use_external_browser",
+    "fido_auth",
+    "saml_cert_selection",
     "certificate",
     "prompt_certificate",
     "pkcs11_lib",
@@ -456,14 +460,33 @@ fn parse_connection(
         .filter(|d| !d.is_empty() && !d.chars().any(char::is_control));
 
     let mut omitted = Vec::new();
-    let mut skipped = disabled.then(|| "ssl_vpn_disabled".to_owned());
+    let skipped = disabled.then(|| "ssl_vpn_disabled".to_owned());
     if c.child("username").is_some() || c.child("password").is_some() {
         omitted.push("stored account and password (fresh credentials needed)".to_owned());
     }
-    if c.child("sso_enabled")
-        .is_some_and(|n| bool01(n) == Ok(true))
+    let saml = c
+        .child("sso_enabled")
+        .is_some_and(|n| bool01(n) == Ok(true));
+    if saml
+        && c.child("use_external_browser")
+            .is_some_and(|n| bool01(n) == Ok(false))
     {
-        skipped.get_or_insert_with(|| "saml_unsupported".into());
+        warnings.push(
+            "set to sign in with FortiClient's built-in browser; Fortino signs in with your \
+             default browser"
+                .into(),
+        );
+    }
+    for (field, what) in [
+        ("fido_auth", "FIDO sign-in"),
+        (
+            "saml_cert_selection",
+            "certificate selection during single sign-on",
+        ),
+    ] {
+        if c.child(field).is_some_and(|n| bool01(n) == Ok(true)) {
+            warnings.push(format!("{what} ({field}) is not supported (review)"));
+        }
     }
     let has_text = |f: &str| c.child(f).is_some_and(|n| !n.text.trim().is_empty());
     if c.child("certificate")
@@ -512,6 +535,11 @@ fn parse_connection(
     let spec = ProfileSpec {
         description,
         endpoint,
+        credential_mode: if saml {
+            CredentialMode::Saml
+        } else {
+            CredentialMode::Password
+        },
         ..ProfileSpec::new(name, Host::Dns(String::new()))
     };
     // Validate the canonical spec the daemon will see (realm, text limits).
@@ -579,11 +607,48 @@ mod tests {
         );
         let p = parse(x.as_bytes()).unwrap();
         let e: Vec<_> = p.eligible().collect();
-        assert_eq!(e.len(), 1);
+        assert_eq!(e.len(), 2);
         assert_eq!(e[0].spec.endpoint.port, 443);
         assert_eq!(e[0].spec.endpoint.realm, None);
-        assert_eq!(p.entries[1].skipped.as_deref(), Some("saml_unsupported"));
+        assert_eq!(e[0].spec.credential_mode, CredentialMode::Password);
+        assert_eq!(e[1].spec.credential_mode, CredentialMode::Saml);
         assert_eq!(p.excluded_ipsec, 1);
+    }
+
+    #[test]
+    fn single_sign_on_settings() {
+        let x = wrap(
+            "<connection><name>Browser</name><server>a.example:10443</server>\
+               <sso_enabled>1</sso_enabled><use_external_browser>1</use_external_browser>\
+               <fido_auth>0</fido_auth><saml_cert_selection>0</saml_cert_selection></connection>\
+             <connection><name>Built-in</name><server>b.example</server>\
+               <sso_enabled>1</sso_enabled><use_external_browser>0</use_external_browser></connection>\
+             <connection><name>Fido</name><server>c.example</server>\
+               <sso_enabled>1</sso_enabled><fido_auth>1</fido_auth>\
+               <saml_cert_selection>1</saml_cert_selection></connection>\
+             <connection><name>Pw</name><server>d.example</server>\
+               <sso_enabled>0</sso_enabled><use_external_browser>0</use_external_browser></connection>",
+            "",
+        );
+        let p = parse(x.as_bytes()).unwrap();
+        let e: Vec<_> = p.eligible().collect();
+        assert_eq!(e.len(), 4);
+        let modes: Vec<_> = e.iter().map(|e| e.spec.credential_mode).collect();
+        assert_eq!(
+            modes,
+            [
+                CredentialMode::Saml,
+                CredentialMode::Saml,
+                CredentialMode::Saml,
+                CredentialMode::Password
+            ]
+        );
+        assert!(e[0].warnings.is_empty(), "{:?}", e[0].warnings);
+        assert_eq!(e[1].warnings.len(), 1);
+        assert!(e[1].warnings[0].contains("default browser"));
+        assert_eq!(e[2].warnings.len(), 2);
+        assert!(e[2].warnings.iter().all(|w| w.ends_with("(review)")));
+        assert!(e[3].warnings.is_empty(), "{:?}", e[3].warnings);
     }
 
     #[test]
