@@ -391,7 +391,14 @@ impl WorkerMsg {
                 let mut t = reason.to_termination();
                 if !matches!(reason, WireReason::Stopped | WireReason::Cancelled) {
                     if let Some(d) = detail.as_deref().and_then(failure_detail) {
-                        t.message = format!("{}: {d}", t.message);
+                        // An unsupported-policy detail already names what the gateway requires
+                        // ("gateway requires EMS registration: …"); the generic words would
+                        // only repeat it.
+                        t.message = if reason == WireReason::Unsupported {
+                            d
+                        } else {
+                            format!("{}: {d}", t.message)
+                        };
                     }
                 }
                 WorkerEvent::Terminated(t)
@@ -498,6 +505,15 @@ mod tests {
                     t.message,
                     "tunnel backend failed: tunnel settings: HTTP 500"
                 );
+            }
+            other => panic!("{other:?}"),
+        }
+        let mut seq = 0;
+        let ems = "gateway requires EMS registration: it refused the login without this Mac's EMS serial (HTTP 503)";
+        match msg(WireReason::Unsupported, ems).into_event("a", &mut seq) {
+            Ok(WorkerEvent::Terminated(t)) => {
+                assert_eq!(t.code, Some(ErrorCode::UnsupportedPolicy));
+                assert_eq!(t.message, ems);
             }
             other => panic!("{other:?}"),
         }

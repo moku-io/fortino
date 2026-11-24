@@ -95,6 +95,10 @@ pub struct TunnelConfig {
     pub block_ipv6: bool,
 }
 
+/// How a worker's termination message starts when the gateway asked for an EMS serial the
+/// attempt did not have. The EMS layer recognizes it and appends why there was none.
+pub const EMS_REGISTRATION_REQUIRED: &str = "gateway requires EMS registration";
+
 /// How a worker run ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Termination {

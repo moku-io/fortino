@@ -35,6 +35,10 @@ public struct EnrollmentPackage: Sendable {
     }
 
     static func metadata(at mount: URL) throws -> Self {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: mount.path)) ?? []
+        if let why = EnrollmentPackageKind.classify(entries: entries).explanation {
+            throw invalid(why)
+        }
         func readMember(_ name: String, limit: Int) throws -> Data {
             let root = mount.resolvingSymlinksInPath().standardizedFileURL
             let file = root.appendingPathComponent("fctdata/" + name)
@@ -83,11 +87,18 @@ extension DaemonClient {
         }
         return try await call("ems.enroll", Params(server: package.address, install_uid: package.installID))
     }
+
+    /// Registers this Mac with `server` now, without a deployment package (**Register Now**).
+    public func register(server: EmsServer) async throws -> EnrollmentReply {
+        struct Params: Encodable { let server: String }
+        return try await call("ems.enroll", Params(server: server.display))
+    }
 }
 
 /// This Mac's registration state with one EMS (`ems.status`).
 public struct EmsStatus: Decodable, Equatable {
-    /// unconfigured, managed-by-forticlient, not-registered, registered, stale, quarantined.
+    /// unconfigured, managed-by-forticlient, held-by-forticlient, not-registered, registered,
+    /// stale, quarantined.
     public let state: String
     public let registeredAt: Int?
     public let lastKeepalive: Int?

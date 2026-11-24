@@ -24,8 +24,8 @@ use std::time::Duration;
 use fortino_config::EmsServer;
 use fortino_core::ErrorCode;
 use fortino_core::worker::{
-    EmsIdentity, Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory,
-    WorkerHandle, WorkerStage,
+    EMS_REGISTRATION_REQUIRED, EmsIdentity, Termination, WorkerCommand, WorkerConfig, WorkerEvent,
+    WorkerFactory, WorkerHandle, WorkerStage,
 };
 use fortino_platform::facts::Facts;
 use fortino_proto_ems::ids::Uid;
@@ -204,18 +204,18 @@ impl EmsWorkers {
         })
     }
 
-    /// Explicit first enrollment without a VPN tunnel. Uses the same registration as connect.
-    pub async fn enroll_package(
+    /// Explicit enrollment without a VPN tunnel, with a deployment package's installer ID or
+    /// without one (**Register Now**). Uses the same registration as connect.
+    pub async fn enroll(
         &self,
         server: EmsServer,
-        install_uid: &str,
+        install_uid: Option<&str>,
     ) -> Result<(&'static str, bool), Error> {
-        if install_uid.is_empty()
-            || install_uid.len() > 256
-            || !install_uid
-                .bytes()
-                .all(|b| b.is_ascii_graphic() && b != b'|')
-        {
+        if install_uid.is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 256
+                || !id.bytes().all(|b| b.is_ascii_graphic() && b != b'|')
+        }) {
             return Err(Error::Protocol("invalid package installer ID".into()));
         }
         let settings = match self.server_settings(&server) {
@@ -227,16 +227,18 @@ impl EmsWorkers {
         };
         // Explicit package enrollment carries no per-profile debug overrides.
         let ctx = self.context(server, settings, std::collections::BTreeMap::new());
-        match ctx.prepare(Some(install_uid)).await?.0 {
+        match ctx.prepare(install_uid).await?.0 {
             Prepared::Deferred(_) => Ok(("managed-by-forticlient", false)),
+            Prepared::HeldByForticlient => Ok(("held-by-forticlient", false)),
             Prepared::Agent(Some(_)) => {
                 let record = Store::open(&ctx.settings.state_dir)?
                     .load(&server_key(&ctx.server))?
                     .ok_or(Error::NotRegistered)?;
-                let status = if record.install_uid.as_deref() == Some(install_uid) {
-                    "registered"
-                } else {
-                    "existing-registration"
+                let status = match install_uid {
+                    Some(id) if record.install_uid.as_deref() != Some(id) => {
+                        "existing-registration"
+                    }
+                    _ => "registered",
                 };
                 Ok((status, record.host_rules.content.is_some()))
             }
@@ -250,10 +252,19 @@ impl EmsWorkers {
         if self.server_settings(server).is_none() {
             return Ok(EmsStatusInfo::bare(EmsState::Unconfigured));
         }
-        if (self.forticlient)()
-            .is_some_and(|fc| fc.running && fc.serial.is_some() && fc.uses_address(server))
+        // The same rules as a connect: FortiClient's registration is used only when it has
+        // this device's UID; under another UID it still holds this Mac's place on the EMS.
+        let uid = self.device_uid.as_deref().and_then(|u| Uid::parse(u).ok());
+        if let Some(fc) = (self.forticlient)()
+            .filter(|fc| fc.running && fc.serial.is_some() && fc.uses_address(server))
         {
-            return Ok(EmsStatusInfo::bare(EmsState::ManagedByForticlient));
+            return Ok(EmsStatusInfo::bare(
+                if uid.as_ref().is_some_and(|u| fc.active_with(u)) {
+                    EmsState::ManagedByForticlient
+                } else {
+                    EmsState::HeldByForticlient
+                },
+            ));
         }
         let Some(r) = Store::open(&self.settings.state_dir)?.load(&server_key(server))? else {
             return Ok(EmsStatusInfo::bare(EmsState::NotRegistered));
@@ -284,6 +295,9 @@ pub enum EmsState {
     Unconfigured,
     /// FortiClient's own agent manages this device on this EMS.
     ManagedByForticlient,
+    /// FortiClient's agent is registered with this EMS under another device UID. The EMS
+    /// keeps one registration per Mac, so Fortino neither registers nor uses FortiClient's.
+    HeldByForticlient,
     /// No registration with this EMS.
     NotRegistered,
     /// Registered, with a recent keepalive.
@@ -300,6 +314,7 @@ impl EmsState {
         match self {
             Self::Unconfigured => "unconfigured",
             Self::ManagedByForticlient => "managed-by-forticlient",
+            Self::HeldByForticlient => "held-by-forticlient",
             Self::NotRegistered => "not-registered",
             Self::Registered => "registered",
             Self::Stale => "stale",
@@ -353,6 +368,9 @@ enum Prepared {
     Agent(Option<EmsIdentity>),
     /// FortiClient's agent manages this device on this EMS.
     Deferred(EmsIdentity),
+    /// FortiClient's agent is registered with this EMS under another UID: no identity, and
+    /// nothing sent to the EMS.
+    HeldByForticlient,
 }
 
 /// One attempt's EMS context.
@@ -424,16 +442,25 @@ impl Ctx {
             .flatten()
     }
 
-    /// Whether FortiClient's agent is the active agent for this device on this EMS. Matches by
-    /// address, by the serial of Fortino's own registration, or, failing both, by a PROBE
-    /// (which registers nothing).
-    async fn forticlient_manages(
+    /// Why an attempt goes without an EMS serial, in words for the user.
+    fn no_identity_hint(&self) -> &'static str {
+        if self.server_settings.register {
+            "Fortino has no registration with this EMS; open EMS Setup to register this Mac."
+        } else {
+            "Fortino isn't registered with this EMS, and registering with it isn't enabled on this Mac; ask your IT administrator."
+        }
+    }
+
+    /// Whether FortiClient's agent is running and registered with this EMS, under any UID.
+    /// Matches by address, by the serial of Fortino's own registration, or, failing both, by a
+    /// PROBE (which registers nothing).
+    async fn forticlient_on_this_ems(
         &self,
         agent: &Agent,
         conn: &Connection,
         fc: &FortiClientState,
     ) -> Result<bool, Error> {
-        let Some(fc_serial) = fc.serial.as_ref().filter(|_| fc.active_with(&agent.uid)) else {
+        let Some(fc_serial) = fc.serial.as_ref().filter(|_| fc.running) else {
             return Ok(false);
         };
         if fc.uses_address(&self.server) {
@@ -453,7 +480,17 @@ impl Ctx {
         agent.compat.install_uid = install_uid.map(str::to_owned);
         let conn = self.connection()?;
         if let Some(fc) = self.forticlient_state().await {
-            if self.forticlient_manages(&agent, &conn, &fc).await? {
+            if self.forticlient_on_this_ems(&agent, &conn, &fc).await? {
+                // The EMS keeps one registration per Mac: a registration under another UID
+                // ends FortiClient's (observed: its next keepalive is discontinued and it
+                // registers again, ending ours). Leave this EMS to FortiClient.
+                if fc.uid.as_ref() != Some(&agent.uid) {
+                    tracing::warn!(
+                        ems = %self.server,
+                        "FortiClient's EMS agent is registered with this EMS under another device UID; Fortino neither registers nor uses its registration"
+                    );
+                    return Ok((Prepared::HeldByForticlient, agent.uid.clone()));
+                }
                 if let Some(serial) = &fc.serial {
                     tracing::info!(
                         ems = %self.server,
@@ -506,10 +543,34 @@ impl Ctx {
         tokio::time::sleep(self.settings.settle).await;
         let mut since_full = Duration::ZERO;
         let mut full = true;
+        let mut registered_again: Option<tokio::time::Instant> = None;
         loop {
             let interval = match self.round(full).await {
-                Ok(Some(i)) => i,
-                Ok(None) => return,
+                Ok(Round::Next(i)) => i,
+                Ok(Round::Stop) => return,
+                Ok(Round::Dropped) => {
+                    // Dropped again soon after registering again: something else keeps taking
+                    // this Mac's registration (or the EMS refuses it). Don't loop.
+                    if registered_again.is_some_and(|t| t.elapsed() < REREGISTER_WINDOW) {
+                        tracing::warn!(ems = %self.server, "the EMS dropped this device again; Fortino stops its keepalives");
+                        return;
+                    }
+                    match self.register_again().await {
+                        Ok(true) => {
+                            registered_again = Some(tokio::time::Instant::now());
+                            // A full keepalive right away, so the EMS learns the tunnel
+                            // address of the new registration.
+                            full = true;
+                            since_full = Duration::ZERO;
+                            continue;
+                        }
+                        Ok(false) => return,
+                        Err(e) => {
+                            tracing::warn!(ems = %self.server, error = %e, "registering again with the EMS failed; Fortino stops its keepalives");
+                            return;
+                        }
+                    }
+                }
                 Err(e) => {
                     tracing::warn!(ems = %self.server, error = %e, "EMS keepalive failed");
                     Duration::from_secs(60)
@@ -529,9 +590,36 @@ impl Ctx {
         }
     }
 
-    /// One keepalive (with fresh facts), then a host check after a full one. Returns the next
-    /// interval, or `None` when the registration is gone.
-    async fn round(&self, full: bool) -> Result<Option<Duration>, Error> {
+    /// After the EMS dropped this device during a session: registers again, unless
+    /// registration isn't allowed for this server or FortiClient's agent is on this EMS (the
+    /// EMS keeps one registration per Mac, so registering would push FortiClient out).
+    /// Returns whether keepalives should go on.
+    async fn register_again(&self) -> Result<bool, Error> {
+        if !self.server_settings.register {
+            tracing::warn!(ems = %self.server, "the EMS dropped this device and registering isn't enabled for it; Fortino stops its keepalives");
+            return Ok(false);
+        }
+        let _guard = self.registration_lock.lock().await;
+        let agent = self.agent().await?;
+        let conn = self.connection()?;
+        if let Some(fc) = self.forticlient_state().await {
+            if self.forticlient_on_this_ems(&agent, &conn, &fc).await? {
+                tracing::info!(ems = %self.server, "the EMS dropped this device and FortiClient's agent is on this EMS; Fortino leaves it to FortiClient");
+                return Ok(false);
+            }
+        }
+        if agent.registration(&conn)?.is_none() {
+            let key = self.key()?;
+            agent
+                .register(&conn, key.as_deref().map(String::as_str))
+                .await?;
+        }
+        tracing::info!(ems = %self.server, "the EMS dropped this device; Fortino registered it again");
+        Ok(true)
+    }
+
+    /// One keepalive (with fresh facts), then a host check after a full one.
+    async fn round(&self, full: bool) -> Result<Round, Error> {
         let agent = self.agent().await?;
         let conn = self.connection()?;
         // FortiClient may register to this EMS while the tunnel is up: then it takes over.
@@ -540,13 +628,13 @@ impl Ctx {
                 && fc.serial.as_ref().is_some_and(|s| s.as_str() == r.serial)
             {
                 tracing::info!(ems = %self.server, "FortiClient's EMS agent took over this EMS; Fortino stops its keepalives");
-                return Ok(None);
+                return Ok(Round::Stop);
             }
         }
         match agent.keepalive(&conn, full).await? {
             Keepalive::Dropped => {
                 tracing::warn!(ems = %self.server, "the EMS dropped this device; its registration was removed");
-                return Ok(None);
+                return Ok(Round::Dropped);
             }
             Keepalive::Kept { tags, renew } => {
                 tracing::info!(ems = %self.server, full, tags = %tags, "EMS keepalive");
@@ -561,10 +649,70 @@ impl Ctx {
             }
         }
         let secs = agent.registration(&conn)?.map_or(60, |r| r.ka_interval);
-        Ok(Some(Duration::from_secs(u64::from(secs)).clamp(
+        Ok(Round::Next(Duration::from_secs(u64::from(secs)).clamp(
             self.settings.min_ka_interval,
             Duration::from_secs(3600),
         )))
+    }
+}
+
+/// What one keepalive round decided.
+enum Round {
+    /// Keep going after this interval.
+    Next(Duration),
+    /// The EMS dropped this device (its local registration is already removed).
+    Dropped,
+    /// Stop the keepalives.
+    Stop,
+}
+
+/// A second drop within this time of registering again stops the keepalives.
+const REREGISTER_WINDOW: Duration = Duration::from_secs(600);
+
+/// Added to the worker's message when the gateway wanted an EMS serial and the profile's EMS
+/// server is neither configured nor approved on this Mac.
+const UNAPPROVED_HINT: &str = "Fortino can't register with this profile's EMS server until it is approved on this Mac: approve it on the profile's EMS row, then connect again.";
+
+/// Added when FortiClient's agent holds this Mac's registration with the profile's EMS.
+const FORTICLIENT_HOLDS_HINT: &str = "FortiClient on this Mac is registered with this EMS, and the EMS keeps one registration per Mac. Open EMS Setup to choose: disconnect FortiClient from the EMS, remove FortiClient, or use FortiClient for this VPN.";
+
+/// Appends `hint` to a termination caused by a missing EMS serial.
+fn annotate(ev: &mut WorkerEvent, hint: Option<&str>) {
+    if let (WorkerEvent::Terminated(t), Some(hint)) = (ev, hint) {
+        if t.code == Some(ErrorCode::UnsupportedPolicy)
+            && t.message.contains(EMS_REGISTRATION_REQUIRED)
+        {
+            t.message = format!("{}. {hint}", t.message);
+        }
+    }
+}
+
+/// Relays `inner`, annotating its termination with `hint`.
+fn with_hint(mut inner: WorkerHandle, hint: String) -> WorkerHandle {
+    let (ev_tx, ev_rx) = mpsc::channel(16);
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<WorkerCommand>(4);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                ev = inner.events.recv() => {
+                    let Some(mut ev) = ev else { break };
+                    annotate(&mut ev, Some(&hint));
+                    let last = matches!(ev, WorkerEvent::Terminated(_));
+                    if ev_tx.send(ev).await.is_err() || last {
+                        break;
+                    }
+                }
+                c = cmd_rx.recv() => {
+                    let c = c.unwrap_or(WorkerCommand::Stop);
+                    // A send error means the worker ended; its Terminated event is still queued.
+                    let _ = inner.commands.send(c).await;
+                }
+            }
+        }
+    });
+    WorkerHandle {
+        events: ev_rx,
+        commands: cmd_tx,
     }
 }
 
@@ -591,7 +739,7 @@ impl WorkerFactory for EmsWorkers {
         };
         let Some(server_settings) = self.server_settings(&server) else {
             tracing::warn!(ems = %server, "profile names an EMS that is neither configured nor approved on this Mac; connecting without EMS");
-            return self.inner.spawn(cfg);
+            return with_hint(self.inner.spawn(cfg), UNAPPROVED_HINT.to_owned());
         };
         let ctx = Arc::new(self.context(server, server_settings, cfg.debug_ems_sysinfo.clone()));
         let inner = self.inner.clone();
@@ -614,8 +762,12 @@ impl WorkerFactory for EmsWorkers {
                 }
             };
             let mut keep_alive = true;
+            let mut hint = None;
             match prepared {
                 Ok((Prepared::Agent(identity), uid)) => {
+                    if identity.is_none() {
+                        hint = Some(ctx.no_identity_hint().to_owned());
+                    }
                     cfg.ems = identity;
                     cfg.fct_uid = Some(uid.to_string());
                 }
@@ -623,6 +775,12 @@ impl WorkerFactory for EmsWorkers {
                     cfg.ems = Some(identity);
                     cfg.fct_uid = Some(uid.to_string());
                     keep_alive = false;
+                }
+                Ok((Prepared::HeldByForticlient, uid)) => {
+                    cfg.ems = None;
+                    cfg.fct_uid = Some(uid.to_string());
+                    keep_alive = false;
+                    hint = Some(FORTICLIENT_HOLDS_HINT.to_owned());
                 }
                 Err(e) => {
                     tracing::warn!(ems = %ctx.server, error = %e, "EMS step failed");
@@ -635,7 +793,8 @@ impl WorkerFactory for EmsWorkers {
             loop {
                 tokio::select! {
                     ev = h.events.recv() => {
-                        let Some(ev) = ev else { break };
+                        let Some(mut ev) = ev else { break };
+                        annotate(&mut ev, hint.as_deref());
                         let up = matches!(ev, WorkerEvent::Up(_));
                         let last = matches!(ev, WorkerEvent::Terminated(_));
                         if last {

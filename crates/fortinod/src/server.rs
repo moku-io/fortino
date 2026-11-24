@@ -292,7 +292,9 @@ impl Conn {
                 #[serde(deny_unknown_fields)]
                 struct Enrollment {
                     server: String,
-                    install_uid: String,
+                    /// Absent for **Register Now** (no deployment package).
+                    #[serde(default)]
+                    install_uid: Option<String>,
                 }
                 let p: Enrollment = parse_params(params)?;
                 let server = p.server.parse().map_err(|_| {
@@ -302,7 +304,7 @@ impl Conn {
                     ProtoError::new(ErrorCode::UnsupportedPolicy, "EMS enrollment unavailable")
                 })?;
                 let (status, rules) = ems
-                    .enroll_package(server, &p.install_uid)
+                    .enroll(server, p.install_uid.as_deref())
                     .await
                     .map_err(enrollment_error)?;
                 Ok(serde_json::json!({"status":status,"rules":rules}))
@@ -509,10 +511,15 @@ fn enrollment_error(e: fortino_ems::Error) -> ProtoError {
             ErrorCode::TransportFailure,
             "Could not establish a verified TLS connection to EMS.",
         ),
-        Error::Refused(_) => (
-            ErrorCode::UnsupportedPolicy,
-            "EMS refused registration. Check the configured connection key and enrollment requirements.",
-        ),
+        Error::Refused(reason) => {
+            // The EMS's own reason (connection key, invitation, quarantine) tells the user
+            // what IT has to provide.
+            let message: String = format!("The EMS refused the registration: {reason}")
+                .chars()
+                .take(300)
+                .collect();
+            return ProtoError::new(ErrorCode::UnsupportedPolicy, &message);
+        }
         Error::Protocol(_) => (
             ErrorCode::InvalidRequest,
             "Invalid enrollment data or unsupported EMS reply.",

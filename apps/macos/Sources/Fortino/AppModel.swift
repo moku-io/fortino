@@ -41,6 +41,8 @@ final class AppModel: ObservableObject {
     @Published var reviewedEmsFailure: String?
     /// The failed attempt whose gateway certificate the user has since trusted.
     @Published var reviewedGatewayFailure: String?
+    /// The profile the EMS Setup and enrollment windows work on.
+    @Published var emsSetupProfileId: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -137,7 +139,10 @@ final class AppModel: ObservableObject {
     private func acceptDaemonBuild(_ c: DaemonClient, _ h: HelloResult) async -> Bool {
         switch checkDaemonBuild(app: appBuild, daemon: h.build) {
         case .current:
-            serviceUpdate = nil
+            // Development aid: FORTINO_DEBUG_SERVICE_UPDATE=after-disconnect shows the
+            // service-update banner without a second build, for layout checks and screenshots.
+            serviceUpdate = ProcessInfo.processInfo.environment["FORTINO_DEBUG_SERVICE_UPDATE"]
+                == "after-disconnect" ? .afterDisconnect : nil
             restarted = nil
             return true
         case .predatesBuildIds:
@@ -429,6 +434,26 @@ final class AppModel: ObservableObject {
         }
         try EnrollmentApproval(server: server).requestInApp(pin: pin)
         return true
+    }
+
+    /// The profile for the EMS Setup and enrollment windows: the one they were opened for,
+    /// else the selected one.
+    var emsSetupProfile: Profile? {
+        profiles.first { $0.id == emsSetupProfileId } ?? selectedProfile
+    }
+
+    /// Registers this Mac with `server` now, without a deployment package.
+    func registerEms(_ server: EmsServer) async throws -> EnrollmentReply {
+        let r = try await require().register(server: server)
+        await refreshEmsStatus()
+        return r
+    }
+
+    /// Whether the last attempt was `profile`'s and failed for lack of an EMS registration.
+    func lastAttemptNeedsEms(_ profile: Profile) -> Bool {
+        guard state == .idle, status?.profileId == profile.id,
+              let r = status?.lastResult else { return false }
+        return r.message.contains(emsRegistrationRequiredPrefix)
     }
 
     func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {

@@ -177,6 +177,7 @@ struct ConnectButton: View {
 struct ConnectionSection: View {
     @ObservedObject var model: AppModel
     let profile: Profile
+    @Environment(\.openWindow) private var openWindow
 
     private var isCurrent: Bool { model.status?.profileId == profile.id }
 
@@ -189,7 +190,8 @@ struct ConnectionSection: View {
                 }
             }
             if let ems = profile.spec.endpoint.ems {
-                EmsStatusRow(model: model, server: ems, status: model.emsStatus[ems.display])
+                EmsStatusRow(model: model, profileId: profile.id, server: ems,
+                             status: model.emsStatus[ems.display])
                 if model.emsStatus[ems.display]?.checkedInWithoutRules == true {
                     EmsNoRulesNote()
                 }
@@ -209,6 +211,15 @@ struct ConnectionSection: View {
                     } else {
                         VStack(alignment: .trailing, spacing: 6) {
                             Text(r.message).foregroundStyle(.red)
+                            if model.lastAttemptNeedsEms(profile) {
+                                Button("Open EMS Setup…") {
+                                    model.emsSetupProfileId = profile.id
+                                    openWindow(id: "ems-setup")
+                                    NSApp.activate(ignoringOtherApps: true)
+                                }
+                                .controlSize(.small)
+                                .help("Shows which EMS step is missing and how to complete it")
+                            }
                             if model.gatewayTrustFailure?.id == profile.id {
                                 Button("Review Certificate…") { model.reviewGatewayCertificate(profile) }
                                     .controlSize(.small)
@@ -276,6 +287,7 @@ struct EmsNoRulesNote: View {
 
 struct EmsStatusRow: View {
     @ObservedObject var model: AppModel
+    let profileId: String
     let server: EmsServer
     let status: EmsStatus?
     @Environment(\.openWindow) private var openWindow
@@ -290,23 +302,25 @@ struct EmsStatusRow: View {
                     // certificate doesn't name): show the certificate and offer to pin it.
                     Button("Review Certificate…") { model.approveEms(server) }
                         .controlSize(.small)
-                } else if status?.state == "unconfigured" {
-                    // Approving is enough for a Mac the EMS already knows: it registers on the
-                    // next connect. A DMG is only needed for a Mac the EMS has never seen.
-                    Button("Approve…") { model.approveEms(server) }
-                        .controlSize(.small)
-                        .help("Lets Fortino register this Mac with this EMS server when you connect")
+                } else {
+                    // Every EMS step (allow, register, package, roadblocks) is in EMS Setup.
+                    Button(needsSetup ? "Set Up…" : "Details…") {
+                        model.emsSetupProfileId = profileId
+                        openWindow(id: "ems-setup")
+                        NSApp.activate(ignoringOtherApps: true)
+                    }
+                    .controlSize(.small)
+                    .help("Guided EMS setup: allow the server, register this Mac, and see what is in the way")
                 }
             }
             .help(status?.state == "not-registered"
-                  ? "Nothing to do: Fortino registers this Mac with the EMS the next time you connect. For a Mac the EMS has never seen, the administrator may also supply a deployment DMG (Enroll with Package…)."
+                  ? "Fortino registers this Mac with the EMS the next time you connect, or now from EMS Setup."
                   : detail)
         }
     }
 
-    private func openEnrollment() {
-        openWindow(id: "enrollment")
-        NSApp.activate(ignoringOtherApps: true)
+    private var needsSetup: Bool {
+        ["unconfigured", "not-registered", "held-by-forticlient", "quarantined", nil].contains(status?.state)
     }
 
     private var emsTrustFailed: Bool {
@@ -321,6 +335,7 @@ struct EmsStatusRow: View {
         // Keepalives run only while connected, so a quiet registration is normal when idle.
         case "stale": return .secondary
         case "quarantined": return .red
+        case "held-by-forticlient": return .orange
         default: return .secondary
         }
     }
@@ -331,6 +346,7 @@ struct EmsStatusRow: View {
         case "stale": return "Registered"
         case "quarantined": return "Quarantined"
         case "managed-by-forticlient": return "Managed by FortiClient"
+        case "held-by-forticlient": return "Held by FortiClient"
         // No administrator has approved this server on this Mac yet.
         case "unconfigured": return "Not Approved"
         case "not-registered": return "Registers When You Connect"

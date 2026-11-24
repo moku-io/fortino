@@ -8,7 +8,10 @@ use std::time::Duration;
 use fortino_config::{Endpoint, IpPolicy};
 use fortino_core::ErrorCode;
 use fortino_core::proto::ChallengeKind;
-use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerHandle};
+use fortino_core::worker::{
+    EMS_REGISTRATION_REQUIRED, EmsIdentity, WorkerCommand, WorkerConfig, WorkerEvent,
+    WorkerFactory, WorkerHandle,
+};
 use fortino_mock::fortigate::{self, Scenario, User, checksum};
 use fortino_proto_sslvpn::identity::ClientIdentity;
 use fortino_secret::Secret;
@@ -27,6 +30,11 @@ async fn start(sc: Scenario) -> Rig {
 
 /// Starts the worker with the endpoint UID the gateway may ask for (`0x80`).
 async fn start_with_uid(sc: Scenario, uid: Option<&str>) -> Rig {
+    start_with(sc, uid, None).await
+}
+
+/// Starts the worker with an endpoint UID and the EMS registration it may present.
+async fn start_with(sc: Scenario, uid: Option<&str>, ems: Option<EmsIdentity>) -> Rig {
     let mock = fortigate::start(&sc).await.unwrap();
     let devices = MemoryDevices::default();
     let w = NativeWorker {
@@ -46,7 +54,7 @@ async fn start_with_uid(sc: Scenario, uid: Option<&str>) -> Rig {
         username: Some("alice".into()),
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
-        ems: None,
+        ems,
         fct_uid: uid.map(Into::into),
         debug_ems_sysinfo: Default::default(),
     });
@@ -279,6 +287,53 @@ async fn failed_login_page_still_asks_for_credentials() {
     let mut sc = scenario();
     sc.login.login_page_status = Some(503);
     let mut r = start(sc).await;
+    loop {
+        match next(&mut r.h).await {
+            WorkerEvent::Stage(_) => {}
+            WorkerEvent::Challenge { kind, .. } => {
+                assert_eq!(kind, ChallengeKind::Password);
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+fn ems_gated_login() -> Scenario {
+    let mut sc = scenario();
+    sc.login.require_ems_sn = Some("FCTEMS0000000001".into());
+    sc.login.ems_sn_gates_login = true;
+    sc.info.flag = "100".into();
+    sc
+}
+
+#[tokio::test]
+async fn ems_gated_login_fails_before_the_password_without_a_serial() {
+    let mut r = start(ems_gated_login()).await;
+    loop {
+        match next(&mut r.h).await {
+            WorkerEvent::Stage(_) => {}
+            WorkerEvent::Terminated(t) => {
+                assert_eq!(t.code, Some(ErrorCode::UnsupportedPolicy));
+                assert!(
+                    t.message.starts_with(EMS_REGISTRATION_REQUIRED),
+                    "{}",
+                    t.message
+                );
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn ems_gated_login_proceeds_with_the_serial() {
+    let ems = EmsIdentity {
+        serial: "FCTEMS0000000001".into(),
+        tenant: "0".repeat(32),
+    };
+    let mut r = start_with(ems_gated_login(), None, Some(ems)).await;
     loop {
         match next(&mut r.h).await {
             WorkerEvent::Stage(_) => {}

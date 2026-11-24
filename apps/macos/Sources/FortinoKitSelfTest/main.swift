@@ -31,6 +31,52 @@ check(checkPort("10443") == .ok && checkPort("0") != .ok, "port")
 
 check(try parseEms("EMS.example.org.:8013").get()?.display == "ems.example.org:8013", "canonical EMS approval name")
 
+// EMS setup steps
+do {
+    let ems = EmsServer(host: "ems.example.org", port: 9016)
+    func input(_ state: String?, rules: Bool? = nil, ka: Int? = nil, check: EmsServerCheck = .reachable(trusted: true),
+               last: String? = nil, connected: Bool = false) -> EmsSetupInput {
+        let lr = last.flatMap { try? JSONDecoder().decode(LastResult.self, from: Data(#"{"attemptId":"a","code":"unsupported_policy","message":"\#($0)"}"#.utf8)) }
+        return EmsSetupInput(server: ems, serverCheck: check,
+                             status: state.map { EmsStatus(state: $0, lastKeepalive: ka, rules: rules) },
+                             lastResult: lr, connected: connected)
+    }
+    func states(_ i: EmsSetupInput) -> [EmsStepState] { i.steps.map(\.state) }
+
+    check(input("unconfigured").roadblock?.action == .approve, "unapproved: approve first")
+    check(input("not-registered").roadblock?.action == .registerNow, "approved: register now")
+    check(input("not-registered").roadblock?.secondary == .enrollWithPackage, "package as the alternative")
+    check(input("held-by-forticlient").roadblock?.id == .registration, "FortiClient holds the registration")
+    check(input("held-by-forticlient").roadblock?.state == .blocked, "held is a roadblock, not a todo")
+    check(input("held-by-forticlient").roadblock?.fixes.map(\.action) == [.openFortiClient, .uninstallFortiClient, nil], "held offers three ways out")
+    check(input("held-by-forticlient").roadblock?.watches == true, "held re-checks by itself")
+    check(input("not-registered").roadblock?.watches == false, "todo steps wait for the user")
+    check(input("quarantined").roadblock?.state == .blocked, "quarantined")
+    check(input("registered", rules: true, ka: 1).roadblock == nil, "all set")
+    check(states(input("registered", rules: true, ka: 1)) == [.done, .done, .done, .done, .waiting], "registered with rules")
+    check(input("registered", rules: false, ka: 1).steps[3].state == .warning, "no rules after check-in")
+    check(input("registered", rules: false).steps[3].state == .waiting, "no rules before check-in")
+    check(input("managed-by-forticlient").roadblock == nil, "FortiClient same device")
+    check(input(nil, check: .unreachable("No answer.")).roadblock?.id == .server, "unreachable server first")
+    check(input("unconfigured", check: .checking).roadblock?.action == .approve, "checking doesn't block")
+    let refused = emsRegistrationRequiredPrefix + ": it refused the login without this Mac's EMS serial (HTTP 503)"
+    check(input("not-registered", last: refused).steps[4].state == .blocked, "gateway refused, not registered")
+    check(input("registered", rules: true, ka: 1, last: refused).roadblock?.action == .connect, "registered since: connect again")
+    check(input("registered", rules: true, ka: 1, connected: true).steps[4].state == .done, "connected")
+    check(input("registered", rules: true, ka: 1, last: "credentials rejected").steps[4].state == .waiting, "other failures aren't EMS roadblocks")
+}
+
+// Enrollment image kinds
+check(EnrollmentPackageKind.classify(entries: ["Install.mpkg", "fctdata", "Uninstall.app"]) == .deployment, "deployment package")
+check(EnrollmentPackageKind.classify(entries: ["FortiClientInstaller.app"]) == .onlineInstaller, "online installer")
+check(EnrollmentPackageKind.classify(entries: ["Install.mpkg", "Uninstall.app"]) == .plainInstaller, "installer without fctdata")
+check(EnrollmentPackageKind.classify(entries: ["README"]) == .unknown, "unknown image")
+check(EnrollmentPackageKind.onlineInstaller.explanation?.contains("EMS Setup") == true, "online installer points to EMS Setup")
+check(EmsServer(host: "a.example", port: 1).isSameServer(as: EmsServer(host: "a.example", port: 1)), "same name")
+check(!EmsServer(host: "a.example", port: 1).isSameServer(as: EmsServer(host: "a.example", port: 2)), "other port")
+check(EmsServer(host: "127.0.0.1", port: 8013).isSameServer(as: EmsServer(host: "localhost", port: 8013)), "name and address of one server")
+check(!EmsServer(host: "127.0.0.1", port: 8013).isSameServer(as: EmsServer(host: "192.0.2.1", port: 8013)), "different addresses")
+
 // Daemon build check
 check(checkDaemonBuild(app: nil, daemon: "a") == .current, "development app skips the check")
 check(checkDaemonBuild(app: "a", daemon: "a") == .current, "same build")

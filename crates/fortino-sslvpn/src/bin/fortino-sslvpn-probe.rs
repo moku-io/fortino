@@ -5,7 +5,12 @@
 //! fortino-sslvpn-probe <credentials-file> [--device memory|utun] [--ca FILE] [--pin SHA256] [--hold SECS]
 //! fortino-sslvpn-probe <credentials-file> --print-pin
 //! fortino-sslvpn-probe <credentials-file> --info [--pin SHA256]
+//! fortino-sslvpn-probe <credentials-file> --ems-registration FILE [...]
 //! ```
+//!
+//! `--ems-registration` takes a registration file written by `fortino-ems-probe --register
+//! --state DIR` (one JSON file in DIR) and presents its EMS serial, tenant and UID, as the
+//! daemon does for a registered Mac. Only use a registration this Mac really holds.
 //!
 //! The credentials file (kept outside the repository) has `key: value`
 //! lines: `gateway` (host:port), `username`, `password`, optional `otp`, and optional
@@ -23,7 +28,7 @@ use std::time::Duration;
 
 use fortino_config::{Endpoint, IpPolicy};
 use fortino_core::proto::ChallengeKind;
-use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
+use fortino_core::worker::{EmsIdentity, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
 use fortino_proto_sslvpn::identity::ClientIdentity;
 use fortino_secret::Secret;
 use fortino_sslvpn::device::{DeviceFactory, MemoryDevices};
@@ -36,6 +41,18 @@ fn read_creds(path: &str) -> Result<HashMap<String, String>, String> {
         .filter_map(|l| l.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_owned()))
         .collect())
+}
+
+/// Serial, tenant and UID from a stored registration file.
+fn read_registration(path: &str) -> Result<(EmsIdentity, String), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("read {path}: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("parse {path}: {e}"))?;
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
+    let serial = field("serial").ok_or("registration has no serial")?;
+    let uid = field("uid").ok_or("registration has no uid")?;
+    let tenant = field("tenant").unwrap_or_else(|| "0".repeat(32));
+    Ok((EmsIdentity { serial, tenant }, uid))
 }
 
 fn hostname() -> String {
@@ -465,6 +482,14 @@ async fn run() -> Result<(), String> {
         devices,
         connect_override: None,
     };
+    let (ems, fct_uid) = match opt("--ems-registration") {
+        Some(p) => {
+            let (ems, uid) = read_registration(&p)?;
+            eprintln!("presenting a stored EMS registration (serial and UID not printed)");
+            (Some(ems), Some(uid))
+        }
+        None => (None, device_uid()),
+    };
     let mut h = w.spawn(WorkerConfig {
         attempt_id: "probe".into(),
         endpoint: Endpoint {
@@ -476,8 +501,8 @@ async fn run() -> Result<(), String> {
         username: Some(username),
         trust_id: "probe".into(),
         ip_policy: IpPolicy::SplitIpv4,
-        ems: None,
-        fct_uid: device_uid(),
+        ems,
+        fct_uid,
         debug_ems_sysinfo: Default::default(),
     });
 

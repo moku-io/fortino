@@ -57,6 +57,12 @@ enum Cmd {
         /// EMS server, `host` or `host:port` (default port 8013).
         server: String,
     },
+    /// Register this Mac with an EMS server now, without connecting. Creates a device record
+    /// on the EMS. The server must be approved on this Mac (the app's EMS Setup does that).
+    EmsRegister {
+        /// EMS server, `host` or `host:port` (default port 8013).
+        server: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -298,7 +304,43 @@ async fn run(cli: Cli) -> CmdResult {
         Cmd::Disconnect => disconnect(&mut client, json).await,
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
         Cmd::EmsStatus { server } => ems_status(&client, &server, json).await,
+        Cmd::EmsRegister { server } => ems_register(&client, &server, json).await,
     }
+}
+
+async fn ems_register(c: &Client, server: &str, json: bool) -> CmdResult {
+    let server = parse_ems(server)?;
+    let v: serde_json::Value = c
+        .call(
+            fortino_core::proto::method::EMS_ENROLL,
+            &serde_json::json!({"server": server.to_string()}),
+        )
+        .await?;
+    if json {
+        print_json(&v);
+        return Ok(());
+    }
+    let status = v["status"].as_str().unwrap_or("unknown");
+    println!("Result:     {status}");
+    if let Some(next) = ems_next_step(status) {
+        println!("Next:       {next}");
+    }
+    Ok(())
+}
+
+/// What the user does next in each registration state, for terminal output.
+fn ems_next_step(state: &str) -> Option<&'static str> {
+    Some(match state {
+        "unconfigured" | "approval-required" => {
+            "approve this EMS server on this Mac (app: EMS Setup, or Enroll with EMS Package)"
+        }
+        "not-registered" => "fortino ems-register <server>, or connect: Fortino registers then",
+        "held-by-forticlient" => {
+            "FortiClient holds this Mac's registration with this EMS (one per Mac): disconnect it in FortiClient (Zero Trust Telemetry, Disconnect) or uninstall FortiClient, then fortino ems-register <server>"
+        }
+        "quarantined" => "your IT administrator quarantined this Mac on the EMS",
+        _ => return None,
+    })
 }
 
 async fn ems_status(c: &Client, server: &str, json: bool) -> CmdResult {
@@ -315,6 +357,9 @@ async fn ems_status(c: &Client, server: &str, json: bool) -> CmdResult {
     }
     let state = v["state"].as_str().unwrap_or("unknown");
     println!("State:      {state}");
+    if let Some(next) = ems_next_step(state) {
+        println!("Next:       {next}");
+    }
     if let Some(t) = v["lastKeepalive"].as_u64() {
         println!("Check-in:   unix {t}");
     }
