@@ -23,7 +23,7 @@ Connects to your company's FortiGate. Then gets out of your way.
 ## Features
 
 - **FortiClient EMS registration, one per profile.** Each VPN profile has its own EMS. Switching organizations takes one click, with no unregister and re-register ritual.
-- **Password + OTP**, strict TLS, and an in-app review for pinning a gateway certificate.
+- **Password + OTP, or single sign-on (SAML) in your browser**, strict TLS, and an in-app review for pinning a gateway certificate.
 - **Split routes and per-domain split DNS**, a DNS choice for each profile, and an IPv6 leak block.
 - **Crash-safe networking.** Every route and DNS change goes into a journal first, so it gets rolled back even after a crash.
 - **A sleek native menu-bar app** (SwiftUI) **and a headless `fortino` CLI.**
