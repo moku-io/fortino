@@ -32,6 +32,9 @@ pub struct InfoCfg {
     pub remoteauthtimeout: u32,
     /// `f` flag field, hex as on the wire (`100` sets the EMS-serial bit).
     pub flag: String,
+    /// `sso_port`: where the gateway redirects a browser after a single sign-on. Not sent when
+    /// unset.
+    pub sso_port: Option<u16>,
 }
 
 impl Default for InfoCfg {
@@ -41,6 +44,7 @@ impl Default for InfoCfg {
             salt: "5a1t5a1t".into(),
             remoteauthtimeout: 600,
             flag: "0".into(),
+            sso_port: None,
         }
     }
 }
@@ -138,12 +142,26 @@ impl Default for TunnelCfg {
     }
 }
 
+/// Single sign-on (SAML). The mock plays the identity provider too, on its own origin.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SamlCfg {
+    /// Port of the local callback the browser is redirected to. Defaults to `info.sso_port`,
+    /// then 8020.
+    pub callback_port: Option<u16>,
+    /// Show a sign-in page with a button (for a person at a browser) instead of passing
+    /// straight through (for tests).
+    pub idp_form: bool,
+}
+
 /// A mock gateway scenario. Loaded from YAML (see `fixtures/mock/*.yaml`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Scenario {
     /// `/remote/info`.
     pub info: InfoCfg,
+    /// Single sign-on; `None` leaves the `/remote/saml/*` paths unanswered (404).
+    pub saml: Option<SamlCfg>,
     /// TLS behaviour.
     pub tls: TlsCfg,
     /// Accounts.
@@ -176,9 +194,13 @@ impl Scenario {
 /// Both gateways returned these values as attributes on an `api` element.
 /// The envelope and values here are synthetic.
 pub fn info_body(i: &InfoCfg) -> String {
+    let sso = i
+        .sso_port
+        .map(|p| format!(" sso_port=\"{p}\""))
+        .unwrap_or_default();
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?><info><api encmethod=\"{}\" salt=\"{}\" \
-         remoteauthtimeout=\"{}\" f=\"{}\"/></info>",
+         remoteauthtimeout=\"{}\"{sso} f=\"{}\"/></info>",
         i.encmethod, i.salt, i.remoteauthtimeout, i.flag
     )
 }
@@ -228,6 +250,8 @@ struct State {
     tmp: HashSet<String>,
     /// Valid SVPNCOOKIE values.
     sessions: HashSet<String>,
+    /// Single sign-on session ids not yet exchanged.
+    saml_ids: HashSet<String>,
 }
 
 impl State {
@@ -331,6 +355,125 @@ pub fn router(sc: &Scenario) -> Router {
                 .with_header("Set-Cookie", "SVPNCOOKIE=; path=/")
                 .into()
         })
+        .route("GET", "/remote/saml/start", {
+            let c = sc.clone();
+            move |req| saml_start(&c, req).into()
+        })
+        .route("GET", "/remote/saml/idp", {
+            let c = sc.clone();
+            move |req| saml_idp(&c, req).into()
+        })
+        .route("GET", "/remote/saml/login", {
+            let (s, c) = (st.clone(), sc.clone());
+            move |req| saml_login(&s, &c, req).into()
+        })
+        .route("POST", "/remote/saml/login", {
+            let (s, c) = (st.clone(), sc.clone());
+            move |req| saml_login(&s, &c, req).into()
+        })
+        .route("GET", "/remote/saml/auth_id", {
+            let (s, c) = (st.clone(), sc.clone());
+            move |req| saml_auth_id(&s, &c, req).into()
+        })
+        .route("GET", "/sslvpn/portal.html", move |_| {
+            Response::ok("text/html", "<html>portal</html>").into()
+        })
+}
+
+// ---------------------------------------------------------------- single sign-on
+
+/// Whether the sign-in ends with a redirect to the local callback (`redirect=1`), carried from
+/// the start page through the identity provider to the assertion consumer.
+fn saml_redirect(req: &Request) -> bool {
+    req.query_param("redirect")
+        .or_else(|| req.form("redirect"))
+        .as_deref()
+        == Some("1")
+}
+
+/// `/remote/saml/start`: on to the identity provider.
+fn saml_start(sc: &Scenario, req: &Request) -> Response {
+    if sc.saml.is_none() {
+        return Response::status(404);
+    }
+    let flag = if saml_redirect(req) {
+        "?redirect=1"
+    } else {
+        ""
+    };
+    Response::status(302).with_header("Location", format!("/remote/saml/idp{flag}"))
+}
+
+/// The mock identity provider: a sign-in button, or straight on to the assertion consumer.
+fn saml_idp(sc: &Scenario, req: &Request) -> Response {
+    let Some(cfg) = &sc.saml else {
+        return Response::status(404);
+    };
+    let redirect = if saml_redirect(req) { "1" } else { "0" };
+    if !cfg.idp_form {
+        return Response::status(302).with_header(
+            "Location",
+            format!("/remote/saml/login?redirect={redirect}"),
+        );
+    }
+    Response::ok(
+        "text/html; charset=utf-8",
+        format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><title>Mock sign-in</title></head>\
+             <body><h1>Mock identity provider</h1><p>Synthetic sign-in for testing.</p>\
+             <form method=\"post\" action=\"/remote/saml/login\">\
+             <input type=\"hidden\" name=\"redirect\" value=\"{redirect}\">\
+             <button type=\"submit\">Sign in</button></form></body></html>"
+        ),
+    )
+}
+
+/// `/remote/saml/login`, the assertion consumer: a one-time id and a redirect to the local
+/// callback, or (without `redirect=1`) the session cookie and the portal.
+fn saml_login(st: &Mutex<State>, sc: &Scenario, req: &Request) -> Response {
+    let Some(cfg) = &sc.saml else {
+        return Response::status(404);
+    };
+    let mut s = lock(st);
+    if saml_redirect(req) {
+        let id = s.token("saml");
+        s.saml_ids.insert(id.clone());
+        let port = cfg.callback_port.or(sc.info.sso_port).unwrap_or(8020);
+        return Response::status(302)
+            .with_header("Location", format!("http://127.0.0.1:{port}/?id={id}"));
+    }
+    let c = s.token("svpn");
+    s.sessions.insert(c.clone());
+    Response::status(302)
+        .with_header("Location", "/sslvpn/portal.html")
+        .with_header(
+            "Set-Cookie",
+            format!("SVPNCOOKIE={c}; path=/; secure; httponly"),
+        )
+}
+
+/// `/remote/saml/auth_id?id=…`: exchanges a one-time id for the session cookie.
+fn saml_auth_id(st: &Mutex<State>, sc: &Scenario, req: &Request) -> Response {
+    if sc.saml.is_none() {
+        return Response::status(404);
+    }
+    let mut s = lock(st);
+    match req.query_param("id") {
+        Some(id) if s.saml_ids.remove(&id) => {
+            let c = s.token("svpn");
+            s.sessions.insert(c.clone());
+            Response::ok(
+                "text/html",
+                "<html><script>location='/remote/index'</script></html>",
+            )
+            .with_header(
+                "Set-Cookie",
+                format!("SVPNCOOKIE={c}; path=/; secure; httponly"),
+            )
+        }
+        // UNVERIFIED: how a gateway refuses an unknown or used id.
+        _ => Response::status(401),
+    }
 }
 
 fn lock(s: &Mutex<State>) -> std::sync::MutexGuard<'_, State> {
@@ -623,6 +766,18 @@ mod tests {
         assert_eq!(s.include_v4.len(), 1);
         assert_eq!(s.split_dns[0].domains, ["intra.example"]);
         assert!(s.rejected.is_empty());
+    }
+
+    #[test]
+    fn info_advertises_the_sso_port_only_when_set() {
+        let plain = fortino_proto_sslvpn::info::parse(&info_body(&InfoCfg::default())).unwrap();
+        assert_eq!(plain.sso_port, None);
+        let sso = InfoCfg {
+            sso_port: Some(8021),
+            ..InfoCfg::default()
+        };
+        let i = fortino_proto_sslvpn::info::parse(&info_body(&sso)).unwrap();
+        assert_eq!(i.sso_port, Some(8021));
     }
 
     #[test]
