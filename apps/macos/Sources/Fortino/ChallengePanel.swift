@@ -1,4 +1,5 @@
-// Sign-in panel shown whenever the daemon has an outstanding challenge for this user.
+// Sign-in panel shown whenever the daemon has an outstanding challenge for this user. Single
+// sign-on has its own panel (SamlSignIn.swift).
 
 import AppKit
 import FortinoKit
@@ -11,7 +12,7 @@ final class ChallengePanelController {
     private var shownId: String?
 
     func update(status: Status) {
-        guard let ch = status.challenge else {
+        guard let ch = status.challenge, ch.kind != .saml else {
             close()
             return
         }
@@ -62,6 +63,7 @@ struct ChallengeView: View {
         case .username: return "Username"
         case .password: return "Password"
         case .otp: return "One-time code"
+        case .saml: return "Single sign-on"
         }
     }
 

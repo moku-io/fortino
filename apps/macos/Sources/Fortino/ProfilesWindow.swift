@@ -366,6 +366,7 @@ struct Draft {
     var description = ""
     var policy: IpPolicy = .splitIpv4
     var dns: DnsMode = .gateway
+    var signIn: CredentialMode = .password
     /// Debug only: EMS SYSINFO overrides. See DebugOverridesBox.swift.
     var debugOverrides: [DebugKV] = []
 
@@ -382,6 +383,7 @@ struct Draft {
         description = s.description ?? ""
         policy = s.ipPolicy
         dns = s.dnsMode ?? .gateway
+        signIn = s.signIn
         debugOverrides = debugOverrideRows(s.debugEmsSysinfo)
     }
 
@@ -419,6 +421,8 @@ struct Draft {
         s.description = t(description)
         s.ipPolicy = policy
         s.dnsMode = dns == .gateway ? nil : dns
+        // Keep a method this app doesn't know unless the user picked another one.
+        if s.signIn != signIn { s.signIn = signIn }
         s.debugEmsSysinfo = debugOverridesMap(debugOverrides)
         return s
     }
@@ -487,11 +491,23 @@ struct ProfileEditor: View {
                 }
                 field("Realm", text: $draft.realm, key: "realm", focus: .realm, prompt: "Optional")
             }
-            Section("Account") {
+            Section {
                 field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
-                field("Username", text: $draft.username, key: "username", focus: .username,
-                      prompt: "Asked when connecting")
+                Picker("Sign in with", selection: $draft.signIn) {
+                    ForEach(CredentialMode.allCases) { Text($0.label).tag($0) }
+                }
+                if draft.signIn == .password {
+                    field("Username", text: $draft.username, key: "username", focus: .username,
+                          prompt: "Asked when connecting")
+                }
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
+            } header: {
+                Text("Account")
+            } footer: {
+                if draft.signIn == .saml {
+                    Text("Fortino opens your default browser for your organization's sign-in page.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section {
                 Picker("Routing", selection: $draft.policy) {

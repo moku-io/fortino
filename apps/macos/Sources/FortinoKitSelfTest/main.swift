@@ -92,6 +92,48 @@ if let d0 = try? JSONEncoder().encode(spec),
     check(false, "DNS mode encodes")
 }
 
+// Single sign-on: the challenge decodes with its sign-in page.
+let sj = #"{"daemonInstance":"i","seq":4,"state":"awaiting-input","attemptId":"a1","challenge":{"id":"c1","kind":"saml","prompt":"Single sign-on","expiresInSecs":299,"saml":{"url":"https://vpn.example.org/remote/saml/start?redirect=1","callbackPort":8020}}}"#
+if let s = try? JSONDecoder().decode(Status.self, from: Data(sj.utf8)) {
+    check(s.challenge?.kind == .saml && s.challenge?.kind.isSecret == true, "saml challenge")
+    check(s.challenge?.saml?.callbackPort == 8020, "saml callback port")
+    check(s.challenge?.saml?.url.hasPrefix("https://") == true, "saml sign-in page")
+} else {
+    check(false, "saml status decodes")
+}
+
+// Single sign-on: what the local listener accepts (same rules as the Rust listener).
+func requestHead(_ lines: [String]) -> Data { Data(lines.joined(separator: "\r\n").utf8) }
+let localHost = "Host: 127.0.0.1:8020"
+check(samlCallbackRequest(requestHead(["GET /?id=abc-1 HTTP/1.1", localHost]), port: 8020)
+      == .login(query: "id=abc-1"), "callback login")
+check(samlCallbackRequest(requestHead(["GET /?id=abc&x=1 HTTP/1.1", "host: LOCALHOST:8020"]), port: 8020)
+      == .login(query: "id=abc&x=1"), "localhost callback")
+check(samlCallbackRequest(Data("GET /?id=abc HTTP/1.1\nHost: 127.0.0.1:8020".utf8), port: 8020)
+      == .login(query: "id=abc"), "bare LF")
+check(samlCallbackRequest(requestHead(["GET /favicon.ico HTTP/1.1", localHost]), port: 8020) == .notFound, "favicon")
+check(samlCallbackRequest(requestHead(["GET /?id=a!b HTTP/1.1", localHost]), port: 8020) == .notFound, "bad id")
+check(samlCallbackRequest(requestHead(["GET /?id=abc HTTP/1.1", "Host: evil.example:8020"]), port: 8020) == .bad, "rebound host")
+check(samlCallbackRequest(requestHead(["GET /?id=abc HTTP/1.1", "Host: 127.0.0.1:9000"]), port: 8020) == .bad, "other port")
+check(samlCallbackRequest(requestHead(["GET /?id=abc HTTP/1.1", localHost, localHost]), port: 8020) == .bad, "two hosts")
+check(samlCallbackRequest(requestHead(["POST /?id=abc HTTP/1.1", localHost]), port: 8020) == .bad, "post")
+check(samlCallbackRequest(requestHead(["GET /?id=abc HTTP/1.1"]), port: 8020) == .bad, "no host")
+check(samlCallbackRequest(Data([0xff, 0xfe]), port: 8020) == .bad, "not UTF-8")
+check(samlQueryHasSessionId("x=1&id=Ab-9"), "session id among parameters")
+check(!samlQueryHasSessionId("id=a&id=b") && !samlQueryHasSessionId("x=1") && !samlQueryHasSessionId("id="),
+      "missing, repeated or empty id")
+check(samlRequestHeadEnd(Data("GET / HTTP/1.1\r\nA: b\r\n\r\nrest".utf8)) == 20, "head end CRLF")
+check(samlRequestHeadEnd(Data("GET / HTTP/1.1\nA: b\n\nrest".utf8)) == 19, "head end LF")
+check(samlRequestHeadEnd(Data("GET / HTTP/1.1\r\n".utf8)) == nil, "no head end yet")
+
+// Sign-in method round-trips through credentialMode; an unknown one reads as password.
+var ssoSpec = spec
+ssoSpec.signIn = .saml
+check(ssoSpec.credentialMode == "saml" && ssoSpec.signIn == .saml, "sign-in method")
+var futureSpec = spec
+futureSpec.credentialMode = "certificate"
+check(futureSpec.signIn == .password, "unknown method reads as password")
+
 // Live daemon round trip, when FORTINO_SOCKET points at a development daemon.
 if let path = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] {
     let sem = DispatchSemaphore(value: 0)

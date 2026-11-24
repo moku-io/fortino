@@ -27,7 +27,8 @@ struct FortinoApp: App {
                         NSApp.activate(ignoringOtherApps: true)
                         // `org.fortino.debug.front` with a window title brings that window to
                         // the front; "menu" opens the menu-bar panel, as a click would; "close"
-                        // closes the app's windows.
+                        // closes the app's windows; "connect" connects the selected profile, as
+                        // its Connect button would.
                         DistributedNotificationCenter.default().addObserver(
                             forName: .init("org.fortino.debug.front"), object: nil, queue: .main
                         ) { note in
@@ -36,6 +37,8 @@ struct FortinoApp: App {
                                 NSApp.activate(ignoringOtherApps: true)
                                 if title == "menu" {
                                     debugStatusButton()?.performClick(nil)
+                                } else if title == "connect" {
+                                    model.connect()
                                 } else if title == "close" {
                                     for w in NSApp.windows where w.styleMask.contains(.titled) {
                                         w.close()
