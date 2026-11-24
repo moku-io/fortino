@@ -70,6 +70,9 @@ pub struct LoginCfg {
     pub require_ems_sn: Option<String>,
     /// Answer the login page with a host-check script.
     pub host_check: bool,
+    /// Answer `GET /remote/login` with this status instead of the page, as a gateway whose
+    /// login service is down does (observed: 503 while `/remote/info` still answers 200).
+    pub login_page_status: Option<u16>,
 }
 
 impl Default for LoginCfg {
@@ -79,6 +82,7 @@ impl Default for LoginCfg {
             tokeninfo: "remote_token_auth".into(),
             require_ems_sn: None,
             host_check: false,
+            login_page_status: None,
         }
     }
 }
@@ -240,6 +244,7 @@ pub fn router(sc: &Scenario) -> Router {
     let st = Arc::new(Mutex::new(State::default()));
     let sc = Arc::new(sc.clone());
 
+    let login_page_status = sc.login.login_page_status;
     let login_page = if sc.login.host_check {
         "<html><script>parent.CheckHostXML(\"<hostcheck/>\")</script></html>"
     } else {
@@ -256,7 +261,11 @@ pub fn router(sc: &Scenario) -> Router {
             Response::ok("application/xml", info.clone()).into()
         })
         .route("GET", "/remote/login", move |_| {
-            Response::ok("text/html", login_page).into()
+            match login_page_status {
+                Some(status) => Response::status(status),
+                None => Response::ok("text/html", login_page),
+            }
+            .into()
         })
         .route("POST", "/remote/logincheck", move |req| {
             logincheck(&s1, &c1, req).into()

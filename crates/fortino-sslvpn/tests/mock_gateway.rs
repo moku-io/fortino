@@ -275,6 +275,23 @@ async fn untrusted_certificate_fails_before_credentials() {
 }
 
 #[tokio::test]
+async fn failed_login_page_still_asks_for_credentials() {
+    let mut sc = scenario();
+    sc.login.login_page_status = Some(503);
+    let mut r = start(sc).await;
+    loop {
+        match next(&mut r.h).await {
+            WorkerEvent::Stage(_) => {}
+            WorkerEvent::Challenge { kind, .. } => {
+                assert_eq!(kind, ChallengeKind::Password);
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn ems_gate_reports_registration_needed() {
     let mut sc = scenario();
     sc.login.require_ems_sn = Some("FCTEMS0000000001".into());
