@@ -7,7 +7,7 @@ use std::net::Ipv4Addr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fortino_config::{Endpoint, IpPolicy};
+use fortino_config::{CredentialMode, Endpoint, IpPolicy};
 use fortino_core::ErrorCode;
 use fortino_core::proto::ChallengeKind;
 use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerHandle};
@@ -129,6 +129,7 @@ async fn start_fc(
             ems: Some("ems.test:8013".parse().unwrap()),
         },
         username: Some("alice".into()),
+        credential_mode: CredentialMode::Password,
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
@@ -446,6 +447,7 @@ async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
             ems: None,
         },
         username: Some("alice".into()),
+        credential_mode: CredentialMode::Password,
         trust_id: "test".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,

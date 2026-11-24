@@ -5,12 +5,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fortino_config::{EmsServer, IpPolicy, ProfileSpec, ProfileStore};
+use fortino_config::{CredentialMode, EmsServer, IpPolicy, ProfileSpec, ProfileStore};
 use fortino_core::client::Client;
 use fortino_core::proto::{
     ChallengeKind, ConnectParams, Event, ProfileImportParams, RestartWhen, State, Status, method,
 };
-use fortino_core::worker::{FakeFailure, FakeWorker, FakeWorkerConfig};
+use fortino_core::worker::{
+    FakeFailure, FakeWorker, FakeWorkerConfig, Termination, WorkerCommand, WorkerConfig,
+    WorkerEvent, WorkerFactory, WorkerHandle, WorkerStage,
+};
 use fortino_core::{ErrorCode, ProtoError};
 use fortino_platform::fake::{FakeNet, FakeState};
 use fortino_platform::journal::Journaled;
@@ -52,6 +55,21 @@ async fn start_with(
     net_state: FakeState,
     dir: Option<tempfile::TempDir>,
 ) -> Harness {
+    start_workers(
+        Box::new(FakeWorker { config: worker }),
+        timeouts,
+        net_state,
+        dir,
+    )
+    .await
+}
+
+async fn start_workers(
+    workers: Box<dyn WorkerFactory>,
+    timeouts: Timeouts,
+    net_state: FakeState,
+    dir: Option<tempfile::TempDir>,
+) -> Harness {
     let dir = dir.unwrap_or_else(|| tempfile::tempdir().unwrap());
     let sock = dir.path().join("fortinod.sock");
     let net = Arc::new(Mutex::new(net_state));
@@ -60,7 +78,7 @@ async fn start_with(
     let store = ProfileStore::open(&dir.path().join("profiles.db")).unwrap();
     let session = Session::new(
         store,
-        Box::new(FakeWorker { config: worker }),
+        workers,
         Box::new(JournaledController::new(journal)),
         timeouts,
     );
@@ -81,6 +99,7 @@ fn quick() -> Timeouts {
     Timeouts {
         transport: Duration::from_secs(5),
         challenge: Duration::from_secs(5),
+        saml: Duration::from_secs(7),
         shutdown: Duration::from_secs(2),
     }
 }
@@ -192,6 +211,98 @@ async fn username_challenge_when_no_hint() {
     answer(&c, &mut rx, ChallengeKind::Username, "alice").await;
     answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
     wait_for(&mut rx, |s| s.state == State::Connected).await;
+}
+
+#[tokio::test]
+async fn single_sign_on_names_the_sign_in_page_and_waits_longer() {
+    let h = start(
+        fake(|f| {
+            f.saml_port = 18040;
+            f.saml_id = Some("good-1".into());
+        }),
+        quick(),
+    )
+    .await;
+    let mut c = h.client().await;
+    let mut spec = ProfileSpec::new("SSO", "vpn.example.org".parse().unwrap());
+    spec.endpoint.port = 10443;
+    spec.endpoint.realm = Some("staff".into());
+    // Ignored: the account is named at the identity provider.
+    spec.username_hint = Some("alice".into());
+    spec.credential_mode = CredentialMode::Saml;
+    let p = c.profile_create(spec).await.unwrap();
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    let r = c.connect_profile(&connect_params(&p, "k")).await.unwrap();
+    let st = wait_for(&mut rx, |s| s.challenge.is_some()).await;
+    let ch = st.challenge.unwrap();
+    assert_eq!(ch.kind, ChallengeKind::Saml);
+    let login = ch.saml.clone().unwrap();
+    assert_eq!(
+        login.url,
+        "https://vpn.example.org:10443/remote/saml/start?redirect=1&realm=staff"
+    );
+    assert_eq!(login.callback_port, 18040);
+    // The single sign-on deadline (7 s here), not the 5 s one for typed answers.
+    assert!(ch.expires_in_secs > 5, "{}", ch.expires_in_secs);
+
+    // A callback query may be longer than a password, but it is bounded.
+    let e = c
+        .respond(&r.attempt_id, &ch.id, format!("id={}", "a".repeat(3000)))
+        .await
+        .unwrap_err();
+    assert_eq!(e.code, ErrorCode::InvalidRequest);
+    let query = format!("id=good-1{}", "&x=1".repeat(100));
+    assert!(query.len() > 256);
+    c.respond(&r.attempt_id, &ch.id, query).await.unwrap();
+    wait_for(&mut rx, |s| s.state == State::Connected).await;
+}
+
+/// A worker that asks for a single sign-on whatever the profile says.
+#[derive(Debug)]
+struct SamlOnly;
+
+impl WorkerFactory for SamlOnly {
+    fn spawn(&self, _cfg: WorkerConfig) -> WorkerHandle {
+        let (ev, events) = tokio::sync::mpsc::channel(4);
+        let (commands, mut cmd) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(async move {
+            let _ = ev.send(WorkerEvent::Stage(WorkerStage::Transport)).await;
+            let _ = ev
+                .send(WorkerEvent::Challenge {
+                    id: "c1".into(),
+                    kind: ChallengeKind::Saml,
+                    prompt: "Single sign-on".into(),
+                    callback_port: Some(8020),
+                })
+                .await;
+            while let Some(c) = cmd.recv().await {
+                if matches!(c, WorkerCommand::Stop) {
+                    break;
+                }
+            }
+            let _ = ev
+                .send(WorkerEvent::Terminated(Termination {
+                    code: None,
+                    message: "stopped".into(),
+                }))
+                .await;
+        });
+        WorkerHandle { events, commands }
+    }
+}
+
+#[tokio::test]
+async fn single_sign_on_for_a_password_profile_stops_the_attempt() {
+    let h = start_workers(Box::new(SamlOnly), quick(), FakeState::typical_host(), None).await;
+    let mut c = h.client().await;
+    let p = h.profile(&c, "Password", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    c.connect_profile(&connect_params(&p, "k")).await.unwrap();
+    let st = wait_idle(&mut rx).await;
+    assert!(st.challenge.is_none());
+    let last = st.last_result.unwrap();
+    assert_eq!(last.code, Some(ErrorCode::BackendFailure), "{last:?}");
+    assert!(last.message.contains("unexpected event"), "{last:?}");
 }
 
 #[tokio::test]

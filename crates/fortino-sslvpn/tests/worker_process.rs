@@ -6,12 +6,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fortino_config::{ProfileSpec, ProfileStore};
+use fortino_config::{CredentialMode, ProfileSpec, ProfileStore};
 use fortino_core::ErrorCode;
 use fortino_core::proto::{ChallengeKind, ConnectParams, State, Status};
-use fortino_mock::fortigate::{self, Scenario, User};
+use fortino_mock::fortigate::{self, SamlCfg, Scenario, User};
 use fortino_platform::fake::{FakeNet, FakeState};
 use fortino_platform::journal::Journaled;
+use fortino_proto_sslvpn::identity::{self, ClientIdentity};
+use fortino_sslvpn::Trust;
+use fortino_sslvpn::transport::Gateway;
 use fortinod::auth::Peer;
 use fortinod::config::Timeouts;
 use fortinod::netctl::JournaledController;
@@ -25,13 +28,20 @@ const PEER: Peer = Peer {
 
 struct H {
     _dir: tempfile::TempDir,
-    _mock: fortino_mock::MockHandle,
+    mock: fortino_mock::MockHandle,
     session: Arc<Session>,
     net: Arc<Mutex<FakeState>>,
 }
 
+/// Single sign-on callback port the mock names in `/remote/info`.
+const SSO_PORT: u16 = 18030;
+
 async fn harness(pin_ok: bool) -> H {
-    let sc = Scenario {
+    harness_as(pin_ok, CredentialMode::Password).await
+}
+
+async fn harness_as(pin_ok: bool, credential_mode: CredentialMode) -> H {
+    let mut sc = Scenario {
         users: vec![User {
             username: "alice".into(),
             password: "hunter2".into(),
@@ -39,6 +49,10 @@ async fn harness(pin_ok: bool) -> H {
         }],
         ..Default::default()
     };
+    if credential_mode == CredentialMode::Saml {
+        sc.info.sso_port = Some(SSO_PORT);
+        sc.saml = Some(SamlCfg::default());
+    }
     let mock = fortigate::start(&sc).await.unwrap();
     let dir = tempfile::tempdir().unwrap();
     let pin = if pin_ok {
@@ -67,6 +81,7 @@ async fn harness(pin_ok: bool) -> H {
         Timeouts {
             transport: Duration::from_secs(10),
             challenge: Duration::from_secs(10),
+            saml: Duration::from_secs(10),
             shutdown: Duration::from_secs(8),
         },
     );
@@ -74,6 +89,7 @@ async fn harness(pin_ok: bool) -> H {
     spec.endpoint.port = mock.addr.port();
     spec.trust_id = "lab".into();
     spec.username_hint = Some("alice".into());
+    spec.credential_mode = credential_mode;
     let p = session.with_store(|s| s.create(PEER.uid, spec)).unwrap();
     session
         .connect(
@@ -88,10 +104,32 @@ async fn harness(pin_ok: bool) -> H {
         .unwrap();
     H {
         _dir: dir,
-        _mock: mock,
+        mock,
         session,
         net,
     }
+}
+
+/// Plays the browser's last step: the mock's sign-in result, a redirect to the local callback.
+/// Returns that callback's query string.
+async fn browser_callback(mock: &fortino_mock::MockHandle) -> String {
+    let trust = Trust::Roots(vec![mock.cert_der.clone()]);
+    let mut gw = Gateway::new("sslvpn.test".parse().unwrap(), mock.addr.port(), &trust).unwrap();
+    gw.connect_override = Some(mock.addr);
+    let req = identity::build(
+        &ClientIdentity::forticlient("browser"),
+        "GET",
+        "/remote/saml/login?redirect=1",
+        &gw.host_header(),
+        &[],
+        None,
+    );
+    let r = gw.exchange(&req).await.unwrap();
+    let location = r.header("location").unwrap();
+    location
+        .strip_prefix(&format!("http://127.0.0.1:{SSO_PORT}/?"))
+        .unwrap()
+        .to_owned()
 }
 
 impl H {
@@ -138,6 +176,32 @@ async fn worker_process_reaches_up_and_daemon_validates_it() {
     assert_eq!(r.code, Some(ErrorCode::NetworkConfigFailure), "{r:?}");
     assert!(r.message.contains("gateway address"), "{r:?}");
     assert_eq!(h.net.lock().unwrap().net_only(), before);
+}
+
+/// The same through a single sign-on: the daemon names the sign-in page from the profile and
+/// the worker's callback port, and the worker exchanges the browser's session id.
+#[tokio::test]
+async fn worker_process_signs_in_with_single_sign_on() {
+    let h = harness_as(true, CredentialMode::Saml).await;
+    let s = h.wait(|s| s.challenge.is_some()).await;
+    let ch = s.challenge.unwrap();
+    assert_eq!(ch.kind, ChallengeKind::Saml);
+    let login = ch.saml.unwrap();
+    assert_eq!(login.callback_port, SSO_PORT);
+    assert_eq!(
+        login.url,
+        format!(
+            "https://127.0.0.1:{}/remote/saml/start?redirect=1",
+            h.mock.addr.port()
+        )
+    );
+    assert!(ch.expires_in_secs > 0);
+    let query = browser_callback(&h.mock).await;
+    h.answer(ChallengeKind::Saml, &query).await;
+    let s = h.wait(|s| s.state == State::Idle).await;
+    let r = s.last_result.unwrap();
+    assert_eq!(r.code, Some(ErrorCode::NetworkConfigFailure), "{r:?}");
+    assert!(r.message.contains("gateway address"), "{r:?}");
 }
 
 #[tokio::test]

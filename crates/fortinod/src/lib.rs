@@ -82,12 +82,24 @@ pub fn build_session(cfg: &DaemonConfig) -> Result<Arc<Session>, String> {
             if !w.allow_unowned {
                 crate::procworker::check_executable(&w.path)?;
             }
+            if w.memory_device && !cfg.fake_network {
+                return Err("[worker] memory_device requires fake_network = true".into());
+            }
+            if w.memory_device {
+                tracing::warn!(
+                    "workers use an in-memory tunnel device; no traffic reaches the host"
+                );
+            }
             Box::new(crate::procworker::ProcessWorker {
                 path: w.path.clone(),
                 args: Vec::new(),
                 ca_dir: w.ca_dir.clone(),
                 gateway_pins: None,
-                env: Vec::new(),
+                env: if w.memory_device {
+                    vec![("FORTINO_WORKER_MEMORY_DEVICE".into(), "1".into())]
+                } else {
+                    Vec::new()
+                },
             })
         }
         (None, None) => {

@@ -227,6 +227,9 @@ pub enum ChallengeKind {
     Password,
     /// One-time code (secret).
     Otp,
+    /// Single sign-on in the system browser; see [`SamlLogin`]. The answer is the query string
+    /// of the browser's callback (secret).
+    Saml,
 }
 
 impl ChallengeKind {
@@ -248,6 +251,23 @@ pub struct Challenge {
     pub prompt: String,
     /// Seconds until expiry, at the time of the snapshot.
     pub expires_in_secs: u64,
+    /// Where to sign in, for a [`ChallengeKind::Saml`] challenge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saml: Option<SamlLogin>,
+}
+
+/// A single sign-on in the system browser.
+///
+/// The client listens on `127.0.0.1:callback_port`, then opens `url`. After the sign-in the
+/// gateway redirects the browser to `http://127.0.0.1:<callback_port>/?id=…`; the client answers
+/// the challenge with that request's query string.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SamlLogin {
+    /// The gateway's sign-in page.
+    pub url: String,
+    /// Local port the browser is redirected to.
+    pub callback_port: u16,
 }
 
 /// Terminal result of the last attempt.

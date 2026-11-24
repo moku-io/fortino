@@ -432,6 +432,7 @@ dependencies = [
  "fortino-config",
  "fortino-core",
  "fortino-platform",
+ "fortino-proto-sslvpn",
  "fortino-secret",
  "fortinod",
  "nix 0.30.1",
@@ -466,6 +467,7 @@ version = "0.5.3"
 dependencies = [
  "fortino-config",
  "fortino-platform",
+ "fortino-proto-sslvpn",
  "fortino-secret",
  "serde",
  "serde_json",
@@ -623,6 +625,7 @@ dependencies = [
  "fortino-ems",
  "fortino-platform",
  "fortino-proto-ems",
+ "fortino-proto-sslvpn",
  "fortino-secret",
  "fortino-sslvpn",
  "fortino-tls",

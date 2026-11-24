@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 fortino-config.workspace = true
 fortino-core.workspace = true
+fortino-proto-sslvpn.workspace = true
 fortino-secret.workspace = true
 clap = { workspace = true, features = ["env"] }
 rpassword.workspace = true

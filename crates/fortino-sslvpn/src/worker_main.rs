@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::device::DeviceFactory;
 use crate::{NativeWorker, Trust};
-use fortino_config::{Endpoint, IpPolicy};
+use fortino_config::{CredentialMode, Endpoint, IpPolicy};
 use fortino_core::framing::{read_frame, write_frame};
 use fortino_core::worker::EmsIdentity;
 use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
@@ -115,6 +115,7 @@ pub async fn run() -> io::Result<()> {
         ems_serial,
         ems_tenant,
         fct_uid,
+        saml,
     } = &start
     else {
         return Err(io::Error::other("expected start"));
@@ -142,6 +143,11 @@ pub async fn run() -> io::Result<()> {
                 attempt_id: attempt.clone(),
                 endpoint,
                 username: username.clone(),
+                credential_mode: if *saml {
+                    CredentialMode::Saml
+                } else {
+                    CredentialMode::Password
+                },
                 trust_id: String::new(),
                 ip_policy: IpPolicy::SplitIpv4,
                 ems: ems_identity(ems_serial.as_deref(), ems_tenant.as_deref()),
@@ -176,9 +182,10 @@ pub async fn run() -> io::Result<()> {
                 let a = attempt.clone();
                 let (msg, last) = match ev {
                     WorkerEvent::Stage(stage) => (WorkerMsg::Stage { v, attempt: a, seq, stage }, false),
-                    WorkerEvent::Challenge { id, kind, prompt } => {
-                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt }, false)
-                    }
+                    WorkerEvent::Challenge { id, kind, prompt, callback_port } => (
+                        WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt, callback_port },
+                        false,
+                    ),
                     WorkerEvent::Up(tc) => (
                         WorkerMsg::Up {
                             v,

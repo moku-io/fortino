@@ -2,12 +2,15 @@
 
 use std::future::Future;
 
+use fortino_config::CredentialMode;
 use fortino_core::proto::ChallengeKind;
 use fortino_core::worker::{Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerStage};
 use fortino_proto_sslvpn::config::{self, TunnelSettings};
+use fortino_proto_sslvpn::http::Response;
 use fortino_proto_sslvpn::identity::{self, Body, ClientIdentity};
 use fortino_proto_sslvpn::info::{self, ServerInfo};
 use fortino_proto_sslvpn::login::{self, LoginOutcome, TokenKind};
+use fortino_proto_sslvpn::saml;
 use fortino_secret::Secret;
 use tokio::sync::mpsc;
 use zeroize::Zeroizing;
@@ -48,6 +51,16 @@ impl Ctx {
     /// Asks the user through the daemon and waits for the answer. The daemon owns the
     /// deadline; it stops the attempt when the challenge expires.
     pub async fn ask(&mut self, kind: ChallengeKind, prompt: &str) -> Result<Secret, Failure> {
+        self.ask_at(kind, prompt, None).await
+    }
+
+    /// [`Ctx::ask`], naming the local port a single sign-on ends at.
+    pub async fn ask_at(
+        &mut self,
+        kind: ChallengeKind,
+        prompt: &str,
+        callback_port: Option<u16>,
+    ) -> Result<Secret, Failure> {
         self.next_challenge += 1;
         let id = format!("c{}", self.next_challenge);
         self.emit(WorkerEvent::Challenge {
@@ -58,6 +71,7 @@ impl Ctx {
                 .filter(|c| !c.is_control())
                 .take(128)
                 .collect(),
+            callback_port,
         })
         .await;
         loop {
@@ -169,111 +183,26 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     ctx.emit(WorkerEvent::Stage(WorkerStage::Authenticating))
         .await;
     let realm = ep.realm.clone().unwrap_or_default();
-    let login_path = if realm.is_empty() {
-        "/remote/login".to_owned()
-    } else {
-        format!("/remote/login?realm={realm}")
-    };
-    let page = ctx
-        .guard(gw.exchange(&identity::build(
-            &identity,
-            "GET",
-            &login_path,
-            &host,
-            &[],
-            None,
-        )))
-        .await?;
-    if page.text().contains("CheckHostXML") {
-        return Err(Failure::Unsupported("gateway requires a host check".into()));
-    }
-
-    let username = match &cfg.username {
-        Some(u) => u.clone(),
-        None => ctx
-            .ask(ChallengeKind::Username, "Username")
-            .await?
-            .expose()
-            .to_owned(),
-    };
-    let password = ctx.ask(ChallengeKind::Password, "Password").await?;
-    let form = login::password_form(&username, password.expose(), &realm);
-    drop(password);
-    let req = identity::build(
-        &identity,
-        "POST",
-        "/remote/logincheck",
-        &host,
-        &[],
-        Some(Body::form(form)),
-    );
-    let mut resp = ctx.guard(gw.exchange(&req)).await?;
-    drop(req);
-
-    let mut cookie: Option<Zeroizing<String>> = None;
-    for _step in 0..4 {
-        match login::classify(&resp) {
-            LoginOutcome::Authenticated { cookie: c } => {
-                cookie = Some(c);
-                break;
-            }
-            LoginOutcome::SecondFactor(ch) => {
-                let prompt = ch.message.clone().unwrap_or_else(|| "Token code".into());
-                let code = ctx.ask(ChallengeKind::Otp, &prompt).await?;
-                // An empty answer requests a FortiToken Mobile push where offered.
-                let push = code.expose().is_empty() && ch.kind == TokenKind::Push;
-                let form = login::token_form(
-                    &username,
-                    &realm,
-                    &ch.state,
-                    (!push).then_some(code.expose()),
-                );
-                drop(code);
-                let req = identity::build(
-                    &identity,
-                    "POST",
-                    "/remote/logincheck",
-                    &host,
-                    &[],
-                    Some(Body::form(form)),
-                );
-                resp = ctx.guard(gw.exchange(&req)).await?;
-            }
-            LoginOutcome::CookieSwap { tmp_cookie, path } => {
-                let req = identity::build(
-                    &identity,
-                    "GET",
-                    &path,
-                    &host,
-                    &[("SVPNTMPCOOKIE", tmp_cookie.as_str())],
-                    None,
-                );
-                resp = ctx.guard(gw.exchange(&req)).await?;
-            }
-            LoginOutcome::HostCheckRequired => {
-                return Err(Failure::Unsupported("gateway requires a host check".into()));
-            }
-            LoginOutcome::LimitReached => {
-                return Err(Failure::AuthDenied("gateway user limit reached".into()));
-            }
-            LoginOutcome::Denied { message } => {
-                return Err(Failure::AuthDenied(
-                    message.unwrap_or_else(|| "credentials rejected".into()),
-                ));
-            }
-            LoginOutcome::Unexpected { status } => {
-                return Err(Failure::Backend(format!(
-                    "unexpected login answer (HTTP {status})"
-                )));
-            }
+    let (resp, username) = match cfg.credential_mode {
+        CredentialMode::Saml => {
+            let resp = saml_login(ctx, &mut gw, &identity, &host, &info).await?;
+            (resp, None)
         }
-    }
-    let Some(cookie) = cookie else {
-        return Err(Failure::Backend("login did not complete".into()));
+        CredentialMode::Password => {
+            let (resp, username) =
+                password_login(ctx, &mut gw, &identity, &host, cfg, &realm).await?;
+            (resp, Some(username))
+        }
     };
+    let login = LoginCtx {
+        identity: &identity,
+        host: &host,
+        username: username.as_deref(),
+        realm: &realm,
+    };
+    let mut cookie = complete_login(ctx, &mut gw, &login, resp).await?;
 
     ctx.emit(WorkerEvent::Stage(WorkerStage::Negotiating)).await;
-    let mut cookie = cookie;
     // VPN allocation: the login's own redirect target, then the portal page (openfortivpn's
     // `auth_request_vpn_allocation`; FortiClient's login form names `/remote/index` as redir).
     // Both are "non-essential" for their status but may refresh the cookie.
@@ -398,8 +327,185 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     r
 }
 
+/// Password login: the login page, then the username and password form. Returns the gateway's
+/// first answer and the username, which a second factor needs again.
+async fn password_login(
+    ctx: &mut Ctx,
+    gw: &mut Gateway,
+    identity: &ClientIdentity,
+    host: &str,
+    cfg: &WorkerConfig,
+    realm: &str,
+) -> Result<(Response, String), Failure> {
+    let login_path = if realm.is_empty() {
+        "/remote/login".to_owned()
+    } else {
+        format!("/remote/login?realm={realm}")
+    };
+    let page = ctx
+        .guard(gw.exchange(&identity::build(
+            identity,
+            "GET",
+            &login_path,
+            host,
+            &[],
+            None,
+        )))
+        .await?;
+    if page.text().contains("CheckHostXML") {
+        return Err(Failure::Unsupported("gateway requires a host check".into()));
+    }
+
+    let username = match &cfg.username {
+        Some(u) => u.clone(),
+        None => ctx
+            .ask(ChallengeKind::Username, "Username")
+            .await?
+            .expose()
+            .to_owned(),
+    };
+    let password = ctx.ask(ChallengeKind::Password, "Password").await?;
+    let form = login::password_form(&username, password.expose(), realm);
+    drop(password);
+    let req = identity::build(
+        identity,
+        "POST",
+        "/remote/logincheck",
+        host,
+        &[],
+        Some(Body::form(form)),
+    );
+    let resp = ctx.guard(gw.exchange(&req)).await?;
+    drop(req);
+    Ok((resp, username))
+}
+
+/// Single sign-on: the user signs in in the system browser, which the gateway finally
+/// redirects to `127.0.0.1:<port>`. The client listening there answers the challenge with that
+/// request's query string, and its session id is exchanged here for the session.
+async fn saml_login(
+    ctx: &mut Ctx,
+    gw: &mut Gateway,
+    identity: &ClientIdentity,
+    host: &str,
+    info: &ServerInfo,
+) -> Result<Response, Failure> {
+    // UNVERIFIED: a gateway that answers no `sso_port` redirects to the default port, and one
+    // that names port 0 does not redirect to this computer at all.
+    let port = match info.sso_port {
+        Some(0) => {
+            return Err(Failure::Unsupported(
+                "gateway turned off the single sign-on redirect to this computer".into(),
+            ));
+        }
+        Some(p) => p,
+        None => saml::DEFAULT_CALLBACK_PORT,
+    };
+    tracing::info!(
+        callback_port = port,
+        "single sign-on: waiting for the browser"
+    );
+    let answer = ctx
+        .ask_at(ChallengeKind::Saml, "Single sign-on", Some(port))
+        .await?;
+    let Some(id) = saml::session_id(answer.expose()) else {
+        return Err(Failure::AuthDenied(
+            "single sign-on returned no session".into(),
+        ));
+    };
+    let path = saml::auth_id_path(id);
+    let req = identity::build(identity, "GET", &path, host, &[], None);
+    drop(path);
+    drop(answer);
+    ctx.guard(gw.exchange(&req)).await
+}
+
+/// What a login needs to answer the gateway's follow-up requests.
+struct LoginCtx<'a> {
+    identity: &'a ClientIdentity,
+    host: &'a str,
+    /// `None` after a single sign-on, which named the account at the identity provider.
+    username: Option<&'a str>,
+    realm: &'a str,
+}
+
+/// Follows the gateway's answers until it issues `SVPNCOOKIE`: a second factor, the
+/// temporary-cookie swap, or a refusal.
+async fn complete_login(
+    ctx: &mut Ctx,
+    gw: &mut Gateway,
+    l: &LoginCtx<'_>,
+    mut resp: Response,
+) -> Result<Zeroizing<String>, Failure> {
+    let refused = if l.username.is_some() {
+        "credentials rejected"
+    } else {
+        "single sign-on session not accepted"
+    };
+    for _step in 0..4 {
+        match login::classify(&resp) {
+            LoginOutcome::Authenticated { cookie } => return Ok(cookie),
+            LoginOutcome::SecondFactor(ch) => {
+                let Some(username) = l.username else {
+                    return Err(Failure::Unsupported(
+                        "gateway asks for a second factor after single sign-on".into(),
+                    ));
+                };
+                let prompt = ch.message.clone().unwrap_or_else(|| "Token code".into());
+                let code = ctx.ask(ChallengeKind::Otp, &prompt).await?;
+                // An empty answer requests a FortiToken Mobile push where offered.
+                let push = code.expose().is_empty() && ch.kind == TokenKind::Push;
+                let form = login::token_form(
+                    username,
+                    l.realm,
+                    &ch.state,
+                    (!push).then_some(code.expose()),
+                );
+                drop(code);
+                let req = identity::build(
+                    l.identity,
+                    "POST",
+                    "/remote/logincheck",
+                    l.host,
+                    &[],
+                    Some(Body::form(form)),
+                );
+                resp = ctx.guard(gw.exchange(&req)).await?;
+            }
+            LoginOutcome::CookieSwap { tmp_cookie, path } => {
+                let req = identity::build(
+                    l.identity,
+                    "GET",
+                    &path,
+                    l.host,
+                    &[("SVPNTMPCOOKIE", tmp_cookie.as_str())],
+                    None,
+                );
+                resp = ctx.guard(gw.exchange(&req)).await?;
+            }
+            LoginOutcome::HostCheckRequired => {
+                return Err(Failure::Unsupported("gateway requires a host check".into()));
+            }
+            LoginOutcome::LimitReached => {
+                return Err(Failure::AuthDenied("gateway user limit reached".into()));
+            }
+            LoginOutcome::Denied { message } => {
+                return Err(Failure::AuthDenied(
+                    message.unwrap_or_else(|| refused.into()),
+                ));
+            }
+            LoginOutcome::Unexpected { status } => {
+                return Err(Failure::Backend(format!(
+                    "unexpected login answer (HTTP {status})"
+                )));
+            }
+        }
+    }
+    Err(Failure::Backend("login did not complete".into()))
+}
+
 /// Takes a new non-empty `SVPNCOOKIE` from a response.
-fn refresh_cookie(r: &fortino_proto_sslvpn::http::Response, cookie: &mut Zeroizing<String>) {
+fn refresh_cookie(r: &Response, cookie: &mut Zeroizing<String>) {
     if let Some(c) = r.cookie("SVPNCOOKIE").filter(|c| !c.is_empty()) {
         *cookie = Zeroizing::new(c.to_owned());
     }

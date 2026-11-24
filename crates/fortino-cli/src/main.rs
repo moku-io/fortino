@@ -5,12 +5,13 @@
 
 mod prompt;
 mod render;
+mod sso;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
-use fortino_config::{DnsMode, EmsServer, Host, IpPolicy, Profile, ProfileSpec};
+use fortino_config::{CredentialMode, DnsMode, EmsServer, Host, IpPolicy, Profile, ProfileSpec};
 use fortino_core::client::{Client, DEFAULT_SOCKET};
 use fortino_core::proto::{
     ChallengeKind, ConnectParams, Empty, Event, ProfileImportParams, State, Status,
@@ -111,6 +112,27 @@ struct AddArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
+    /// How to sign in (default: password).
+    #[arg(long, value_enum)]
+    auth: Option<AuthArg>,
+}
+
+/// `--auth`: how the user signs in.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum AuthArg {
+    /// Username and password, plus a one-time code if the gateway asks for one.
+    Password,
+    /// Single sign-on (SAML) in the browser.
+    Saml,
+}
+
+impl From<AuthArg> for CredentialMode {
+    fn from(a: AuthArg) -> Self {
+        match a {
+            AuthArg::Password => CredentialMode::Password,
+            AuthArg::Saml => CredentialMode::Saml,
+        }
+    }
 }
 
 /// `--dns`: which resolvers answer while connected.
@@ -171,6 +193,9 @@ struct EditArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
+    /// How to sign in.
+    #[arg(long, value_enum)]
+    auth: Option<AuthArg>,
 }
 
 #[derive(Debug, Args)]
@@ -210,6 +235,9 @@ struct ConnectArgs {
     /// Read the one-time code from this inherited file descriptor (one line).
     #[arg(long, value_name = "N")]
     otp_fd: Option<u32>,
+    /// Single sign-on: print the sign-in address instead of opening the browser.
+    #[arg(long)]
+    no_browser: bool,
 }
 
 /// A command failure with its exit status.
@@ -379,13 +407,17 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
             if let Some(d) = a.dns {
                 spec.dns_mode = d.into();
             }
+            if let Some(m) = a.auth {
+                spec.credential_mode = m.into();
+            }
             let p = c.profile_create(spec).await?;
             if json {
                 print_json(&p);
             } else {
                 println!("Created profile {} ({})", p.spec.name, p.id);
-                println!("Scope: {}", p.spec.ip_policy.describe());
-                println!("DNS:   {}", p.spec.dns_mode.describe());
+                println!("Sign-in: {}", p.spec.credential_mode.describe());
+                println!("Scope:   {}", p.spec.ip_policy.describe());
+                println!("DNS:     {}", p.spec.dns_mode.describe());
             }
         }
         ProfileCmd::List => {
@@ -477,6 +509,9 @@ fn apply_edit(p: &Profile, e: EditArgs) -> Result<ProfileSpec, Failure> {
     }
     if let Some(d) = e.dns {
         s.dns_mode = d.into();
+    }
+    if let Some(m) = e.auth {
+        s.credential_mode = m.into();
     }
     Ok(s)
 }
@@ -700,24 +735,29 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
     let attempt = r.attempt_id.clone();
     let mut answered: Option<String> = None;
     let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
+    // A status already received while waiting for a single sign-on, handled first.
+    let mut next: Option<Status> = None;
 
     loop {
-        let st = tokio::select! {
-            ev = rx.recv() => match ev {
-                Some(Event::Status { status }) => *status,
-                Some(Event::ResyncRequired) => c.status().await?,
-                None => return Err(Failure(ProtoError::new(
-                    ErrorCode::ServiceUnavailable,
-                    "lost connection to the VPN service",
-                ))),
+        let st = match next.take() {
+            Some(st) => st,
+            None => tokio::select! {
+                ev = rx.recv() => match ev {
+                    Some(Event::Status { status }) => *status,
+                    Some(Event::ResyncRequired) => c.status().await?,
+                    None => return Err(Failure(ProtoError::new(
+                        ErrorCode::ServiceUnavailable,
+                        "lost connection to the VPN service",
+                    ))),
+                },
+                _ = &mut ctrl_c => {
+                    eprintln!("\nCancelling…");
+                    c.disconnect(&attempt).await?;
+                    let st = wait_finished(c, &mut rx, &attempt).await?;
+                    result_of(&st, &attempt)?;
+                    return Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")));
+                }
             },
-            _ = &mut ctrl_c => {
-                eprintln!("\nCancelling…");
-                c.disconnect(&attempt).await?;
-                let st = wait_finished(c, &mut rx, &attempt).await?;
-                result_of(&st, &attempt)?;
-                return Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")));
-            }
         };
         if st.attempt_id.as_deref() != Some(attempt.as_str()) {
             continue;
@@ -753,9 +793,34 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             ChallengeKind::Username => a.username.clone().map(Ok),
             ChallengeKind::Password => secrets.password(),
             ChallengeKind::Otp => secrets.otp(),
+            ChallengeKind::Saml => None,
         };
         let value = match value {
             Some(v) => v?,
+            None if ch.kind == ChallengeKind::Saml => {
+                match sso::sign_in(c, &mut rx, &ch, !a.no_browser, &mut ctrl_c).await? {
+                    sso::Outcome::Answer(mut q) => std::mem::take(&mut *q),
+                    sso::Outcome::Status(st) => {
+                        next = Some(*st);
+                        continue;
+                    }
+                    sso::Outcome::Cancelled => {
+                        eprintln!("\nCancelling…");
+                        c.disconnect(&attempt).await?;
+                        let st = wait_finished(c, &mut rx, &attempt).await?;
+                        result_of(&st, &attempt)?;
+                        return Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")));
+                    }
+                    sso::Outcome::NoInteraction(why) => {
+                        c.disconnect(&attempt).await?;
+                        let _ = wait_finished(c, &mut rx, &attempt).await;
+                        return Err(Failure(ProtoError::new(
+                            ErrorCode::InteractionRequired,
+                            why,
+                        )));
+                    }
+                }
+            }
             None => {
                 // Prompt on the terminal, still honoring Ctrl-C and daemon-side changes.
                 let kind = ch.kind;
@@ -797,6 +862,7 @@ fn kind_name(k: ChallengeKind) -> &'static str {
         ChallengeKind::Username => "username",
         ChallengeKind::Password => "password",
         ChallengeKind::Otp => "one-time code",
+        ChallengeKind::Saml => "single sign-on",
     }
 }
 

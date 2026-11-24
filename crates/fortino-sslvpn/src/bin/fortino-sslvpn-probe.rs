@@ -3,13 +3,18 @@
 //!
 //! ```text
 //! fortino-sslvpn-probe <credentials-file> [--device memory|utun] [--ca FILE] [--pin SHA256] [--hold SECS]
+//! fortino-sslvpn-probe <credentials-file> --saml [--no-browser] [--device memory|utun] …
 //! fortino-sslvpn-probe <credentials-file> --print-pin
 //! fortino-sslvpn-probe <credentials-file> --info [--pin SHA256]
 //! ```
 //!
 //! The credentials file (kept outside the repository) has `key: value`
-//! lines: `gateway` (host:port), `username`, `password`, optional `otp`, and optional
-//! `test endpoint to check if connection succeed`. Secrets are never printed.
+//! lines: `gateway` (host:port), `username`, `password`, optional `otp`, `realm`, `pin`, and
+//! optional `test endpoint to check if connection succeed`. Secrets are never printed.
+//!
+//! `--saml` (or `auth: saml` in the file) signs in through the system browser instead: no
+//! username or password is needed. The probe listens on `127.0.0.1:<sso_port>`, opens the
+//! gateway's sign-in page (or prints it with `--no-browser`) and waits for the redirect.
 //!
 //! `--device memory` (default) needs no privileges and changes nothing on the host: it proves
 //! TLS, login, tunnel settings and PPP up to IPCP. `--device utun` creates a real interface
@@ -21,10 +26,12 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use fortino_config::{Endpoint, IpPolicy};
+use fortino_config::{CredentialMode, Endpoint, IpPolicy};
 use fortino_core::proto::ChallengeKind;
+use fortino_core::saml_callback::CallbackListener;
 use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
 use fortino_proto_sslvpn::identity::ClientIdentity;
+use fortino_proto_sslvpn::saml;
 use fortino_secret::Secret;
 use fortino_sslvpn::device::{DeviceFactory, MemoryDevices};
 use fortino_sslvpn::{NativeWorker, Trust};
@@ -47,6 +54,45 @@ fn hostname() -> String {
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "mac".into())
+}
+
+/// How long the user has to finish a single sign-on in the browser.
+const SAML_WAIT: Duration = Duration::from_secs(300);
+
+/// Listens for the browser's redirect on `127.0.0.1:port`, opens `url` (unless told not to) and
+/// returns the callback's query string.
+async fn saml_sign_in(port: u16, url: &str, open: bool) -> Option<Secret> {
+    let listener = match CallbackListener::bind(port).await {
+        Ok(l) => l,
+        Err(e) => {
+            println!("          can't listen on 127.0.0.1:{port}: {e}");
+            return None;
+        }
+    };
+    println!("          sign in at {url}");
+    if open {
+        let opened = std::process::Command::new("/usr/bin/open")
+            .arg(url)
+            .status()
+            .is_ok_and(|s| s.success());
+        if !opened {
+            println!("          open that address in a browser on this computer");
+        }
+    }
+    match tokio::time::timeout(SAML_WAIT, listener.next_login()).await {
+        Ok(Ok(q)) => {
+            println!("          browser callback received");
+            Some(Secret::new(q.as_str()))
+        }
+        Ok(Err(e)) => {
+            println!("          callback listener failed: {e}");
+            None
+        }
+        Err(_) => {
+            println!("          no sign-in within {}s", SAML_WAIT.as_secs());
+            None
+        }
+    }
 }
 
 /// This device's UID (`FCTUID`), sent as `?uuid=` to a gateway that sets `/remote/info` `0x80`.
@@ -392,12 +438,15 @@ async fn run() -> Result<(), String> {
         Some((h, p)) => (h, p.parse::<u16>().map_err(|_| "credentials: bad port")?),
         None => (gateway.as_str(), 443),
     };
-    let username = c.get("username").ok_or("credentials: no username")?.clone();
-    let password = Secret::new(
-        c.get("password")
-            .ok_or("credentials: no password")?
-            .as_str(),
-    );
+    let saml_login =
+        args.iter().any(|a| a == "--saml") || c.get("auth").is_some_and(|a| a == "saml");
+    let open_browser = !args.iter().any(|a| a == "--no-browser");
+    let username = c.get("username").cloned();
+    let password = c.get("password").map(|p| Secret::new(p.as_str()));
+    if !saml_login {
+        username.as_ref().ok_or("credentials: no username")?;
+        password.as_ref().ok_or("credentials: no password")?;
+    }
     let otp = c.get("otp").map(|o| Secret::new(o.as_str()));
     let host_parsed: fortino_config::Host =
         host.parse().map_err(|e| format!("gateway host: {e}"))?;
@@ -444,6 +493,10 @@ async fn run() -> Result<(), String> {
                 i.wants_ems_sn(),
                 i.encmethod
             );
+            match i.sso_port {
+                Some(p) => println!("single sign-on redirect port (sso_port): {p}"),
+                None => println!("single sign-on redirect port: not named"),
+            }
         }
         return Ok(());
     }
@@ -465,15 +518,21 @@ async fn run() -> Result<(), String> {
         devices,
         connect_override: None,
     };
+    let realm = c.get("realm").cloned();
     let mut h = w.spawn(WorkerConfig {
         attempt_id: "probe".into(),
         endpoint: Endpoint {
             host: host_parsed,
             port,
-            realm: c.get("realm").cloned(),
+            realm: realm.clone(),
             ems: None,
         },
-        username: Some(username),
+        username: if saml_login { None } else { username },
+        credential_mode: if saml_login {
+            CredentialMode::Saml
+        } else {
+            CredentialMode::Password
+        },
         trust_id: "probe".into(),
         ip_policy: IpPolicy::SplitIpv4,
         ems: None,
@@ -505,10 +564,35 @@ async fn run() -> Result<(), String> {
         let t = started.elapsed().as_secs_f32();
         match ev {
             WorkerEvent::Stage(s) => println!("[{t:>5.1}s] stage {s:?}"),
-            WorkerEvent::Challenge { id, kind, prompt } => {
+            WorkerEvent::Challenge {
+                id,
+                kind,
+                prompt,
+                callback_port,
+            } => {
                 println!("[{t:>5.1}s] challenge {kind:?}: {prompt}");
                 let value = match kind {
-                    ChallengeKind::Password => Secret::new(password.expose()),
+                    ChallengeKind::Saml => {
+                        let cb = callback_port.unwrap_or(saml::DEFAULT_CALLBACK_PORT);
+                        let url = saml::start_url(host, port, realm.as_deref());
+                        match saml_sign_in(cb, &url, open_browser).await {
+                            Some(q) => q,
+                            None => {
+                                let _ = h.commands.send(WorkerCommand::Stop).await;
+                                continue;
+                            }
+                        }
+                    }
+                    ChallengeKind::Password => match &password {
+                        Some(p) => Secret::new(p.expose()),
+                        None => {
+                            println!(
+                                "          gateway asks for a password; none in the credentials file"
+                            );
+                            let _ = h.commands.send(WorkerCommand::Stop).await;
+                            continue;
+                        }
+                    },
                     ChallengeKind::Otp => match (&otp, &otp_file) {
                         (Some(o), _) => Secret::new(o.expose()),
                         (None, Some(path)) => {
