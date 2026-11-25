@@ -104,4 +104,7 @@ cp "$sparkle/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
 codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
     "$app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" >&2
 codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework" >&2
+# Seal the whole bundle ad hoc too, so an unsigned build verifies as an app (its resources and
+# nested code). package-macos.sh signs it again with the Developer ID.
+codesign --force --sign - "$app" >&2
 echo "$app"
