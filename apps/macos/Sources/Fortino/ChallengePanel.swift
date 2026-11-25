@@ -17,13 +17,23 @@ final class ChallengePanelController {
         }
         if ch.id == shownId { return }
         shownId = ch.id
-        show(ch, status: status)
+        // A profile that saves its password: try the keychain first and show the panel only if
+        // that didn't answer. An answered prompt disappears from the status by itself.
+        if ch.kind == .password, let model, let p = model.savingProfile(for: status) {
+            Task { @MainActor in
+                guard let note = await model.answerFromKeychain(profile: p, status: status, challenge: ch),
+                      self.shownId == ch.id, model.status?.challenge?.id == ch.id else { return }
+                self.show(ch, status: status, saved: note)
+            }
+            return
+        }
+        show(ch, status: status, saved: nil)
     }
 
-    private func show(_ ch: Challenge, status: Status) {
+    private func show(_ ch: Challenge, status: Status, saved: SavedPasswordNote?) {
         guard let model else { return }
         let view = ChallengeView(challenge: ch, profileName: status.profileName ?? "VPN",
-                                 gateway: status.gateway ?? "", model: model)
+                                 gateway: status.gateway ?? "", saved: saved, model: model)
         let host = NSHostingController(rootView: view)
         let p = panel ?? NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 180),
                                  styleMask: [.titled, .closable],
@@ -51,10 +61,15 @@ struct ChallengeView: View {
     let challenge: Challenge
     let profileName: String
     let gateway: String
+    /// For a password prompt of a profile that saves its password: why the keychain didn't
+    /// answer. Nil otherwise.
+    let saved: SavedPasswordNote?
     @ObservedObject var model: AppModel
     @State private var value = ""
     @State private var error: String?
     @State private var busy = false
+    /// Save (or replace) the saved password with the typed one once connected.
+    @State private var remember = true
     @FocusState private var focused: Bool
 
     private var title: String {
@@ -70,11 +85,13 @@ struct ChallengeView: View {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profileName).font(.headline)
-                    Text(verbatim: gateway).font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: account.map { "\($0) · \(gateway)" } ?? gateway)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             } icon: {
                 Image(systemName: "lock.shield").font(.title2).foregroundStyle(.tint)
             }
+            savedPasswordNotice
             Text(challenge.prompt).foregroundStyle(.secondary)
             Group {
                 if challenge.kind.isSecret {
@@ -90,6 +107,7 @@ struct ChallengeView: View {
             if let error {
                 Text(error).foregroundStyle(.red).font(.callout)
             }
+            savedPasswordOptions
             HStack {
                 Spacer()
                 Button("Cancel Connection", role: .cancel) { model.disconnect() }
@@ -105,11 +123,65 @@ struct ChallengeView: View {
         .onAppear { focused = true }
     }
 
+    /// Above the prompt: why the keychain didn't answer, or that it did.
+    /// The account signing in, once known (not on the username prompt itself).
+    private var account: String? {
+        guard challenge.kind != .username, let st = model.status,
+              let p = model.profiles.first(where: { $0.id == st.profileId }) else { return nil }
+        return model.attemptUsername(p, attempt: st.attemptId)
+    }
+
+    /// The keychain answered this attempt's password (shown on the code prompt). Read live: the
+    /// keychain helper reports back only once the gateway has asked for the code.
+    private var passwordFromKeychain: Bool {
+        challenge.kind == .otp && model.status?.attemptId != nil
+            && model.keychainAnsweredAttempt == model.status?.attemptId
+    }
+
+    @ViewBuilder private var savedPasswordNotice: some View {
+        switch saved {
+        case .rejected:
+            notice("The gateway refused the saved password.")
+        case .unavailable:
+            notice("The saved password couldn't be read from your keychain.")
+        case .willSave, nil:
+            if passwordFromKeychain {
+                Label("Password filled in from your keychain.", systemImage: "key.fill")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Label {
+            Text(text).foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Below the field: whether to keep the typed password.
+    @ViewBuilder private var savedPasswordOptions: some View {
+        switch saved {
+        case .willSave:
+            Toggle("Save in Keychain after connecting", isOn: $remember)
+        case .rejected:
+            Toggle("Replace the saved password after connecting", isOn: $remember)
+        case .unavailable, nil:
+            EmptyView()
+        }
+    }
+
     private func submit() {
         guard !value.isEmpty else { return }
         busy = true
         let v = value
         value = ""
+        model.noteTyped(challenge.kind, value: v,
+                        savePassword: remember && (saved == .willSave || saved == .rejected))
         Task {
             if let e = await model.respond(challenge: challenge, value: v) {
                 error = e.code == "stale_challenge"

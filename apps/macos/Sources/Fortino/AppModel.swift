@@ -43,6 +43,14 @@ final class AppModel: ObservableObject {
     @Published var reviewedGatewayFailure: String?
     /// The profile the EMS Setup and enrollment windows work on.
     @Published var emsSetupProfileId: String?
+    /// What the login keychain holds for each profile that saves its password, by profile ID.
+    @Published var savedPasswords: [String: SavedPasswordState] = [:]
+    /// The username typed for an attempt, so its password is saved for the right account.
+    var typedUsername: (attempt: String, value: String)?
+    /// A typed password to save once its attempt connects. See SavedPasswords.swift.
+    var pendingPasswordSave: PendingPasswordSave?
+    /// The attempt whose password prompt the keychain answered.
+    @Published var keychainAnsweredAttempt: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -207,10 +215,15 @@ final class AppModel: ObservableObject {
         }
         let changed = status?.state != s.state
         status = s
+        settlePendingPassword(s)
         challenges.update(status: s)
         // Keepalives run while connected, so the EMS state moves on connect and disconnect.
         if changed && (s.state == .connected || s.state == .idle) {
             Task { await self.refreshEmsStatus() }
+            // An attempt may have saved a password or marked a saved one refused.
+            if let p = savingProfile(for: s) {
+                Task { await self.refreshSavedPassword(p.id) }
+            }
         }
     }
 
@@ -468,6 +481,9 @@ final class AppModel: ObservableObject {
             let p: Profile
             if let e = existing {
                 p = try await c.update(e.id, revision: e.revision, spec)
+                if e.spec.savePassword == true && spec.savePassword != true {
+                    await forgetSavedPassword(e.id)
+                }
             } else {
                 p = try await c.create(spec)
             }
@@ -484,6 +500,10 @@ final class AppModel: ObservableObject {
     func delete(_ p: Profile) async -> ProtoError? {
         do {
             try await require().delete(p.id, revision: p.revision)
+            if p.spec.savePassword == true {
+                _ = await runCLI(["password", "forget", p.id])
+                savedPasswords[p.id] = nil
+            }
             await refreshProfiles()
             return nil
         } catch let e as ProtoError {
@@ -530,7 +550,9 @@ final class AppModel: ObservableObject {
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    func runCLI(_ args: [String]) async -> (Int32, Data, String) {
+    /// Runs the bundled `fortino` in this user's session. `input` becomes its standard input
+    /// (a password to save), so it never appears in the arguments.
+    func runCLI(_ args: [String], input: Data? = nil) async -> (Int32, Data, String) {
         guard let path = cliPath else {
             return (127, Data(), "fortino was not found")
         }
@@ -542,8 +564,13 @@ final class AppModel: ObservableObject {
             let out = Pipe(), err = Pipe()
             p.standardOutput = out
             p.standardError = err
-            p.standardInput = FileHandle.nullDevice
+            let stdin = input.map { _ in Pipe() }
+            p.standardInput = stdin ?? FileHandle.nullDevice
             do { try p.run() } catch { return (127, Data(), error.localizedDescription) }
+            if let stdin, let input {
+                stdin.fileHandleForWriting.write(input)
+                try? stdin.fileHandleForWriting.close()
+            }
             let o = out.fileHandleForReading.readDataToEndOfFile()
             let e = err.fileHandleForReading.readDataToEndOfFile()
             p.waitUntilExit()

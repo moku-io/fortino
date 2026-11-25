@@ -492,12 +492,16 @@ fn parse_connection(
     if c.child("ui").is_some() {
         omitted.push("ui preferences".into());
     }
-    for k in [
-        "auto_connect",
-        "keep_running",
-        "save_password",
-        "prompt_username",
-    ] {
+    // Saving a password needs the profile's username, and the source's account is discarded
+    // above, so the choice can't carry over; the preview says how to turn it on.
+    if c.child("save_password")
+        .is_some_and(|n| bool01(n) == Ok(true))
+    {
+        omitted.push(
+            "save_password preference (add your username, then turn on Save password)".into(),
+        );
+    }
+    for k in ["auto_connect", "keep_running", "prompt_username"] {
         if c.child(k).is_some() {
             omitted.push(format!("{k} preference"));
         }
@@ -619,6 +623,32 @@ mod tests {
                 .iter()
                 .any(|o| o.contains("on_connect"))
         );
+    }
+
+    #[test]
+    fn save_password_choice_is_reported_not_imported() {
+        let x = wrap(
+            "<connection><name>A</name><server>a.example</server>\
+             <password>SENTINEL_PASS</password><save_password>1</save_password></connection>\
+             <connection><name>B</name><server>b.example</server>\
+             <save_password>0</save_password></connection>\
+             <connection><name>C</name><server>c.example</server></connection>",
+            "",
+        );
+        let p = parse(x.as_bytes()).unwrap();
+        assert!(!format!("{p:?}").contains("SENTINEL_PASS"));
+        // No username survives the import, and Save password needs one.
+        assert!(p.entries.iter().all(|e| !e.spec.save_password));
+        let reported: Vec<bool> = p
+            .entries
+            .iter()
+            .map(|e| {
+                e.omitted
+                    .iter()
+                    .any(|o| o.contains("turn on Save password"))
+            })
+            .collect();
+        assert_eq!(reported, [true, false, false]);
     }
 
     #[test]

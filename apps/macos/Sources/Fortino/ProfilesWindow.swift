@@ -211,6 +211,10 @@ struct ConnectionSection: View {
                     } else {
                         VStack(alignment: .trailing, spacing: 6) {
                             Text(r.message).foregroundStyle(.red)
+                            if r.code == "auth_denied", model.keychainAnsweredAttempt == r.attemptId {
+                                Text("The saved password was refused. You'll be asked for it next time.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
                             if model.lastAttemptNeedsEms(profile) {
                                 Button("Open EMS Setup…") {
                                     model.emsSetupProfileId = profile.id
@@ -382,6 +386,7 @@ struct Draft {
     var description = ""
     var policy: IpPolicy = .splitIpv4
     var dns: DnsMode = .gateway
+    var savePassword = false
     /// Debug only: EMS SYSINFO overrides. See DebugOverridesBox.swift.
     var debugOverrides: [DebugKV] = []
 
@@ -398,6 +403,7 @@ struct Draft {
         description = s.description ?? ""
         policy = s.ipPolicy
         dns = s.dnsMode ?? .gateway
+        savePassword = s.savePassword ?? false
         debugOverrides = debugOverrideRows(s.debugEmsSysinfo)
     }
 
@@ -408,9 +414,12 @@ struct Draft {
         if case let .error(m) = checkPort(port) { e["port"] = m }
         if case let .failure(err) = parseEms(ems) { e["ems"] = err.message }
         if case let .error(m) = checkRealm(realm) { e["realm"] = m }
+        if savePassword && !hasUsername { e["username"] = "Required while Save password is on." }
         if let m = debugOverridesError(debugOverrides) { e["debug"] = m }
         return e
     }
+
+    var hasUsername: Bool { !username.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// The effective EMS port shown under the field.
     var emsHint: String {
@@ -435,6 +444,7 @@ struct Draft {
         s.description = t(description)
         s.ipPolicy = policy
         s.dnsMode = dns == .gateway ? nil : dns
+        s.savePassword = savePassword ? true : nil
         s.debugEmsSysinfo = debugOverridesMap(debugOverrides)
         return s
     }
@@ -503,11 +513,33 @@ struct ProfileEditor: View {
                 }
                 field("Realm", text: $draft.realm, key: "realm", focus: .realm, prompt: "Optional")
             }
-            Section("Account") {
+            Section {
                 field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
                 field("Username", text: $draft.username, key: "username", focus: .username,
-                      prompt: "Asked when connecting")
+                      prompt: draft.savePassword ? "Required" : "Asked when connecting")
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
+                // A password is saved for one account, so the toggle waits for the username. It
+                // stays usable while on, so clearing the username can be resolved either way.
+                Toggle("Save password in Keychain", isOn: $draft.savePassword)
+                    .disabled(!draft.hasUsername && !draft.savePassword)
+                    .help(draft.hasUsername || draft.savePassword
+                          ? "" : "Enter the username you sign in with first")
+                if let p = profile, p.spec.savePassword == true, draft.savePassword {
+                    SavedPasswordRow(model: model, profile: p)
+                }
+            } header: {
+                Text("Account")
+            } footer: {
+                Group {
+                    if draft.savePassword {
+                        Text("Saved in your login keychain after you connect, and filled in next time. One-time codes are always asked for. Turning this off removes the saved password.")
+                    } else if !draft.hasUsername {
+                        Text("To save the password, enter the username you sign in with.")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section {
                 Picker("Routing", selection: $draft.policy) {
@@ -526,6 +558,8 @@ struct ProfileEditor: View {
                     Text("Server certificates are always verified. IPv6 traffic is never sent through the tunnel.")
                 }
                 .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             DebugOverridesBox(rows: $draft.debugOverrides)
         }
@@ -567,6 +601,10 @@ struct ProfileEditor: View {
                         .confirmationDialog("Delete \(p.spec.name)?", isPresented: $confirmDelete) {
                             Button("Delete", role: .destructive) {
                                 Task { serverError = await model.delete(p) }
+                            }
+                        } message: {
+                            if p.spec.savePassword == true {
+                                Text("Its saved password is also removed from your login keychain.")
                             }
                         }
                 }
@@ -644,5 +682,46 @@ struct ProfileEditor: View {
         }
         if profile == nil { onDone() }
         return nil
+    }
+}
+
+/// What the keychain holds for a profile, with a way to remove it.
+struct SavedPasswordRow: View {
+    @ObservedObject var model: AppModel
+    let profile: Profile
+
+    private var state: SavedPasswordState? { model.savedPasswords[profile.id] }
+
+    var body: some View {
+        LabeledContent("Saved password") {
+            HStack {
+                if state?.rejected == true {
+                    Label {
+                        Text(summary).foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                } else {
+                    Text(summary).foregroundStyle(.secondary)
+                }
+                if state?.saved == true {
+                    Button("Forget") { Task { await model.forgetSavedPassword(profile.id) } }
+                        .help("Removes the password from your login keychain")
+                }
+            }
+            .help(state?.error ?? "")
+        }
+        .task(id: profile.revision) { await model.refreshSavedPassword(profile.id) }
+    }
+
+    private var summary: String {
+        guard let s = state else { return "Checking…" }
+        if s.error != nil { return "Keychain unavailable" }
+        guard s.saved else { return "Not saved yet" }
+        if let u = s.username, let mine = profile.spec.usernameHint, u != mine {
+            return "Saved for \(u), not \(mine); asked next time"
+        }
+        if s.rejected { return "Refused by the gateway; asked next time" }
+        return s.username.map { "Saved for \($0)" } ?? "Saved"
     }
 }

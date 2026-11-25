@@ -30,7 +30,7 @@ Connects to your company's FortiGate. Then gets out of your way.
 - **Dark mode**, matching both your terminal and your mood about corporate VPNs.
 - **You can quit it.** No icon squatting in your menu bar forever.
 - **Signed, notarized, self-updating.** New versions arrive with their release notes; install now, later, or skip.
-- **macOS Keychain** for saved passwords: coming soon.
+- **Saved passwords** in your login Keychain, per profile. Saved only after the gateway accepts them and never retried once rejected; one-time codes are always asked for.
 
 ## No backdoor, by design
 

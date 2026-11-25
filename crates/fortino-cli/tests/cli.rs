@@ -17,7 +17,7 @@ use fortinod::session::Session;
 struct Daemon {
     dir: tempfile::TempDir,
     sock: PathBuf,
-    _rt: tokio::runtime::Runtime,
+    rt: tokio::runtime::Runtime,
 }
 
 fn daemon() -> Daemon {
@@ -49,7 +49,7 @@ fn daemon() -> Daemon {
         let l = fortinod::bind_socket(&s, None).unwrap();
         tokio::spawn(fortinod::server::serve(l, session, auth));
     });
-    Daemon { dir, sock, _rt: rt }
+    Daemon { dir, sock, rt }
 }
 
 impl Daemon {
@@ -63,6 +63,11 @@ impl Daemon {
             .arg(script)
             .env("FORTINO_CLI", env!("CARGO_BIN_EXE_fortino"))
             .env("FORTINO_SOCKET", &self.sock)
+            // Saved passwords go to a file in the test directory, never the real keychain.
+            .env(
+                "FORTINO_CREDENTIAL_STORE",
+                format!("file:{}", self.dir.path().join("creds.json").display()),
+            )
             .current_dir(self.dir.path())
             .stdin(std::process::Stdio::null())
             .output()
@@ -256,4 +261,317 @@ fn version_matches_app_release() {
         .output()
         .unwrap();
     assert_eq!(stdout(&o).trim(), format!("fortino {release}"));
+}
+
+/// The saved-password file the CLI writes in tests.
+fn creds(d: &Daemon) -> serde_json::Value {
+    std::fs::read(d.dir.path().join("creds.json"))
+        .map(|b| serde_json::from_slice(&b).unwrap())
+        .unwrap_or_else(|_| serde_json::json!({}))
+}
+
+fn profile_id(d: &Daemon, name: &str) -> String {
+    json(&d.run(&format!("--json profile show {name}")))["result"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn saved_password_answers_the_prompt_and_is_never_printed() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stdout(&o).contains("for alice"), "{o:?}");
+    let id = profile_id(&d, "GW");
+    assert_eq!(creds(&d)[&id]["username"], "alice");
+    // Saving turned the option on.
+    let v = json(&d.run("--json profile show GW"));
+    assert_eq!(v["result"]["spec"]["savePassword"], true);
+
+    let st = json(&d.run("--json password status GW"));
+    assert_eq!(st["result"]["saved"], true);
+    assert_eq!(st["result"]["username"], "alice");
+    assert_eq!(st["result"]["rejected"], false);
+    assert!(!stdout(&d.run("--json password status GW")).contains("hunter2"));
+
+    // Only the code comes from a descriptor; the password comes from the store.
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --otp-fd 4 4<{}",
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("Using the password saved in"), "{o:?}");
+    assert!(!stdout(&o).contains("hunter2") && !stderr(&o).contains("hunter2"));
+    assert_eq!(code(&d.run("disconnect")), 0);
+}
+
+#[test]
+fn rejected_saved_password_is_not_sent_again() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let o = d.sh("printf 'stale\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let o = d.run("--json connect GW");
+    assert_eq!(code(&o), 4, "{o:?}");
+    assert_eq!(json(&o)["error"]["code"], "auth_denied");
+    let id = profile_id(&d, "GW");
+    assert_eq!(creds(&d)[&id]["rejected"], true);
+    let st = json(&d.run("--json password status GW"));
+    assert_eq!(st["result"]["rejected"], true);
+
+    // Without a terminal the next attempt can't ask, and the rejected password stays unused.
+    if std::fs::File::open("/dev/tty").is_err() {
+        let o = d.run("--json connect GW");
+        assert_eq!(code(&o), 4, "{o:?}");
+        assert_eq!(json(&o)["error"]["code"], "interaction_required");
+    }
+
+    // Saving again clears the mark.
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert_eq!(creds(&d)[&id]["rejected"], false);
+}
+
+#[test]
+fn password_from_a_descriptor_leaves_the_store_alone() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice --save-password")),
+        0
+    );
+    let o = d.sh("printf 'stale\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let pw = d.write("pw", "hunter2\n");
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let id = profile_id(&d, "GW");
+    assert_eq!(creds(&d)[&id]["password"], "stale");
+    assert_eq!(creds(&d)[&id]["rejected"], false);
+    assert_eq!(code(&d.run("disconnect")), 0);
+}
+
+#[test]
+fn turning_the_option_off_or_removing_the_profile_forgets_the_password() {
+    let d = daemon();
+    for n in ["A", "B", "C"] {
+        assert_eq!(
+            code(&d.run(&format!(
+                "profile add {n} --host tg2.example.org --username alice"
+            ))),
+            0
+        );
+        let o = d.sh(&format!(
+            "printf 'pw\\n' | \"$FORTINO_CLI\" password save {n} --stdin"
+        ));
+        assert_eq!(code(&o), 0, "{o:?}");
+    }
+    let (a, b, c) = (
+        profile_id(&d, "A"),
+        profile_id(&d, "B"),
+        profile_id(&d, "C"),
+    );
+
+    let o = d.run("profile edit A --no-save-password");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stdout(&o).contains("Removed the saved password"), "{o:?}");
+    assert!(creds(&d).get(&a).is_none());
+
+    assert_eq!(code(&d.run("profile remove B")), 0);
+    assert!(creds(&d).get(&b).is_none());
+
+    let o = d.run("--json password forget C");
+    assert_eq!(json(&o)["result"]["removed"], true);
+    assert!(creds(&d).get(&c).is_none());
+    // Forgetting keeps the choice, so the next connection saves again.
+    let v = json(&d.run("--json profile show C"));
+    assert_eq!(v["result"]["spec"]["savePassword"], true);
+    // The ID of a profile that is gone is still accepted, for cleanup.
+    let o = d.run(&format!("--json password forget {b}"));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert_eq!(json(&o)["result"]["removed"], false);
+}
+
+/// Starts an attempt as the app does and returns it with its password prompt.
+fn start_attempt(d: &Daemon, name: &str) -> (fortino_core::client::Client, String, String) {
+    use fortino_core::proto::{ChallengeKind, ConnectParams};
+    d.rt.block_on(async {
+        let c = fortino_core::client::Client::connect(&d.sock, "test")
+            .await
+            .unwrap();
+        let p = c.profile_get(name).await.unwrap();
+        let r = c
+            .connect_profile(&ConnectParams {
+                profile_id: p.id.clone(),
+                revision: p.revision,
+                request_key: uuid::Uuid::new_v4().to_string(),
+                username: None,
+            })
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            let st = c.status().await.unwrap();
+            if let Some(ch) = st.challenge.filter(|ch| ch.kind == ChallengeKind::Password) {
+                return (c, r.attempt_id, ch.id);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("no password prompt");
+    })
+}
+
+#[test]
+fn app_helper_answers_from_the_store_and_marks_a_refusal() {
+    use fortino_core::proto::{ChallengeKind, State};
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    // Disabled: nothing is read.
+    let (c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(json(&o)["result"]["reason"], "disabled", "{o:?}");
+    d.rt.block_on(c.disconnect(&attempt)).unwrap();
+
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let (c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let r = &json(&o)["result"];
+    assert_eq!(
+        (r["answered"].as_bool(), r["reason"].as_str()),
+        (Some(true), Some("accepted"))
+    );
+    // The app answers the code; the tunnel comes up.
+    d.rt.block_on(async {
+        let st = c.status().await.unwrap();
+        let otp = st.challenge.unwrap();
+        assert_eq!(otp.kind, ChallengeKind::Otp);
+        c.respond(&attempt, &otp.id, "123456".into()).await.unwrap();
+        for _ in 0..300 {
+            if c.status().await.unwrap().state == State::Connected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("not connected");
+    });
+    assert_eq!(code(&d.run("disconnect")), 0);
+
+    // A wrong saved password: answered, refused, marked; the next prompt isn't answered.
+    let o = d.sh("printf 'stale\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let (_c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(json(&o)["result"]["reason"], "rejected", "{o:?}");
+    assert_eq!(json(&o)["result"]["answered"], true);
+    let (c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(json(&o)["result"]["answered"], false, "{o:?}");
+    assert_eq!(json(&o)["result"]["reason"], "rejected");
+    // A prompt that is no longer outstanding is left alone.
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge other"
+    ));
+    assert_eq!(json(&o)["result"]["reason"], "stale", "{o:?}");
+    d.rt.block_on(c.disconnect(&attempt)).unwrap();
+}
+
+#[test]
+fn save_password_needs_the_profile_username() {
+    let d = daemon();
+    // Turning it on without a username is refused with a clear message.
+    let o = d.run("profile add GW --host tg2.example.org --save-password");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert_eq!(code(&d.run("profile add GW --host tg2.example.org")), 0);
+    let o = d.run("profile edit GW --save-password");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert!(
+        stderr(&o).contains("needs the username you sign in with"),
+        "{o:?}"
+    );
+
+    // Saving a password for a profile without one sets the username and the option.
+    let o =
+        d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --username alice --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let v = json(&d.run("--json profile show GW"));
+    assert_eq!(v["result"]["spec"]["usernameHint"], "alice");
+    assert_eq!(v["result"]["spec"]["savePassword"], true);
+    // Another account than the profile's is refused, and nothing changes.
+    let o = d.sh("printf 'x\\n' | \"$FORTINO_CLI\" password save GW --username bob --stdin");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert!(stderr(&o).contains("signs in as alice"), "{o:?}");
+    assert_eq!(creds(&d)[&profile_id(&d, "GW")]["password"], "hunter2");
+
+    // Neither the username nor the password is asked: only the code.
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --otp-fd 4 4<{}",
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("Using the password saved in"), "{o:?}");
+    assert_eq!(code(&d.run("disconnect")), 0);
+
+    // A connected profile without a username can't take one now: nothing is saved.
+    assert_eq!(code(&d.run("profile add Other --host tg2.example.org")), 0);
+    let pw = d.write("pw", "hunter2\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect Other --username bob --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let o =
+        d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Other --username bob --stdin");
+    assert_ne!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("disconnect first"), "{o:?}");
+    assert!(creds(&d).get(profile_id(&d, "Other")).is_none());
+    assert_eq!(code(&d.run("disconnect")), 0);
+
+    // With a username but the option off, a connected profile keeps the password and says the
+    // option waits for the disconnect.
+    assert_eq!(
+        code(&d.run("profile add Third --host tg2.example.org --username carol")),
+        0
+    );
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect Third --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Third --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("Save password stays off"), "{o:?}");
+    assert_eq!(creds(&d)[&profile_id(&d, "Third")]["username"], "carol");
+    assert_eq!(code(&d.run("disconnect")), 0);
 }

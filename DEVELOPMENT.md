@@ -52,6 +52,10 @@ fortino profile list
 fortino profile edit demo-vpn --dns local                 # keep this Mac's DNS while connected (default: gateway)
 fortino connect demo-vpn                                  # prompts on the terminal
 fortino connect demo-vpn --password-fd 3 --otp-fd 4 3<pw 4<otp   # headless
+fortino profile edit demo-vpn --save-password             # save the password after the next connection
+fortino password save demo-vpn                            # or save it now (prompts; --stdin reads a line)
+fortino password status demo-vpn                          # saved or not, for which account; never the password
+fortino password forget demo-vpn                          # remove it; --no-save-password also stops saving
 fortino status --watch --json
 fortino disconnect
 fortino profile import export.xml --dry-run
@@ -62,6 +66,8 @@ fortino ems-register ems.example.org:8013                # register now (server 
 ```
 
 `fortinod` starts at `RUST_LOG` (default `info`); `fortino log-level` and the app's **Log level** setting change it at runtime until the daemon restarts. At every level, logs go through a redacting writer and never carry passwords, codes or cookie values. The installed service logs to `/var/log/fortinod.log`.
+
+Saved passwords live in the user's login Keychain, written and read only by `fortino` (the app runs its bundled copy), never by the daemon: one item per profile, service `org.fortino.vpn.<profile ID>`, account the username. A password typed during a connection is saved once the tunnel is up; a saved password the gateway rejects is marked in the item's comment and not sent again until a new one is saved. Save password needs the profile's username (the service refuses the profile otherwise); `fortino password save` on a profile without one sets it from `--username` or a prompt, and only while disconnected. `--password-fd` bypasses the store. `FORTINO_CREDENTIAL_STORE=none` turns saved passwords off for one run.
 
 Exit codes: 0 success, 2 invalid input or profile, 3 busy or stale revision, 4 authentication or required input, 5 trust failure, 6 network/backend failure, 7 service unavailable or permission denied, 8 unsupported policy, 9 cancellation. With `--json`, errors are printed as `{"v":1,"error":{"code":…}}`.
 
@@ -81,6 +87,8 @@ The app parses XML imports by running `fortino --json profile import … --dry-r
 ## Tests
 
 `cargo test --workspace` runs everything unprivileged: the daemon over its socket, a real worker process (`fortino-stub-worker`), the CLI against an in-process daemon, property tests for every protocol parser, and the native worker against the mock FortiGate and EMS with an in-memory tun device.
+
+Tests never touch your keychain: the CLI tests set `FORTINO_CREDENTIAL_STORE=file:<path>`, a plain JSON store that only debug builds accept. The Keychain backend has one round-trip test that writes a throwaway item to your login keychain and removes it; run it on request with `cargo test -p fortino-secret --features platform-store -- --ignored keychain`.
 
 Before sending a change: `cargo fmt --all`, `cargo clippy --workspace --all-targets` with no warnings, `cargo test --workspace`, and `swift build --package-path apps/macos` for app changes.
 

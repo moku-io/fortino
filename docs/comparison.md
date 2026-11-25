@@ -7,6 +7,7 @@ Fortino is still in development: the table shows **target** behaviour for Fortin
 | License | GPL-3.0-or-later | GPL-3.0 + OpenSSL exception | LGPL-2.1 | Proprietary |
 | Language | Rust daemon, Swift app | C | C | — |
 | Password + token code | Yes (password live on one gateway; codes tested against the mock) | Yes | Yes (tokeninfo and HTML forms) | Yes |
+| Saved password | Per profile, in the login Keychain; never retried after a rejection | In the configuration file | Via scripts or a desktop integration | Yes |
 | FortiToken Mobile push | Planned | Yes | Not documented | Yes |
 | SAML | Planned | Yes (`--saml-login`, or openfortivpn-webview) | Not documented | Yes |
 | Client certificate | Planned | Yes | Yes | Yes |
