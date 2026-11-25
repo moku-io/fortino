@@ -105,6 +105,8 @@ pub struct Settings {
     pub settle: Duration,
     /// Shortest keepalive interval honoured, whatever the server asks (10 s in production).
     pub min_ka_interval: Duration,
+    /// Wait after a keepalive round that failed before trying again (60 s in production).
+    pub retry: Duration,
 }
 
 /// Reads host facts. Replaceable for tests.
@@ -607,7 +609,7 @@ impl Ctx {
                 // the EMS the tunnel address, which gateways that admit by tag depend on.
                 Err(e) => {
                     tracing::warn!(ems = %self.server, error = %e, "EMS keepalive failed");
-                    Duration::from_secs(60)
+                    self.settings.retry
                 }
             };
             tokio::time::sleep(interval).await;

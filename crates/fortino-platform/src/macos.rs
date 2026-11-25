@@ -89,6 +89,7 @@ impl Runner for SystemRunner {
 const ROUTE: &str = "/sbin/route";
 const SCUTIL: &str = "/usr/sbin/scutil";
 const PFCTL: &str = "/sbin/pfctl";
+const NETSTAT: &str = "/usr/sbin/netstat";
 
 /// The macOS platform.
 #[derive(Debug)]
@@ -207,6 +208,15 @@ pub fn parse_route_get(out: &str) -> Option<(String, RouteVia)> {
         (None, None) => return None,
     };
     Some((dest?, via))
+}
+
+/// Whether `netstat -rn` output lists a host route to `addr` via `gateway`.
+fn pinned(table: &str, addr: IpAddr, gateway: IpAddr) -> bool {
+    let (a, g) = (addr.to_string(), gateway.to_string());
+    table.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 3 && f[0] == a && f[1] == g && f[2].contains('H') && f[2].contains('G')
+    })
 }
 
 /// The address to look a route up by: one inside it. route(8) reads a bare network address
@@ -342,6 +352,35 @@ impl<R: Runner> NetPlatform for MacNet<R> {
     fn revert(&mut self, undo: &Undo) -> Result<()> {
         match undo {
             Undo::Nothing => Ok(()),
+            Undo::DelRoute(
+                r @ Route {
+                    via: RouteVia::Gateway { gateway, .. },
+                    ..
+                },
+            ) if r.dest.is_host() => {
+                // A gateway pin is ours while the table holds exactly that host route. A lookup
+                // (`route get`) can answer with another route to the same address: the default
+                // route once the pin is gone, or the local route when the address is this
+                // Mac's own.
+                let family = if r.dest.addr.is_ipv4() {
+                    "inet"
+                } else {
+                    "inet6"
+                };
+                let table = self.run(NETSTAT, &[s("-rn"), s("-f"), s(family)], None)?;
+                if !pinned(&table.stdout, r.dest.addr, *gateway) {
+                    tracing::info!(route = %r.dest, "gateway pin already gone or replaced; leaving it");
+                    return Ok(());
+                }
+                let out = self.run(ROUTE, &route_delete_args(r), None)?;
+                if out.ok || out.stderr.contains("not in table") {
+                    return Ok(());
+                }
+                Err(PlatformError::Other(format!(
+                    "{ROUTE} delete failed: {}",
+                    out.stderr.trim()
+                )))
+            }
             Undo::DelRoute(r) => {
                 // Compare before undo: only delete the route if it is still ours.
                 let probe = probe_addr(&r.dest);
@@ -361,7 +400,7 @@ impl<R: Runner> NetPlatform for MacNet<R> {
                     _ => false,
                 };
                 if !ours {
-                    tracing::info!(route = %r.dest, "route already gone or replaced; leaving it");
+                    tracing::info!(route = %r.dest, found = ?installed, "route already gone or replaced; leaving it");
                     return Ok(());
                 }
                 let out = self.run(ROUTE, &route_delete_args(r), None)?;
@@ -602,14 +641,14 @@ mod tests {
         let mut m = MacNet::with_runner(Rec::default());
         // The pin is gone; the default route has the same next hop.
         m.runner().replies.push_back(ok(
-            "destination: default\n    gateway: 192.168.0.1\n  interface: en0\n",
+            "Destination        Gateway            Flags  Netif\ndefault            192.168.0.1        UGScg  en0\n",
         ));
         m.revert(&Undo::DelRoute(pin.clone())).unwrap();
-        assert_eq!(m.runner().calls.len(), 1, "{:?}", m.runner().calls);
+        assert_eq!(m.runner().calls, ["/usr/sbin/netstat -rn -f inet"]);
 
         // Still installed, but removed by someone else just before the delete.
         m.runner().replies.push_back(ok(
-            "destination: 203.0.113.10\n    gateway: 192.168.0.1\n  interface: en0\n",
+            "default            192.168.0.1        UGScg  en0\n203.0.113.10       192.168.0.1        UGHS   en0\n",
         ));
         m.runner().replies.push_back(CmdOutput {
             ok: false,
@@ -752,6 +791,28 @@ mod tests {
             Undo::ReleasePf {
                 token: Some("42".into())
             }
+        );
+    }
+
+    /// A pin to an address the lookup answers locally (the gateway is this Mac's own address,
+    /// as in the VM tests) is still found in the table and removed.
+    #[test]
+    fn a_pin_is_found_in_the_table_whatever_a_lookup_says() {
+        let pin = Route {
+            dest: IpNet::host("192.168.64.42".parse().unwrap()),
+            via: RouteVia::Gateway {
+                gateway: "192.168.64.1".parse().unwrap(),
+                ifname: Some("en0".into()),
+            },
+        };
+        let mut m = MacNet::with_runner(Rec::default());
+        m.runner().replies.push_back(ok(
+            "192.168.64.42      192.168.64.1       UGHS                  en0\n192.168.64.42/32   link#6             UCS                   en0      !\n",
+        ));
+        m.revert(&Undo::DelRoute(pin)).unwrap();
+        assert_eq!(
+            m.runner().calls.last().unwrap(),
+            "/sbin/route -n delete -host 192.168.64.42"
         );
     }
 

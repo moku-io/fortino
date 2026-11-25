@@ -116,6 +116,7 @@ async fn start_fc(
             )]),
             settle: Duration::from_millis(50),
             min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
         },
         Arc::new(move || Some(f.lock().unwrap().clone())),
     );
@@ -358,6 +359,7 @@ fn status_counts_forticlient_only_with_this_uid() {
                 )]),
                 settle: Duration::ZERO,
                 min_ka_interval: Duration::ZERO,
+                retry: Duration::from_millis(100),
             },
             Arc::new(|| Some(base_facts())),
         )
@@ -544,6 +546,7 @@ async fn device_uid_reaches_a_gateway_that_asks_even_without_ems() {
             servers: HashMap::new(),
             settle: Duration::from_millis(50),
             min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
         },
         Arc::new(|| Some(base_facts())),
     );
@@ -605,6 +608,7 @@ async fn package_enrollment_is_scoped_and_idempotent() {
             )]),
             settle: Duration::ZERO,
             min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
         },
         Arc::new(|| Some(base_facts())),
     );
@@ -754,5 +758,44 @@ async fn dropped_while_forticlient_is_on_the_ems_is_left_to_it() {
     until(&r, "the dropped keepalive", |r| seen(r, "KA") > kas).await;
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert_eq!(seen(&r, "REGISTER"), 1);
+    stop(&mut r).await;
+}
+
+/// The first full keepalive after the tunnel comes up tells the EMS the tunnel address, which
+/// gateways that admit by tag depend on. When it fails, the retry is a full keepalive again,
+/// not a mini one a full interval (hours) before the address gets through.
+#[tokio::test]
+async fn a_failed_first_keepalive_is_retried_in_full() {
+    let mut r = start(true, Some("k3y"), ems_scenario()).await;
+    r.ems.state.lock().unwrap().fail_keepalives = 1;
+    let WorkerEvent::Up(tc) = until_up_or_end(&mut r).await else {
+        panic!("no tunnel")
+    };
+    r.facts.lock().unwrap().interfaces.push(Interface {
+        name: tc.interface.clone(),
+        ip: tc.assigned_ip,
+        mac: [0; 6],
+        gateway: None,
+        up: true,
+        is_vpn: true,
+    });
+    let reported = |r: &Rig| {
+        r.ems
+            .state
+            .lock()
+            .unwrap()
+            .endpoints
+            .values()
+            .next()
+            .and_then(|ep| ep.sysinfo.iter().find(|(k, _)| k == "NWIFS").cloned())
+            .is_some_and(|(_, v)| v.contains(&format!("{}|{}", tc.interface, tc.assigned_ip)))
+    };
+    until(
+        &r,
+        "tunnel address reported after a failed keepalive",
+        reported,
+    )
+    .await;
+    assert!(seen(&r, "KA") >= 2);
     stop(&mut r).await;
 }

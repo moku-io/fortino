@@ -28,6 +28,11 @@ impl IpNet {
         Self { addr, prefix }
     }
 
+    /// Whether this is a single address (/32 or /128).
+    pub fn is_host(&self) -> bool {
+        self.prefix == if self.addr.is_ipv4() { 32 } else { 128 }
+    }
+
     /// Builds an IPv4 prefix from a dotted netmask. Returns `None` for a non-contiguous mask.
     pub fn from_v4_mask(addr: std::net::Ipv4Addr, mask: std::net::Ipv4Addr) -> Option<Self> {
         let m = u32::from(mask);
