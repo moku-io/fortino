@@ -171,6 +171,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
     let mut r = Reader::from_str(body);
     let mut s = TunnelSettings::default();
     let mut seen_root = false;
+    // The root's end tag: a body cut short (a connection closed early) must not pass as
+    // settings with fewer routes or resolvers.
+    let mut closed_root = false;
     let mut family = Family::None;
     // Inside split-tunnel-info: Some(negate).
     let mut split: Option<bool> = None;
@@ -204,6 +207,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
             Event::Empty(e) => {
                 let name = e.name().as_ref().to_vec();
                 element(&e, &name, &mut s, &mut seen_root, family, split)?;
+                if name == b"sslvpn-tunnel" {
+                    closed_root = true;
+                }
                 if name == b"ipv6" {
                     s.has_ipv6 = true;
                 }
@@ -215,6 +221,7 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
                 }
             }
             Event::End(e) => match e.name().as_ref() {
+                b"sslvpn-tunnel" => closed_root = true,
                 b"ipv4" | b"ipv6" => family = Family::None,
                 b"split-tunnel-info" => split = None,
                 b"tunnel-method" => in_method = false,
@@ -226,6 +233,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
     }
     if !seen_root {
         return Err(ConfigError::NotSettings);
+    }
+    if !closed_root {
+        return Err(ConfigError::Xml("the tunnel settings end early".into()));
     }
     if s.dns_count() > MAX_DNS_SERVERS {
         s.rejected
@@ -432,6 +442,19 @@ fn valid_domain(d: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Settings cut short (the connection closed mid-body) are refused, not read as settings
+    /// with fewer routes.
+    #[test]
+    fn settings_cut_short_are_refused() {
+        let full = "<sslvpn-tunnel><ipv4><split-tunnel-info>\
+                    <addr ip='10.0.0.0' mask='255.0.0.0'/><addr ip='172.16.0.0' mask='255.240.0.0'/>\
+                    </split-tunnel-info></ipv4></sslvpn-tunnel>";
+        assert_eq!(parse(full).unwrap().include_v4.len(), 2);
+        let cut = &full[..full.find("<addr ip='172").unwrap()];
+        assert!(parse(cut).is_err());
+        assert!(parse("<sslvpn-tunnel dtls='0'/>").is_ok());
+    }
 
     /// A gateway can repeat `<dns>` elements without end; what is kept stays bounded and the
     /// settings are refused.

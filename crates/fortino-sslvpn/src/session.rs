@@ -22,6 +22,10 @@ pub(crate) struct Ctx {
     pub events: mpsc::Sender<WorkerEvent>,
     pub commands: mpsc::Receiver<WorkerCommand>,
     next_challenge: u32,
+    /// Feeds the tun device and keeps it open. Held until the attempt's end is reported: the
+    /// daemon removes the routes and resolvers first, so until then traffic for the tunnel
+    /// stops at the device instead of leaving on the physical uplink.
+    pub device: Option<mpsc::Sender<Vec<u8>>>,
 }
 
 impl Ctx {
@@ -87,6 +91,7 @@ pub(crate) async fn run(
         events,
         commands,
         next_challenge: 0,
+        device: None,
     };
     let result = attempt(&w, &cfg, &mut ctx).await;
     let term = match result {
@@ -299,66 +304,80 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
 
     ctx.emit(WorkerEvent::Stage(WorkerStage::Negotiating)).await;
     let mut cookie = cookie;
-    // VPN allocation: the login's own redirect target (`/remote/index`), then the portal page,
-    // as openfortivpn's `auth_request_vpn_allocation` does. Their status doesn't matter, but
-    // either may refresh the cookie.
-    for path in ["/remote/index", "/remote/fortisslvpn"] {
-        let r = ctx
-            .guard(gw.exchange(&identity::build(
-                &identity,
-                "GET",
-                path,
-                &host,
-                &[("SVPNCOOKIE", cookie.as_str())],
-                None,
-            )))
-            .await?;
-        refresh_cookie(&r, &mut cookie);
-    }
-    let mut path = "/remote/fortisslvpn_xml".to_owned();
-    let mut xml = fortino_proto_sslvpn::http::Response::default();
-    for _hop in 0..3 {
-        xml = ctx
-            .guard(gw.exchange(&identity::build(
-                &identity,
-                "GET",
-                &path,
-                &host,
-                &[("SVPNCOOKIE", cookie.as_str())],
-                None,
-            )))
-            .await?;
-        refresh_cookie(&xml, &mut cookie);
-        if !matches!(xml.status, 301 | 302 | 303 | 307) {
-            break;
+    // From here the gateway holds a session for this login: whatever ends the attempt before
+    // the tunnel (a cancel, a timeout, a refusal) logs it out, so the gateway doesn't count it
+    // against the user until its idle timeout.
+    let fetched: Result<fortino_proto_sslvpn::http::Response, Failure> = async {
+        // VPN allocation: the login's own redirect target (`/remote/index`), then the portal page,
+        // as openfortivpn's `auth_request_vpn_allocation` does. Their status doesn't matter, but
+        // either may refresh the cookie.
+        for path in ["/remote/index", "/remote/fortisslvpn"] {
+            let r = ctx
+                .guard(gw.exchange(&identity::build(
+                    &identity,
+                    "GET",
+                    path,
+                    &host,
+                    &[("SVPNCOOKIE", cookie.as_str())],
+                    None,
+                )))
+                .await?;
+            refresh_cookie(&r, &mut cookie);
         }
-        // Follow a same-origin redirect (session activation), then ask for the XML again.
-        let loc = xml.header("location").unwrap_or("").to_owned();
-        let target = same_origin(&loc);
-        tracing::debug!(
-            status = xml.status,
-            same_origin = target.is_some(),
-            "tunnel settings redirected"
-        );
-        match target {
-            Some(t) if t.starts_with("/remote/login") => break,
-            Some(t) => {
-                let r = ctx
-                    .guard(gw.exchange(&identity::build(
-                        &identity,
-                        "GET",
-                        &t,
-                        &host,
-                        &[("SVPNCOOKIE", cookie.as_str())],
-                        None,
-                    )))
-                    .await?;
-                refresh_cookie(&r, &mut cookie);
-                path = "/remote/fortisslvpn_xml".into();
+        let mut path = "/remote/fortisslvpn_xml".to_owned();
+        let mut xml = fortino_proto_sslvpn::http::Response::default();
+        for _hop in 0..3 {
+            xml = ctx
+                .guard(gw.exchange(&identity::build(
+                    &identity,
+                    "GET",
+                    &path,
+                    &host,
+                    &[("SVPNCOOKIE", cookie.as_str())],
+                    None,
+                )))
+                .await?;
+            refresh_cookie(&xml, &mut cookie);
+            if !matches!(xml.status, 301 | 302 | 303 | 307) {
+                break;
             }
-            None => break,
+            // Follow a same-origin redirect (session activation), then ask for the XML again.
+            let loc = xml.header("location").unwrap_or("").to_owned();
+            let target = same_origin(&loc);
+            tracing::debug!(
+                status = xml.status,
+                same_origin = target.is_some(),
+                "tunnel settings redirected"
+            );
+            match target {
+                Some(t) if t.starts_with("/remote/login") => break,
+                Some(t) => {
+                    let r = ctx
+                        .guard(gw.exchange(&identity::build(
+                            &identity,
+                            "GET",
+                            &t,
+                            &host,
+                            &[("SVPNCOOKIE", cookie.as_str())],
+                            None,
+                        )))
+                        .await?;
+                    refresh_cookie(&r, &mut cookie);
+                    path = "/remote/fortisslvpn_xml".into();
+                }
+                None => break,
+            }
         }
+        Ok(xml)
     }
+    .await;
+    let xml = match fetched {
+        Ok(x) => x,
+        Err(f) => {
+            logout_from(&mut gw, &identity, &cookie).await;
+            return Err(f);
+        }
+    };
     let mut session = Session {
         gw,
         identity,
@@ -456,14 +475,19 @@ fn same_origin(loc: &str) -> Option<String> {
 
 /// Best-effort logout, bounded.
 async fn logout(s: &mut Session) {
-    let host = s.gw.host_header();
+    logout_from(&mut s.gw, &s.identity, &s.cookie).await;
+}
+
+/// Best-effort logout of the session `cookie` names, bounded.
+async fn logout_from(gw: &mut Gateway, identity: &ClientIdentity, cookie: &str) {
+    let host = gw.host_header();
     let req = identity::build(
-        &s.identity,
+        identity,
         "GET",
         "/remote/logout",
         &host,
-        &[("SVPNCOOKIE", s.cookie.as_str())],
+        &[("SVPNCOOKIE", cookie)],
         None,
     );
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), s.gw.exchange(&req)).await;
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), gw.exchange(&req)).await;
 }

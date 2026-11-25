@@ -53,6 +53,7 @@ impl From<fortino_tls::Failure> for Failure {
             fortino_tls::Failure::Trust(m) => Self::Trust(m),
             fortino_tls::Failure::Transport(m) => Self::Transport(m),
             fortino_tls::Failure::Backend(m) => Self::Backend(m),
+            fortino_tls::Failure::Unsupported(m) => Self::Unsupported(m),
         }
     }
 }

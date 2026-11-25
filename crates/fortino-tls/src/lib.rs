@@ -30,6 +30,9 @@ pub enum Failure {
     /// Local TLS configuration.
     #[error("{0}")]
     Backend(String),
+    /// The gateway wants something this client doesn't do (a client certificate).
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// How to verify the gateway.
@@ -472,8 +475,19 @@ pub fn classify(e: std::io::Error, what: &str) -> Failure {
                 rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
             )
         });
+    let client_cert = e
+        .get_ref()
+        .and_then(|i| i.downcast_ref::<rustls::Error>())
+        .is_some_and(|r| {
+            matches!(
+                r,
+                rustls::Error::AlertReceived(rustls::AlertDescription::CertificateRequired)
+            )
+        });
     if cert {
         Failure::Trust(format!("{what}: {e}"))
+    } else if client_cert {
+        Failure::Unsupported("the gateway requires a client certificate".into())
     } else {
         Failure::Transport(format!("TLS: {e}"))
     }
