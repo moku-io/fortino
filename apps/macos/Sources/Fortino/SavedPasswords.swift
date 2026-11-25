@@ -48,8 +48,17 @@ extension AppModel {
     /// typed for this attempt.
     func attemptUsername(_ profile: Profile, attempt: String?) -> String? {
         if let u = profile.spec.usernameHint { return u }
-        guard let t = typedUsername, t.attempt == attempt else { return nil }
-        return t.value
+        if let t = typedUsername, t.attempt == attempt { return t.value }
+        return profile.spec.savePassword == true ? savedPasswords[profile.id]?.username : nil
+    }
+
+    /// For a profile without a username that saves its password: the saved password's account,
+    /// so the sign-in doesn't ask for the username every time. Nil otherwise (the service then
+    /// uses the profile's username or asks).
+    func savedAccount(for profile: Profile) async -> String? {
+        guard profile.spec.usernameHint == nil, profile.spec.savePassword == true else { return nil }
+        await refreshSavedPassword(profile.id)
+        return savedPasswords[profile.id]?.username
     }
 
     /// The profile of `status`'s attempt, when it saves its password.
@@ -67,7 +76,11 @@ extension AppModel {
         guard let r = (try? JSONDecoder().decode(CLIEnvelope<AnswerResult>.self, from: out))?.result else {
             return .unavailable
         }
-        if r.answered { return nil }
+        if r.answered {
+            keychainAnsweredAttempt = attempt
+            await refreshSavedPassword(profile.id)
+            return nil
+        }
         switch r.reason {
         case "rejected": return .rejected
         case "unavailable": return .unavailable

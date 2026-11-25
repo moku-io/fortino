@@ -211,6 +211,10 @@ struct ConnectionSection: View {
                     } else {
                         VStack(alignment: .trailing, spacing: 6) {
                             Text(r.message).foregroundStyle(.red)
+                            if r.code == "auth_denied", model.keychainAnsweredAttempt == r.attemptId {
+                                Text("The saved password was refused. You'll be asked for it next time.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }
                             if model.lastAttemptNeedsEms(profile) {
                                 Button("Open EMS Setup…") {
                                     model.emsSetupProfileId = profile.id
@@ -469,6 +473,15 @@ struct ProfileEditor: View {
 
     private var errors: [String: String] { draft.errors }
 
+    /// Without a username the sign-in asks for one, unless a saved password names its account.
+    private var usernamePrompt: String {
+        if let p = profile, p.spec.savePassword == true, draft.savePassword,
+           let u = model.savedPasswords[p.id]?.username {
+            return "\(u) (saved password)"
+        }
+        return "Asked when connecting"
+    }
+
     private func fieldError(_ key: String) -> String? {
         if let e = errors[key], profile != nil || attempted || touched.contains(key) { return e }
         if let s = serverError, s.field?.hasSuffix(key) == true || (key == "ems" && s.field == "endpoint.ems") {
@@ -509,7 +522,7 @@ struct ProfileEditor: View {
             Section {
                 field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
                 field("Username", text: $draft.username, key: "username", focus: .username,
-                      prompt: "Asked when connecting")
+                      prompt: usernamePrompt)
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
                 Toggle("Save password in Keychain", isOn: $draft.savePassword)
                 if let p = profile, p.spec.savePassword == true, draft.savePassword {
@@ -519,8 +532,10 @@ struct ProfileEditor: View {
                 Text("Account")
             } footer: {
                 if draft.savePassword {
-                    Text("Fortino saves the password in your login keychain after it connects and fills it in next time. One-time codes are always asked for. Turning this off removes the saved password.")
+                    Text("Saved in your login keychain after you connect, and filled in next time. One-time codes are always asked for. Turning this off removes the saved password.")
                         .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             Section {
@@ -540,6 +555,8 @@ struct ProfileEditor: View {
                     Text("Server certificates are always verified. IPv6 traffic is never sent through the tunnel.")
                 }
                 .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             DebugOverridesBox(rows: $draft.debugOverrides)
         }
@@ -581,6 +598,10 @@ struct ProfileEditor: View {
                         .confirmationDialog("Delete \(p.spec.name)?", isPresented: $confirmDelete) {
                             Button("Delete", role: .destructive) {
                                 Task { serverError = await model.delete(p) }
+                            }
+                        } message: {
+                            if p.spec.savePassword == true {
+                                Text("Its saved password is also removed from your login keychain.")
                             }
                         }
                 }
@@ -671,20 +692,30 @@ struct SavedPasswordRow: View {
     var body: some View {
         LabeledContent("Saved password") {
             HStack {
-                Text(summary).foregroundStyle(.secondary)
+                if state?.rejected == true {
+                    Label {
+                        Text(summary).foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    }
+                } else {
+                    Text(summary).foregroundStyle(.secondary)
+                }
                 if state?.saved == true {
                     Button("Forget") { Task { await model.forgetSavedPassword(profile.id) } }
+                        .help("Removes the password from your login keychain")
                 }
             }
+            .help(state?.error ?? "")
         }
         .task(id: profile.revision) { await model.refreshSavedPassword(profile.id) }
     }
 
     private var summary: String {
         guard let s = state else { return "Checking…" }
-        if let e = s.error { return "Unknown: \(e)" }
-        guard s.saved else { return "Saved after the next connection" }
-        let who = s.username.map { " for \($0)" } ?? ""
-        return s.rejected ? "Rejected by the gateway; asked next time" : "Saved\(who)"
+        if s.error != nil { return "Keychain unavailable" }
+        guard s.saved else { return "Not saved yet" }
+        if s.rejected { return "Refused by the gateway; asked next time" }
+        return s.username.map { "Saved for \($0)" } ?? "Saved"
     }
 }

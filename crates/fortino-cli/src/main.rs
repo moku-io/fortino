@@ -822,8 +822,23 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
         &p.spec.name,
         p.spec.save_password && a.password_fd.is_none(),
     );
-    // The daemon uses the same rule; a username prompt replaces it.
-    let mut username = a.username.clone().or_else(|| p.spec.username_hint.clone());
+    // A profile without a username signs in as the saved password's account, so it isn't asked
+    // for every time. The daemon falls back to the profile's username the same way; a username
+    // prompt replaces it.
+    let saved_user = (p.spec.save_password && a.password_fd.is_none())
+        .then(|| store.info(&p.id.0).ok().flatten())
+        .flatten()
+        .map(|i| i.username);
+    let connect_user = a.username.clone().or_else(|| {
+        p.spec
+            .username_hint
+            .is_none()
+            .then_some(saved_user)
+            .flatten()
+    });
+    let mut username = connect_user
+        .clone()
+        .or_else(|| p.spec.username_hint.clone());
     let mut note = |n: String| {
         if !json {
             eprintln!("{n}");
@@ -843,7 +858,7 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             profile_id: p.id.clone(),
             revision: p.revision,
             request_key: uuid::Uuid::new_v4().to_string(),
-            username: a.username.clone(),
+            username: connect_user,
         })
         .await?;
     let attempt = r.attempt_id.clone();
@@ -1092,7 +1107,15 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
             if !p.spec.save_password {
                 let mut spec = p.spec.clone();
                 spec.save_password = true;
-                c.profile_update(p.id.clone(), p.revision, spec).await?;
+                // The password is saved either way; a connected profile can't change until it
+                // disconnects.
+                if let Err(e) = c.profile_update(p.id.clone(), p.revision, spec).await {
+                    eprintln!(
+                        "fortino: note: Save password stays off for {} ({}); turn it on with \
+                         fortino profile edit {} --save-password",
+                        p.spec.name, e.message, p.spec.name
+                    );
+                }
             }
             if json {
                 print_json(&serde_json::json!({"saved": true, "username": username}));

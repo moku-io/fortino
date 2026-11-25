@@ -49,6 +49,8 @@ final class AppModel: ObservableObject {
     var typedUsername: (attempt: String, value: String)?
     /// A typed password to save once its attempt connects. See SavedPasswords.swift.
     var pendingPasswordSave: PendingPasswordSave?
+    /// The attempt whose password prompt the keychain answered.
+    @Published var keychainAnsweredAttempt: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -218,6 +220,10 @@ final class AppModel: ObservableObject {
         // Keepalives run while connected, so the EMS state moves on connect and disconnect.
         if changed && (s.state == .connected || s.state == .idle) {
             Task { await self.refreshEmsStatus() }
+            // An attempt may have saved a password or marked a saved one refused.
+            if let p = savingProfile(for: s) {
+                Task { await self.refreshSavedPassword(p.id) }
+            }
         }
     }
 
@@ -319,7 +325,7 @@ final class AppModel: ObservableObject {
                 guard try await approveEmsBeforeConnecting(cur, client: c) else { return }
                 _ = try await c.connect(ConnectParams(
                     profileId: cur.id, revision: cur.revision,
-                    requestKey: UUID().uuidString, username: nil))
+                    requestKey: UUID().uuidString, username: await savedAccount(for: cur)))
             } catch {
                 report(error)
             }

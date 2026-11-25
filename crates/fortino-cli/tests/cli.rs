@@ -503,3 +503,45 @@ fn app_helper_answers_from_the_store_and_marks_a_refusal() {
     assert_eq!(json(&o)["result"]["reason"], "stale", "{o:?}");
     d.rt.block_on(c.disconnect(&attempt)).unwrap();
 }
+
+#[test]
+fn saved_password_account_signs_in_a_profile_without_username() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --save-password")),
+        0
+    );
+    let o =
+        d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --username alice --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    // No terminal and no --username: the saved password's account answers for the username,
+    // so neither the username nor the password is asked.
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --otp-fd 4 4<{}",
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("Using the password saved in"), "{o:?}");
+
+    assert_eq!(code(&d.run("disconnect")), 0);
+
+    // Saving for a connected profile whose option is off keeps the password; turning the
+    // option on waits for the disconnect, and the command says so instead of failing.
+    assert_eq!(
+        code(&d.run("profile add Other --host tg2.example.org --username bob")),
+        0
+    );
+    let pw = d.write("pw", "hunter2\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect Other --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Other --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("Save password stays off"), "{o:?}");
+    assert_eq!(creds(&d)[&profile_id(&d, "Other")]["username"], "bob");
+    assert_eq!(code(&d.run("disconnect")), 0);
+}

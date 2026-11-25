@@ -85,11 +85,13 @@ struct ChallengeView: View {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(profileName).font(.headline)
-                    Text(verbatim: gateway).font(.caption).foregroundStyle(.secondary)
+                    Text(verbatim: account.map { "\($0) · \(gateway)" } ?? gateway)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             } icon: {
                 Image(systemName: "lock.shield").font(.title2).foregroundStyle(.tint)
             }
+            savedPasswordNotice
             Text(challenge.prompt).foregroundStyle(.secondary)
             Group {
                 if challenge.kind.isSecret {
@@ -121,18 +123,54 @@ struct ChallengeView: View {
         .onAppear { focused = true }
     }
 
+    /// Above the prompt: why the keychain didn't answer, or that it did.
+    /// The account signing in, once known (not on the username prompt itself).
+    private var account: String? {
+        guard challenge.kind != .username, let st = model.status,
+              let p = model.profiles.first(where: { $0.id == st.profileId }) else { return nil }
+        return model.attemptUsername(p, attempt: st.attemptId)
+    }
+
+    /// The keychain answered this attempt's password (shown on the code prompt). Read live: the
+    /// keychain helper reports back only once the gateway has asked for the code.
+    private var passwordFromKeychain: Bool {
+        challenge.kind == .otp && model.status?.attemptId != nil
+            && model.keychainAnsweredAttempt == model.status?.attemptId
+    }
+
+    @ViewBuilder private var savedPasswordNotice: some View {
+        switch saved {
+        case .rejected:
+            notice("The gateway refused the saved password.")
+        case .unavailable:
+            notice("The saved password couldn't be read from your keychain.")
+        case .willSave, nil:
+            if passwordFromKeychain {
+                Label("Password filled in from your keychain.", systemImage: "key.fill")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func notice(_ text: String) -> some View {
+        Label {
+            Text(text).foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        .font(.callout)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// Below the field: whether to keep the typed password.
     @ViewBuilder private var savedPasswordOptions: some View {
         switch saved {
         case .willSave:
             Toggle("Save in Keychain after connecting", isOn: $remember)
         case .rejected:
-            Text("The gateway didn't accept the saved password.")
-                .font(.callout).foregroundStyle(.secondary)
             Toggle("Replace the saved password after connecting", isOn: $remember)
-        case .unavailable:
-            Text("The saved password couldn't be read from the keychain.")
-                .font(.callout).foregroundStyle(.secondary)
-        case nil:
+        case .unavailable, nil:
             EmptyView()
         }
     }
