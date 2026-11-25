@@ -200,6 +200,9 @@ pub struct FakeWorkerConfig {
     pub step_delay_ms: u64,
     /// Scripted failure.
     pub fail: Option<FakeFailure>,
+    /// The code prompt offers a push: an empty answer is approved after this many
+    /// milliseconds, as a user approving it on the phone. `None`: no push offered.
+    pub push_approval_ms: Option<u64>,
 }
 
 impl Default for FakeWorkerConfig {
@@ -219,6 +222,7 @@ impl Default for FakeWorkerConfig {
             block_ipv6: true,
             step_delay_ms: 50,
             fail: None,
+            push_approval_ms: None,
         }
     }
 }
@@ -290,13 +294,22 @@ impl FakeRun {
     }
 
     async fn ask(&mut self, kind: ChallengeKind, prompt: &str) -> Result<Secret, Stop> {
+        self.ask_with(kind, prompt, false).await
+    }
+
+    async fn ask_with(
+        &mut self,
+        kind: ChallengeKind,
+        prompt: &str,
+        push: bool,
+    ) -> Result<Secret, Stop> {
         self.next_challenge += 1;
         let id = format!("c{}", self.next_challenge);
         self.emit(WorkerEvent::Challenge {
             id: id.clone(),
             kind,
             prompt: prompt.into(),
-            push: false,
+            push,
         })
         .await?;
         loop {
@@ -356,9 +369,15 @@ impl FakeRun {
             return Err(fail(ErrorCode::AuthDenied, "credentials rejected"));
         }
         if let Some(expected) = &s.otp {
-            let otp = self.ask(ChallengeKind::Otp, "Token code").await?;
+            let push = s.push_approval_ms;
+            let otp = self
+                .ask_with(ChallengeKind::Otp, "Token code", push.is_some())
+                .await?;
             self.step().await?;
-            if otp.expose() != expected {
+            if let (Some(ms), true) = (push, otp.expose().is_empty()) {
+                // Waiting for the approval on the phone.
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            } else if otp.expose() != expected {
                 return Err(fail(ErrorCode::AuthDenied, "token code rejected"));
             }
         }

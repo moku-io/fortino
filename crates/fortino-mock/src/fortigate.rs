@@ -412,7 +412,10 @@ fn logincheck(st: &Mutex<State>, sc: &Scenario, req: &Request) -> Response {
             .iter()
             .find(|u| u.username == expected_user)
             .and_then(|u| u.otp.clone());
-        return if expected_user == user && otp.as_deref() == Some(code.as_str()) {
+        // With push offered, no code means "send a push": the mock approves it at once, as a
+        // gateway answers once the user approved it on the phone.
+        let pushed = sc.login.tokeninfo.starts_with("ftm_push") && code.is_empty();
+        return if expected_user == user && (pushed || otp.as_deref() == Some(code.as_str())) {
             issue(&mut s)
         } else {
             denied()

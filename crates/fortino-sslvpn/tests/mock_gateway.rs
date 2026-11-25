@@ -416,3 +416,20 @@ async fn code_prompt_says_when_a_push_is_offered() {
         }
     }
 }
+
+/// Send Push: an empty answer to a code prompt that offers a push signs in once approved.
+#[tokio::test]
+async fn an_empty_code_signs_in_with_a_push() {
+    let mut sc = scenario();
+    sc.login.tokeninfo = "ftm_push".into();
+    let mut r = start(sc).await;
+    let up = drive(
+        &mut r.h,
+        &[
+            (ChallengeKind::Password, "hunter2"),
+            (ChallengeKind::Otp, ""),
+        ],
+    )
+    .await;
+    assert!(matches!(up, WorkerEvent::Up(_)), "{up:?}");
+}

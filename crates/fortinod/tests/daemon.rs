@@ -818,3 +818,36 @@ async fn oversized_answer_is_refused_not_dropped() {
     assert_eq!(e.code, ErrorCode::TooLarge);
     assert!(c.status().await.is_ok(), "the connection survives");
 }
+
+/// Waiting for a push approval on the phone takes longer than a gateway request: the empty
+/// answer to a code prompt that offers a push gets the prompt's time, not the progress deadline.
+#[tokio::test]
+async fn push_approval_gets_the_prompts_time() {
+    let timeouts = Timeouts {
+        transport: Duration::from_secs(1),
+        challenge: Duration::from_secs(5),
+        shutdown: Duration::from_secs(2),
+    };
+    let h = start(fake(|f| f.push_approval_ms = Some(2500)), timeouts).await;
+    let mut c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    c.connect_profile(&connect_params(&p, "k1")).await.unwrap();
+    answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
+    let st = wait_for(&mut rx, |s| {
+        s.challenge
+            .as_ref()
+            .is_some_and(|ch| ch.kind == ChallengeKind::Otp)
+    })
+    .await;
+    let ch = st.challenge.unwrap();
+    assert!(ch.push, "the code prompt says a push is offered");
+    c.respond(st.attempt_id.as_deref().unwrap(), &ch.id, "".into())
+        .await
+        .unwrap();
+    let st = wait_for(&mut rx, |s| {
+        matches!(s.state, State::Connected | State::Idle)
+    })
+    .await;
+    assert_eq!(st.state, State::Connected, "{:?}", st.last_result);
+}
