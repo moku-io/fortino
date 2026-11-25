@@ -435,6 +435,15 @@ impl<R: Runner> NetPlatform for MacNet<R> {
             )));
         }
         *undo = Undo::ReleasePf { token };
+        // The block lives in an anchor below `com.apple/`, which only a main ruleset that
+        // evaluates `anchor "com.apple/*"` (the stock /etc/pf.conf) reaches. Without it IPv6
+        // would leak while the app says it is blocked; the reference is released on revert.
+        let rules = self.run(PFCTL, &[s("-s"), s("rules")], None)?;
+        if !rules.stdout.contains("anchor \"com.apple/*\"") {
+            return Err(PlatformError::Unsupported(
+                "pf's main ruleset doesn't evaluate Apple's anchors (/etc/pf.conf was replaced), so IPv6 can't be blocked".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -682,6 +691,9 @@ mod tests {
             stdout: String::new(),
             stderr: "pf enabled\nToken : 13445936287406718347\n".into(),
         });
+        j.platform().runner().replies.push_back(ok(
+            "scrub-anchor \"com.apple/*\" all fragment reassemble\nanchor \"com.apple/*\" all\n",
+        ));
         j.apply(&NetChange::BlockIpv6).unwrap();
         let journal = std::fs::read_to_string(dir.path().join("j.json")).unwrap();
         assert!(journal.contains("13445936287406718347"), "{journal}");
@@ -720,6 +732,27 @@ mod tests {
             token: Some("1".into()),
         })
         .unwrap();
+    }
+
+    /// A main ruleset that doesn't evaluate Apple's anchors (pf.conf replaced by another
+    /// firewall) can't carry the block: refused, and the reference taken is released.
+    #[test]
+    fn ipv6_block_needs_the_anchor_to_be_evaluated() {
+        let mut m = MacNet::with_runner(Rec::default());
+        let mut undo = m.prepare(&NetChange::BlockIpv6).unwrap();
+        m.runner().replies.push_back(ok(""));
+        m.runner().replies.push_back(ok("Token : 42\n"));
+        m.runner().replies.push_back(ok("block drop all\n"));
+        let e = m
+            .apply_recorded(&NetChange::BlockIpv6, &mut undo)
+            .unwrap_err();
+        assert!(matches!(e, PlatformError::Unsupported(_)), "{e}");
+        assert_eq!(
+            undo,
+            Undo::ReleasePf {
+                token: Some("42".into())
+            }
+        );
     }
 
     #[test]
