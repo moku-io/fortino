@@ -800,3 +800,21 @@ async fn clients_that_leave_free_their_connection() {
     .await;
     assert!(ok.is_ok(), "new connections refused after clients left");
 }
+
+/// An answer too large for one message is refused with `too_large`; the connection stays up.
+#[tokio::test]
+async fn oversized_answer_is_refused_not_dropped() {
+    let h = start(fake(|_| {}), quick()).await;
+    let c = h.client().await;
+    for n in 0..20 {
+        let mut spec = ProfileSpec::new(format!("P{n}"), "vpn.example.org".parse().unwrap());
+        for i in 0..4 {
+            spec.debug_ems_sysinfo
+                .insert(format!("K{i}"), "v".repeat(3900));
+        }
+        c.profile_create(spec).await.unwrap();
+    }
+    let e = c.profile_list().await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TooLarge);
+    assert!(c.status().await.is_ok(), "the connection survives");
+}

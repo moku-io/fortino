@@ -214,9 +214,18 @@ async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<A
         let result = conn.dispatch(req).await;
         drop(frame);
         let fatal = matches!(&result, Err(e) if e.code == ErrorCode::UnsupportedVersion);
-        let Some(bytes) = encode(&response(&id, result)) else {
+        let Some(mut bytes) = encode(&response(&id, result)) else {
             break;
         };
+        // An answer the frame limit can't carry would make the writer drop the connection,
+        // which the client would report as a lost service. Say what happened instead.
+        if bytes.len() > MAX_CONTROL_FRAME {
+            let e = ProtoError::new(ErrorCode::TooLarge, "the answer is too large to send");
+            let Some(b) = encode(&response(&id, Err(e))) else {
+                break;
+            };
+            bytes = b;
+        }
         if conn.out.send(bytes).await.is_err() || fatal {
             break;
         }

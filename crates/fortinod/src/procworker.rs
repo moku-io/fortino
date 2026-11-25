@@ -17,7 +17,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
 use fortino_core::ErrorCode;
-use fortino_core::framing::{read_frame, write_frame};
+use fortino_core::framing::{FrameReader, write_frame};
 use fortino_core::worker::{
     Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerHandle,
 };
@@ -326,6 +326,7 @@ impl ProcessWorker {
         let mut stopping = false;
         let mut stop_deadline: Option<tokio::time::Instant> = None;
         let mut timed_out = false;
+        let mut frames = FrameReader::new(MAX_WORKER_FRAME);
         let result = loop {
             let deadline = async {
                 match stop_deadline {
@@ -356,7 +357,7 @@ impl ProcessWorker {
                         break backend("tunnel worker channel closed");
                     }
                 }
-                f = read_frame(&mut rd, MAX_WORKER_FRAME) => {
+                f = frames.next(&mut rd) => {
                     let frame = match f {
                         Ok(Some(f)) => f,
                         // Worker-side EOF: the session reconciles network state.
