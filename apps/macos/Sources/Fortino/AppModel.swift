@@ -325,7 +325,7 @@ final class AppModel: ObservableObject {
                 guard try await approveEmsBeforeConnecting(cur, client: c) else { return }
                 _ = try await c.connect(ConnectParams(
                     profileId: cur.id, revision: cur.revision,
-                    requestKey: UUID().uuidString, username: await savedAccount(for: cur)))
+                    requestKey: UUID().uuidString, username: nil))
             } catch {
                 report(error)
             }

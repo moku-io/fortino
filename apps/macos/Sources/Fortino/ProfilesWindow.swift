@@ -414,9 +414,12 @@ struct Draft {
         if case let .error(m) = checkPort(port) { e["port"] = m }
         if case let .failure(err) = parseEms(ems) { e["ems"] = err.message }
         if case let .error(m) = checkRealm(realm) { e["realm"] = m }
+        if savePassword && !hasUsername { e["username"] = "Required while Save password is on." }
         if let m = debugOverridesError(debugOverrides) { e["debug"] = m }
         return e
     }
+
+    var hasUsername: Bool { !username.trimmingCharacters(in: .whitespaces).isEmpty }
 
     /// The effective EMS port shown under the field.
     var emsHint: String {
@@ -473,15 +476,6 @@ struct ProfileEditor: View {
 
     private var errors: [String: String] { draft.errors }
 
-    /// Without a username the sign-in asks for one, unless a saved password names its account.
-    private var usernamePrompt: String {
-        if let p = profile, p.spec.savePassword == true, draft.savePassword,
-           let u = model.savedPasswords[p.id]?.username {
-            return "\(u) (saved password)"
-        }
-        return "Asked when connecting"
-    }
-
     private func fieldError(_ key: String) -> String? {
         if let e = errors[key], profile != nil || attempted || touched.contains(key) { return e }
         if let s = serverError, s.field?.hasSuffix(key) == true || (key == "ems" && s.field == "endpoint.ems") {
@@ -522,21 +516,30 @@ struct ProfileEditor: View {
             Section {
                 field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
                 field("Username", text: $draft.username, key: "username", focus: .username,
-                      prompt: usernamePrompt)
+                      prompt: draft.savePassword ? "Required" : "Asked when connecting")
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
+                // A password is saved for one account, so the toggle waits for the username. It
+                // stays usable while on, so clearing the username can be resolved either way.
                 Toggle("Save password in Keychain", isOn: $draft.savePassword)
+                    .disabled(!draft.hasUsername && !draft.savePassword)
+                    .help(draft.hasUsername || draft.savePassword
+                          ? "" : "Enter the username you sign in with first")
                 if let p = profile, p.spec.savePassword == true, draft.savePassword {
                     SavedPasswordRow(model: model, profile: p)
                 }
             } header: {
                 Text("Account")
             } footer: {
-                if draft.savePassword {
-                    Text("Saved in your login keychain after you connect, and filled in next time. One-time codes are always asked for. Turning this off removes the saved password.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Group {
+                    if draft.savePassword {
+                        Text("Saved in your login keychain after you connect, and filled in next time. One-time codes are always asked for. Turning this off removes the saved password.")
+                    } else if !draft.hasUsername {
+                        Text("To save the password, enter the username you sign in with.")
+                    }
                 }
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Section {
                 Picker("Routing", selection: $draft.policy) {
@@ -715,6 +718,9 @@ struct SavedPasswordRow: View {
         guard let s = state else { return "Checking…" }
         if s.error != nil { return "Keychain unavailable" }
         guard s.saved else { return "Not saved yet" }
+        if let u = s.username, let mine = profile.spec.usernameHint, u != mine {
+            return "Saved for \(u), not \(mine); asked next time"
+        }
         if s.rejected { return "Refused by the gateway; asked next time" }
         return s.username.map { "Saved for \($0)" } ?? "Saved"
     }

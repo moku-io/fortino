@@ -101,7 +101,8 @@ enum PasswordCmd {
     Save {
         /// Profile name or ID.
         name: String,
-        /// Account (otherwise the profile's default username, otherwise prompt).
+        /// The username you sign in with, for a profile that has none yet (it becomes the
+        /// profile's username). Otherwise it must match the profile's.
         #[arg(long)]
         username: Option<String>,
         /// Read the password from one line of standard input instead of the terminal.
@@ -163,8 +164,9 @@ struct AddArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
-    /// Save the password in your login keychain after the first successful connection.
-    #[arg(long)]
+    /// Save the password in your login keychain after the first successful connection
+    /// (needs --username).
+    #[arg(long, requires = "username")]
     save_password: bool,
 }
 
@@ -226,7 +228,8 @@ struct EditArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
-    /// Save the password in your login keychain after the next successful connection.
+    /// Save the password in your login keychain after the next successful connection (the
+    /// profile needs a username).
     #[arg(long, conflicts_with = "no_save_password")]
     save_password: bool,
     /// Stop saving the password and remove the saved one.
@@ -481,6 +484,7 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
                 spec.dns_mode = d.into();
             }
             spec.save_password = a.save_password;
+            require_username_for_saved_password(&spec)?;
             let p = c.profile_create(spec).await?;
             if json {
                 print_json(&p);
@@ -517,6 +521,7 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
         ProfileCmd::Edit(e) => {
             let p = c.profile_get(&e.name).await?;
             let spec = apply_edit(&p, e)?;
+            require_username_for_saved_password(&spec)?;
             let u = c.profile_update(p.id.clone(), p.revision, spec).await?;
             let forgot = p.spec.save_password && !u.spec.save_password;
             let forgot = forgot && forget_saved(&u.id.0);
@@ -601,6 +606,25 @@ fn apply_edit(p: &Profile, e: EditArgs) -> Result<ProfileSpec, Failure> {
         s.save_password = false;
     }
     Ok(s)
+}
+
+/// Save password needs the username it is saved for. Checked here for a clear message; the
+/// service enforces the same rule.
+fn require_username_for_saved_password(spec: &ProfileSpec) -> Result<(), Failure> {
+    let has_user = spec
+        .username_hint
+        .as_deref()
+        .is_some_and(|u| !u.trim().is_empty());
+    if spec.save_password && !has_user {
+        return Err(Failure(
+            ProtoError::new(
+                ErrorCode::InvalidProfile,
+                "Save password needs the username you sign in with: add --username NAME",
+            )
+            .with_field("usernameHint"),
+        ));
+    }
+    Ok(())
 }
 
 /// Removes a profile's saved password; a failure is reported, not fatal. True when one existed.
@@ -822,23 +846,8 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
         &p.spec.name,
         p.spec.save_password && a.password_fd.is_none(),
     );
-    // A profile without a username signs in as the saved password's account, so it isn't asked
-    // for every time. The daemon falls back to the profile's username the same way; a username
-    // prompt replaces it.
-    let saved_user = (p.spec.save_password && a.password_fd.is_none())
-        .then(|| store.info(&p.id.0).ok().flatten())
-        .flatten()
-        .map(|i| i.username);
-    let connect_user = a.username.clone().or_else(|| {
-        p.spec
-            .username_hint
-            .is_none()
-            .then_some(saved_user)
-            .flatten()
-    });
-    let mut username = connect_user
-        .clone()
-        .or_else(|| p.spec.username_hint.clone());
+    // The daemon uses the same rule; a username prompt replaces it.
+    let mut username = a.username.clone().or_else(|| p.spec.username_hint.clone());
     let mut note = |n: String| {
         if !json {
             eprintln!("{n}");
@@ -858,7 +867,7 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             profile_id: p.id.clone(),
             revision: p.revision,
             request_key: uuid::Uuid::new_v4().to_string(),
-            username: connect_user,
+            username: a.username.clone(),
         })
         .await?;
     let attempt = r.attempt_id.clone();
@@ -1074,14 +1083,53 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
             stdin,
         } => {
             let p = c.profile_get(&name).await?;
-            let username = match username.or_else(|| p.spec.username_hint.clone()) {
-                Some(u) => u,
-                None => prompt::ask(ChallengeKind::Username, "Username").ok_or_else(|| {
-                    Failure(ProtoError::new(
-                        ErrorCode::InteractionRequired,
-                        "username required: pass --username",
-                    ))
-                })?,
+            // The password belongs to the profile's username. A profile without one gets it here,
+            // before anything is saved, so a password is never kept for an account the profile
+            // doesn't sign in as.
+            let username = match (&p.spec.username_hint, username) {
+                (Some(h), Some(u)) if *h != u => {
+                    return Err(Failure(
+                        ProtoError::new(
+                            ErrorCode::InvalidProfile,
+                            format!(
+                                "{} signs in as {h}; to save a password for {u}, change its \
+                                 username first: fortino profile edit {} --username {u}",
+                                p.spec.name, p.spec.name
+                            ),
+                        )
+                        .with_field("usernameHint"),
+                    ));
+                }
+                (Some(h), _) => h.clone(),
+                (None, Some(u)) => u,
+                (None, None) => {
+                    prompt::ask(ChallengeKind::Username, "Username").ok_or_else(|| {
+                        Failure(ProtoError::new(
+                            ErrorCode::InteractionRequired,
+                            "this profile has no username: pass --username",
+                        ))
+                    })?
+                }
+            };
+            let p = if p.spec.username_hint.is_none() {
+                let mut spec = p.spec.clone();
+                spec.username_hint = Some(username.clone());
+                spec.save_password = true;
+                c.profile_update(p.id.clone(), p.revision, spec)
+                    .await
+                    .map_err(|e| {
+                        if e.code == ErrorCode::ProfileInUse {
+                            Failure(ProtoError::new(
+                                ErrorCode::ProfileInUse,
+                                "disconnect first: saving the password also sets this profile's \
+                                 username",
+                            ))
+                        } else {
+                            Failure(e)
+                        }
+                    })?
+            } else {
+                p
             };
             let pw = if stdin {
                 read_stdin_line()?

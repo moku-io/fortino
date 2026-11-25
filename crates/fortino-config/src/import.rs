@@ -492,11 +492,15 @@ fn parse_connection(
     if c.child("ui").is_some() {
         omitted.push("ui preferences".into());
     }
-    // The source's saved password itself is discarded above; only the choice carries over, and
-    // the password is asked for, then saved, on the first connection.
-    let save_password = c
-        .child("save_password")
-        .is_some_and(|n| bool01(n) == Ok(true));
+    // Saving a password needs the profile's username, and the source's account is discarded
+    // above, so the choice can't carry over; the preview says how to turn it on.
+    if c.child("save_password")
+        .is_some_and(|n| bool01(n) == Ok(true))
+    {
+        omitted.push(
+            "save_password preference (add your username, then turn on Save password)".into(),
+        );
+    }
     for k in ["auto_connect", "keep_running", "prompt_username"] {
         if c.child(k).is_some() {
             omitted.push(format!("{k} preference"));
@@ -512,7 +516,6 @@ fn parse_connection(
     let spec = ProfileSpec {
         description,
         endpoint,
-        save_password,
         ..ProfileSpec::new(name, Host::Dns(String::new()))
     };
     // Validate the canonical spec the daemon will see (realm, text limits).
@@ -623,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn save_password_choice_is_kept_without_the_password() {
+    fn save_password_choice_is_reported_not_imported() {
         let x = wrap(
             "<connection><name>A</name><server>a.example</server>\
              <password>SENTINEL_PASS</password><save_password>1</save_password></connection>\
@@ -634,13 +637,18 @@ mod tests {
         );
         let p = parse(x.as_bytes()).unwrap();
         assert!(!format!("{p:?}").contains("SENTINEL_PASS"));
-        let saved: Vec<bool> = p.entries.iter().map(|e| e.spec.save_password).collect();
-        assert_eq!(saved, [true, false, false]);
-        assert!(
-            p.entries
-                .iter()
-                .all(|e| !e.omitted.iter().any(|o| o.contains("save_password")))
-        );
+        // No username survives the import, and Save password needs one.
+        assert!(p.entries.iter().all(|e| !e.spec.save_password));
+        let reported: Vec<bool> = p
+            .entries
+            .iter()
+            .map(|e| {
+                e.omitted
+                    .iter()
+                    .any(|o| o.contains("turn on Save password"))
+            })
+            .collect();
+        assert_eq!(reported, [true, false, false]);
     }
 
     #[test]

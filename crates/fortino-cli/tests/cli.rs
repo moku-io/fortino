@@ -505,17 +505,33 @@ fn app_helper_answers_from_the_store_and_marks_a_refusal() {
 }
 
 #[test]
-fn saved_password_account_signs_in_a_profile_without_username() {
+fn save_password_needs_the_profile_username() {
     let d = daemon();
-    assert_eq!(
-        code(&d.run("profile add GW --host tg2.example.org --save-password")),
-        0
+    // Turning it on without a username is refused with a clear message.
+    let o = d.run("profile add GW --host tg2.example.org --save-password");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert_eq!(code(&d.run("profile add GW --host tg2.example.org")), 0);
+    let o = d.run("profile edit GW --save-password");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert!(
+        stderr(&o).contains("needs the username you sign in with"),
+        "{o:?}"
     );
+
+    // Saving a password for a profile without one sets the username and the option.
     let o =
         d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --username alice --stdin");
     assert_eq!(code(&o), 0, "{o:?}");
-    // No terminal and no --username: the saved password's account answers for the username,
-    // so neither the username nor the password is asked.
+    let v = json(&d.run("--json profile show GW"));
+    assert_eq!(v["result"]["spec"]["usernameHint"], "alice");
+    assert_eq!(v["result"]["spec"]["savePassword"], true);
+    // Another account than the profile's is refused, and nothing changes.
+    let o = d.sh("printf 'x\\n' | \"$FORTINO_CLI\" password save GW --username bob --stdin");
+    assert_eq!(code(&o), 2, "{o:?}");
+    assert!(stderr(&o).contains("signs in as alice"), "{o:?}");
+    assert_eq!(creds(&d)[&profile_id(&d, "GW")]["password"], "hunter2");
+
+    // Neither the username nor the password is asked: only the code.
     let otp = d.write("otp", "123456\n");
     let o = d.sh(&format!(
         "\"$FORTINO_CLI\" connect GW --otp-fd 4 4<{}",
@@ -523,25 +539,39 @@ fn saved_password_account_signs_in_a_profile_without_username() {
     ));
     assert_eq!(code(&o), 0, "{o:?}");
     assert!(stderr(&o).contains("Using the password saved in"), "{o:?}");
-
     assert_eq!(code(&d.run("disconnect")), 0);
 
-    // Saving for a connected profile whose option is off keeps the password; turning the
-    // option on waits for the disconnect, and the command says so instead of failing.
-    assert_eq!(
-        code(&d.run("profile add Other --host tg2.example.org --username bob")),
-        0
-    );
+    // A connected profile without a username can't take one now: nothing is saved.
+    assert_eq!(code(&d.run("profile add Other --host tg2.example.org")), 0);
     let pw = d.write("pw", "hunter2\n");
     let o = d.sh(&format!(
-        "\"$FORTINO_CLI\" connect Other --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        "\"$FORTINO_CLI\" connect Other --username bob --password-fd 3 --otp-fd 4 3<{} 4<{}",
         pw.display(),
         otp.display()
     ));
     assert_eq!(code(&o), 0, "{o:?}");
-    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Other --stdin");
+    let o =
+        d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Other --username bob --stdin");
+    assert_ne!(code(&o), 0, "{o:?}");
+    assert!(stderr(&o).contains("disconnect first"), "{o:?}");
+    assert!(creds(&d).get(profile_id(&d, "Other")).is_none());
+    assert_eq!(code(&d.run("disconnect")), 0);
+
+    // With a username but the option off, a connected profile keeps the password and says the
+    // option waits for the disconnect.
+    assert_eq!(
+        code(&d.run("profile add Third --host tg2.example.org --username carol")),
+        0
+    );
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect Third --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save Third --stdin");
     assert_eq!(code(&o), 0, "{o:?}");
     assert!(stderr(&o).contains("Save password stays off"), "{o:?}");
-    assert_eq!(creds(&d)[&profile_id(&d, "Other")]["username"], "bob");
+    assert_eq!(creds(&d)[&profile_id(&d, "Third")]["username"], "carol");
     assert_eq!(code(&d.run("disconnect")), 0);
 }

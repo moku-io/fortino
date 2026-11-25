@@ -4,8 +4,7 @@ What changed in each release of Fortino. Each section is also the release's note
 
 ## Unreleased
 
-- **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A profile without a username signs in as the saved password's account, so only the one-time code is asked. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
-- **Import.** A FortiClient connection set to save its password imports with Save password on; the password itself is never imported.
+- **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A password is saved for the profile's username, so the option needs one. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
 
 ## 0.7.0
 

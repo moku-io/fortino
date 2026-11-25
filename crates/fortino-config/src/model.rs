@@ -303,8 +303,9 @@ pub struct ProfileSpec {
     pub dns_mode: DnsMode,
     /// Keep the password in the user's secret store (the login Keychain on macOS) and answer the
     /// password prompt with it. Only the client in the user's session reads or writes the
-    /// secret; the profile store holds just this choice. Left out when false, so an older
-    /// service still accepts the profile.
+    /// secret; the profile store holds just this choice. Requires `username_hint`: a password is
+    /// saved for one account, and that account lives in the profile, not in the secret store.
+    /// Left out when false, so an older service still accepts the profile.
     #[serde(default, skip_serializing_if = "is_false")]
     pub save_password: bool,
     /// Administrator-provisioned trust configuration (CA bundle) ID.
@@ -408,6 +409,12 @@ impl ProfileSpec {
         let name = normalize_name(&self.name).map_err(|c| FieldError::new("name", c))?;
         let description = clean_text("description", self.description)?;
         let username_hint = clean_text("usernameHint", self.username_hint)?;
+        if self.save_password && username_hint.is_none() {
+            return Err(FieldError::new(
+                "usernameHint",
+                "required_for_save_password",
+            ));
+        }
         if self.endpoint.port == 0 {
             return Err(FieldError::new("endpoint.port", "invalid_port"));
         }
@@ -481,10 +488,28 @@ mod tests {
         assert!(json.get("savePassword").is_none(), "{json}");
         let mut on = spec;
         on.save_password = true;
+        on.username_hint = Some("alice".into());
         let json = serde_json::to_value(&on).unwrap();
         assert_eq!(json["savePassword"], true);
         let back: ProfileSpec = serde_json::from_value(json).unwrap();
         assert!(back.save_password);
+        assert!(back.clone().validate().is_ok());
+    }
+
+    #[test]
+    fn save_password_needs_a_username() {
+        let mut s = ProfileSpec::new("A", "vpn.example.com".parse().unwrap());
+        s.save_password = true;
+        let e = s.clone().validate().unwrap_err();
+        assert_eq!(
+            (e.field.as_str(), e.code.as_str()),
+            ("usernameHint", "required_for_save_password")
+        );
+        // A blank username is no username.
+        s.username_hint = Some("  ".into());
+        assert!(s.clone().validate().is_err());
+        s.username_hint = Some("alice".into());
+        assert!(s.validate().is_ok());
     }
 
     #[test]
