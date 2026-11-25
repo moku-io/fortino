@@ -138,6 +138,20 @@ if let d0 = try? JSONEncoder().encode(spec),
     check(false, "DNS mode encodes")
 }
 
+// Save password: left out when off (older services reject unknown fields); on round-trips.
+var savingSpec = spec
+savingSpec.savePassword = true
+if let d0 = try? JSONEncoder().encode(spec),
+   let o0 = try? JSONSerialization.jsonObject(with: d0) as? [String: Any],
+   let d1 = try? JSONEncoder().encode(savingSpec),
+   let o1 = try? JSONSerialization.jsonObject(with: d1) as? [String: Any] {
+    check(o0["savePassword"] == nil, "save password omitted when off")
+    check(o1["savePassword"] as? Bool == true, "save password encoded")
+    check((try? JSONDecoder().decode(ProfileSpec.self, from: d1))?.savePassword == true, "save password decodes")
+} else {
+    check(false, "save password encodes")
+}
+
 // Live daemon round trip, when FORTINO_SOCKET points at a development daemon.
 if let path = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] {
     let sem = DispatchSemaphore(value: 0)

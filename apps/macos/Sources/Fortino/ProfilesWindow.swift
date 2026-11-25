@@ -382,6 +382,7 @@ struct Draft {
     var description = ""
     var policy: IpPolicy = .splitIpv4
     var dns: DnsMode = .gateway
+    var savePassword = false
     /// Debug only: EMS SYSINFO overrides. See DebugOverridesBox.swift.
     var debugOverrides: [DebugKV] = []
 
@@ -398,6 +399,7 @@ struct Draft {
         description = s.description ?? ""
         policy = s.ipPolicy
         dns = s.dnsMode ?? .gateway
+        savePassword = s.savePassword ?? false
         debugOverrides = debugOverrideRows(s.debugEmsSysinfo)
     }
 
@@ -435,6 +437,7 @@ struct Draft {
         s.description = t(description)
         s.ipPolicy = policy
         s.dnsMode = dns == .gateway ? nil : dns
+        s.savePassword = savePassword ? true : nil
         s.debugEmsSysinfo = debugOverridesMap(debugOverrides)
         return s
     }
@@ -503,11 +506,22 @@ struct ProfileEditor: View {
                 }
                 field("Realm", text: $draft.realm, key: "realm", focus: .realm, prompt: "Optional")
             }
-            Section("Account") {
+            Section {
                 field("Name", text: $draft.name, key: "name", focus: .name, prompt: "Required")
                 field("Username", text: $draft.username, key: "username", focus: .username,
                       prompt: "Asked when connecting")
                 TextField("Description", text: $draft.description, prompt: Text("Optional"))
+                Toggle("Save password in Keychain", isOn: $draft.savePassword)
+                if let p = profile, p.spec.savePassword == true, draft.savePassword {
+                    SavedPasswordRow(model: model, profile: p)
+                }
+            } header: {
+                Text("Account")
+            } footer: {
+                if draft.savePassword {
+                    Text("Fortino saves the password in your login keychain after it connects and fills it in next time. One-time codes are always asked for. Turning this off removes the saved password.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section {
                 Picker("Routing", selection: $draft.policy) {
@@ -644,5 +658,33 @@ struct ProfileEditor: View {
         }
         if profile == nil { onDone() }
         return nil
+    }
+}
+
+/// What the keychain holds for a profile, with a way to remove it.
+struct SavedPasswordRow: View {
+    @ObservedObject var model: AppModel
+    let profile: Profile
+
+    private var state: SavedPasswordState? { model.savedPasswords[profile.id] }
+
+    var body: some View {
+        LabeledContent("Saved password") {
+            HStack {
+                Text(summary).foregroundStyle(.secondary)
+                if state?.saved == true {
+                    Button("Forget") { Task { await model.forgetSavedPassword(profile.id) } }
+                }
+            }
+        }
+        .task(id: profile.revision) { await model.refreshSavedPassword(profile.id) }
+    }
+
+    private var summary: String {
+        guard let s = state else { return "Checking…" }
+        if let e = s.error { return "Unknown: \(e)" }
+        guard s.saved else { return "Saved after the next connection" }
+        let who = s.username.map { " for \($0)" } ?? ""
+        return s.rejected ? "Rejected by the gateway; asked next time" : "Saved\(who)"
     }
 }

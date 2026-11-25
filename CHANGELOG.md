@@ -2,6 +2,11 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
+## Unreleased
+
+- **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
+- **Import.** A FortiClient connection set to save its password imports with Save password on; the password itself is never imported.
+
 ## 0.7.0
 
 - **EMS Setup.** A guided checklist for each profile's EMS server: the server, permission on this Mac, registration, compliance and the VPN gateway, each with a tick or a cross. The first step that needs you comes first, with the buttons that fix it. Open it from the profile's EMS row, from **File → EMS Setup…**, or from a failed connection. **Copy Details for IT** gives your administrator what they need.

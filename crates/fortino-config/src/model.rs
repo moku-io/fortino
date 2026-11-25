@@ -273,6 +273,11 @@ fn default_trust() -> String {
     DEFAULT_TRUST_ID.to_owned()
 }
 
+// `skip_serializing_if` passes a reference.
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// User-editable profile fields, as sent by a client. Validate with [`ProfileSpec::validate`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -296,6 +301,12 @@ pub struct ProfileSpec {
     /// Which resolvers answer while connected.
     #[serde(default)]
     pub dns_mode: DnsMode,
+    /// Keep the password in the user's secret store (the login Keychain on macOS) and answer the
+    /// password prompt with it. Only the client in the user's session reads or writes the
+    /// secret; the profile store holds just this choice. Left out when false, so an older
+    /// service still accepts the profile.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub save_password: bool,
     /// Administrator-provisioned trust configuration (CA bundle) ID.
     #[serde(default = "default_trust")]
     pub trust_id: String,
@@ -386,6 +397,7 @@ impl ProfileSpec {
             credential_mode: CredentialMode::Password,
             ip_policy: IpPolicy::SplitIpv4,
             dns_mode: DnsMode::Gateway,
+            save_password: false,
             trust_id: default_trust(),
             debug_ems_sysinfo: BTreeMap::new(),
         }
@@ -458,6 +470,21 @@ mod tests {
         let unknown =
             r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443},"dnsMode":"vpn"}"#;
         assert!(serde_json::from_str::<ProfileSpec>(unknown).is_err());
+    }
+
+    #[test]
+    fn save_password_defaults_off_and_is_omitted_when_off() {
+        let old = r#"{"name":"A","endpoint":{"host":"vpn.example.com","port":443}}"#;
+        let spec: ProfileSpec = serde_json::from_str(old).unwrap();
+        assert!(!spec.save_password);
+        let json = serde_json::to_value(&spec).unwrap();
+        assert!(json.get("savePassword").is_none(), "{json}");
+        let mut on = spec;
+        on.save_password = true;
+        let json = serde_json::to_value(&on).unwrap();
+        assert_eq!(json["savePassword"], true);
+        let back: ProfileSpec = serde_json::from_value(json).unwrap();
+        assert!(back.save_password);
     }
 
     #[test]

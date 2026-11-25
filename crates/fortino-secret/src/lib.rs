@@ -4,11 +4,18 @@
 //!   `Display` print `[REDACTED]`, so a secret can't end up in a log by accident.
 //! - [`redact`] scrubs known secret-bearing patterns (`SVPNCOOKIE=…`, `credential=…`, …) from
 //!   free text. [`RedactingWriter`] applies it to every line a logger writes.
+//! - [`store`] keeps saved VPN passwords in the user's own secret store ([`CredentialStore`]).
 
 use std::fmt;
 use std::io;
 
 use zeroize::{Zeroize, Zeroizing};
+
+#[cfg(all(target_os = "macos", feature = "platform-store"))]
+pub mod keychain;
+pub mod store;
+
+pub use store::{CredentialStore, SavedPassword, StoreError};
 
 /// Replacement text for redacted values.
 pub const REDACTED: &str = "[REDACTED]";

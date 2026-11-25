@@ -64,6 +64,9 @@ public struct ProfileSpec: Codable, Equatable {
     /// `nil` means `.gateway`. Left out when it is the default, so an older service that doesn't
     /// know the field still accepts the profile.
     public var dnsMode: DnsMode?
+    /// Save the password in the login keychain (through the `fortino` command). `nil` means off;
+    /// left out when off, so an older service still accepts the profile.
+    public var savePassword: Bool?
     public var trustId: String
     /// Debug only: SYSINFO key/value overrides injected into what the EMS agent reports for this
     /// profile. `nil`/absent in normal use. Kept optional so
@@ -79,6 +82,7 @@ public struct ProfileSpec: Codable, Equatable {
         self.credentialMode = "password"
         self.ipPolicy = .splitIpv4
         self.dnsMode = nil
+        self.savePassword = nil
         self.trustId = "system"
         self.debugEmsSysinfo = nil
     }

@@ -3,8 +3,10 @@
 //! Talks to `fortinod` over its control socket. Prompts go to the controlling terminal, results to
 //! stdout, diagnostics to stderr.
 
+mod credstore;
 mod prompt;
 mod render;
+mod saved;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,6 +20,7 @@ use fortino_core::proto::{
 use fortino_core::{ErrorCode, ProtoError};
 
 use crate::prompt::{SecretSource, TermGuard};
+use crate::saved::{AfterConnect, Keeper};
 
 #[derive(Debug, Parser)]
 #[command(name = "fortino", version, about = "Fortino VPN control")]
@@ -47,6 +50,9 @@ enum Cmd {
     },
     /// Disconnect and wait until networking is restored.
     Disconnect,
+    /// Manage a profile's saved password (kept in your login keychain, never by the service).
+    #[command(subcommand)]
+    Password(PasswordCmd),
     /// Show or change the daemon's log level (error, warn, info, debug, trace).
     LogLevel {
         /// New level; omit to show the current one.
@@ -89,6 +95,46 @@ enum ProfileCmd {
     Export(ExportArgs),
 }
 
+#[derive(Debug, Subcommand)]
+enum PasswordCmd {
+    /// Save a profile's password and turn on Save password for it.
+    Save {
+        /// Profile name or ID.
+        name: String,
+        /// Account (otherwise the profile's default username, otherwise prompt).
+        #[arg(long)]
+        username: Option<String>,
+        /// Read the password from one line of standard input instead of the terminal.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Remove a profile's saved password. Save password stays as it is.
+    Forget {
+        /// Profile name or ID.
+        name: String,
+    },
+    /// Show whether a profile has a saved password (never the password itself).
+    Status {
+        /// Profile name or ID.
+        name: String,
+    },
+    /// Answer an outstanding password prompt with the saved password (used by the app).
+    #[command(hide = true)]
+    Answer {
+        /// Profile name or ID.
+        name: String,
+        /// The attempt that asks.
+        #[arg(long)]
+        attempt: String,
+        /// The password prompt's ID.
+        #[arg(long)]
+        challenge: String,
+        /// Account (otherwise the profile's default username).
+        #[arg(long)]
+        username: Option<String>,
+    },
+}
+
 #[derive(Debug, Args)]
 struct AddArgs {
     /// Profile name.
@@ -117,6 +163,9 @@ struct AddArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
+    /// Save the password in your login keychain after the first successful connection.
+    #[arg(long)]
+    save_password: bool,
 }
 
 /// `--dns`: which resolvers answer while connected.
@@ -177,6 +226,12 @@ struct EditArgs {
     /// Which DNS answers while connected.
     #[arg(long, value_enum)]
     dns: Option<DnsArg>,
+    /// Save the password in your login keychain after the next successful connection.
+    #[arg(long, conflicts_with = "no_save_password")]
+    save_password: bool,
+    /// Stop saving the password and remove the saved one.
+    #[arg(long)]
+    no_save_password: bool,
 }
 
 #[derive(Debug, Args)]
@@ -302,6 +357,7 @@ async fn run(cli: Cli) -> CmdResult {
         Cmd::Connect(a) => connect(&mut client, a, json).await,
         Cmd::Status { watch } => status(&mut client, watch, json).await,
         Cmd::Disconnect => disconnect(&mut client, json).await,
+        Cmd::Password(p) => password(&mut client, p, json).await,
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
         Cmd::EmsStatus { server } => ems_status(&client, &server, json).await,
         Cmd::EmsRegister { server } => ems_register(&client, &server, json).await,
@@ -424,6 +480,7 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
             if let Some(d) = a.dns {
                 spec.dns_mode = d.into();
             }
+            spec.save_password = a.save_password;
             let p = c.profile_create(spec).await?;
             if json {
                 print_json(&p);
@@ -431,6 +488,12 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
                 println!("Created profile {} ({})", p.spec.name, p.id);
                 println!("Scope: {}", p.spec.ip_policy.describe());
                 println!("DNS:   {}", p.spec.dns_mode.describe());
+                if p.spec.save_password {
+                    println!(
+                        "The password is saved in {} after the first connection.",
+                        credstore::open().location()
+                    );
+                }
             }
         }
         ProfileCmd::List => {
@@ -455,15 +518,23 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
             let p = c.profile_get(&e.name).await?;
             let spec = apply_edit(&p, e)?;
             let u = c.profile_update(p.id.clone(), p.revision, spec).await?;
+            let forgot = p.spec.save_password && !u.spec.save_password;
+            let forgot = forgot && forget_saved(&u.id.0);
             if json {
                 print_json(&u);
             } else {
                 println!("Updated profile {} (revision {})", u.spec.name, u.revision);
+                if forgot {
+                    println!("Removed the saved password.");
+                }
             }
         }
         ProfileCmd::Remove { name } => {
             let p = c.profile_get(&name).await?;
             c.profile_delete(p.id.clone(), p.revision).await?;
+            if p.spec.save_password {
+                forget_saved(&p.id.0);
+            }
             if json {
                 print_json(&serde_json::json!({"removed": p.id}));
             } else {
@@ -523,7 +594,24 @@ fn apply_edit(p: &Profile, e: EditArgs) -> Result<ProfileSpec, Failure> {
     if let Some(d) = e.dns {
         s.dns_mode = d.into();
     }
+    if e.save_password {
+        s.save_password = true;
+    }
+    if e.no_save_password {
+        s.save_password = false;
+    }
     Ok(s)
+}
+
+/// Removes a profile's saved password; a failure is reported, not fatal. True when one existed.
+fn forget_saved(profile_id: &str) -> bool {
+    match credstore::open().remove(profile_id) {
+        Ok(had) => had,
+        Err(e) => {
+            eprintln!("fortino: note: could not remove the saved password: {e}");
+            false
+        }
+    }
 }
 
 fn read_import_preview(file: &std::path::Path) -> Result<fortino_config::import::Preview, Failure> {
@@ -725,6 +813,22 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
     let _term = TermGuard::save();
     let (_, mut rx) = c.subscribe().await?;
     let p = c.profile_get(&a.name).await?;
+    // A password supplied on a descriptor is the caller's choice: the store is left alone.
+    let store = credstore::open();
+    let store = store.as_ref();
+    let mut keeper = Keeper::new(
+        store,
+        &p.id.0,
+        &p.spec.name,
+        p.spec.save_password && a.password_fd.is_none(),
+    );
+    // The daemon uses the same rule; a username prompt replaces it.
+    let mut username = a.username.clone().or_else(|| p.spec.username_hint.clone());
+    let mut note = |n: String| {
+        if !json {
+            eprintln!("{n}");
+        }
+    };
     if !json {
         eprintln!(
             "Connecting to {} ({}:{}), scope: {}",
@@ -769,6 +873,7 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
         }
         match st.state {
             State::Connected => {
+                after_connect(&mut keeper, store, json);
                 if json {
                     println!("{}", serde_json::json!({"v": 1, "status": st}));
                 } else {
@@ -781,6 +886,17 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
                 return Ok(());
             }
             State::Idle | State::RecoveryRequired => {
+                let code = st
+                    .last_result
+                    .as_ref()
+                    .filter(|r| r.attempt_id == attempt)
+                    .and_then(|r| r.code);
+                if keeper.finished(store, code) {
+                    note(
+                        "The gateway rejected the saved password; the next connection asks for it."
+                            .into(),
+                    );
+                }
                 result_of(&st, &attempt)?;
                 return Err(Failure(ProtoError::new(
                     ErrorCode::BackendFailure,
@@ -794,9 +910,14 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             continue;
         }
         answered = Some(ch.id.clone());
+        keeper.saw_challenge(ch.kind);
         let value = match ch.kind {
             ChallengeKind::Username => a.username.clone().map(Ok),
-            ChallengeKind::Password => secrets.password(),
+            ChallengeKind::Password => secrets.password().or_else(|| {
+                keeper
+                    .saved_answer(store, username.as_deref(), &mut note)
+                    .map(|s| Ok(s.expose().to_owned()))
+            }),
             ChallengeKind::Otp => secrets.otp(),
         };
         let value = match value {
@@ -808,7 +929,14 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
                 let prompt = tokio::task::spawn_blocking(move || prompt::ask(kind, &text));
                 tokio::select! {
                     v = prompt => match v {
-                        Ok(Some(v)) => v,
+                        Ok(Some(v)) => {
+                            match kind {
+                                ChallengeKind::Username => username = Some(v.clone()),
+                                ChallengeKind::Password => keeper.typed(username.as_deref(), &v),
+                                ChallengeKind::Otp => {}
+                            }
+                            v
+                        }
                         _ => {
                             c.disconnect(&attempt).await?;
                             let _ = wait_finished(c, &mut rx, &attempt).await;
@@ -834,6 +962,26 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             Err(e) if e.code == ErrorCode::StaleChallenge => {}
             Err(e) => return Err(e.into()),
         }
+    }
+}
+
+/// Saves a password typed during a connection that just succeeded, when the profile saves it.
+fn after_connect(keeper: &mut Keeper, store: &dyn fortino_secret::CredentialStore, json: bool) {
+    let save = match keeper.connected() {
+        AfterConnect::Nothing => false,
+        AfterConnect::Save => true,
+        // Non-interactive runs keep the old one; the next interactive connection asks again.
+        AfterConnect::AskToReplace => {
+            !json && prompt::confirm("Replace the saved password with the one you typed?")
+        }
+    };
+    if !save {
+        return;
+    }
+    match keeper.save_typed(store) {
+        Ok(()) if !json => eprintln!("Saved the password in {}.", store.location()),
+        Ok(()) => {}
+        Err(e) => eprintln!("fortino: note: could not save the password: {e}"),
     }
 }
 
@@ -880,5 +1028,246 @@ async fn disconnect(c: &mut Client, json: bool) -> CmdResult {
     } else {
         println!("Disconnected.");
     }
+    Ok(())
+}
+
+/// Reads one line from standard input (a password piped in by the app or a script).
+fn read_stdin_line() -> Result<zeroize::Zeroizing<String>, Failure> {
+    use std::io::{BufRead, Read};
+    let mut line = zeroize::Zeroizing::new(String::new());
+    std::io::BufReader::new(std::io::stdin().take(1024))
+        .read_line(&mut line)
+        .map_err(|e| invalid(format!("cannot read standard input: {e}")))?;
+    let v = zeroize::Zeroizing::new(line.trim_end_matches(['\n', '\r']).to_owned());
+    if v.is_empty() {
+        return Err(invalid("standard input supplied no password"));
+    }
+    Ok(v)
+}
+
+fn store_failure(e: &fortino_secret::StoreError) -> Failure {
+    Failure(ProtoError::new(ErrorCode::Internal, e.to_string()))
+}
+
+async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
+    let store = credstore::open();
+    let store = store.as_ref();
+    match cmd {
+        PasswordCmd::Save {
+            name,
+            username,
+            stdin,
+        } => {
+            let p = c.profile_get(&name).await?;
+            let username = match username.or_else(|| p.spec.username_hint.clone()) {
+                Some(u) => u,
+                None => prompt::ask(ChallengeKind::Username, "Username").ok_or_else(|| {
+                    Failure(ProtoError::new(
+                        ErrorCode::InteractionRequired,
+                        "username required: pass --username",
+                    ))
+                })?,
+            };
+            let pw = if stdin {
+                read_stdin_line()?
+            } else {
+                zeroize::Zeroizing::new(
+                    prompt::ask(ChallengeKind::Password, &format!("Password for {username}"))
+                        .ok_or_else(|| {
+                            Failure(ProtoError::new(
+                                ErrorCode::InteractionRequired,
+                                "password required but no terminal is available; use --stdin",
+                            ))
+                        })?,
+                )
+            };
+            store
+                .save(
+                    &p.id.0,
+                    &p.spec.name,
+                    &username,
+                    &fortino_secret::Secret::new(pw.as_str()),
+                )
+                .map_err(|e| store_failure(&e))?;
+            if !p.spec.save_password {
+                let mut spec = p.spec.clone();
+                spec.save_password = true;
+                c.profile_update(p.id.clone(), p.revision, spec).await?;
+            }
+            if json {
+                print_json(&serde_json::json!({"saved": true, "username": username}));
+            } else {
+                println!(
+                    "Saved the password for {username} in {}. Connecting with {} uses it.",
+                    store.location(),
+                    p.spec.name
+                );
+            }
+        }
+        PasswordCmd::Forget { name } => {
+            // Also accepts the ID of a profile that no longer exists, to clean up after it.
+            let id = match c.profile_get(&name).await {
+                Ok(p) => p.id.0,
+                Err(e) if e.code == ErrorCode::NotFound && uuid::Uuid::parse_str(&name).is_ok() => {
+                    name
+                }
+                Err(e) => return Err(e.into()),
+            };
+            let had = store.remove(&id).map_err(|e| store_failure(&e))?;
+            if json {
+                print_json(&serde_json::json!({"removed": had}));
+            } else if had {
+                println!("Removed the saved password.");
+            } else {
+                println!("No saved password.");
+            }
+        }
+        PasswordCmd::Status { name } => {
+            let p = c.profile_get(&name).await?;
+            let info = store.info(&p.id.0);
+            if json {
+                let (saved, username, rejected, error) = match &info {
+                    Ok(Some(i)) => (true, Some(i.username.clone()), i.rejected, None),
+                    Ok(None) => (false, None, false, None),
+                    Err(e) => (false, None, false, Some(e.to_string())),
+                };
+                print_json(&serde_json::json!({
+                    "enabled": p.spec.save_password,
+                    "saved": saved,
+                    "username": username,
+                    "rejected": rejected,
+                    "location": store.location(),
+                    "error": error,
+                }));
+                return Ok(());
+            }
+            println!(
+                "Save password: {}",
+                if p.spec.save_password { "on" } else { "off" }
+            );
+            match info {
+                Ok(Some(i)) if i.rejected => println!(
+                    "Saved:         for {} in {}; the gateway rejected it, so it is not used",
+                    i.username,
+                    store.location()
+                ),
+                Ok(Some(i)) => {
+                    println!("Saved:         for {} in {}", i.username, store.location())
+                }
+                Ok(None) => println!("Saved:         no"),
+                Err(e) => println!("Saved:         unknown ({e})"),
+            }
+        }
+        PasswordCmd::Answer {
+            name,
+            attempt,
+            challenge,
+            username,
+        } => answer_saved(c, store, &name, &attempt, &challenge, username, json).await?,
+    }
+    Ok(())
+}
+
+/// How long `password answer` keeps following the attempt to see whether the gateway took the
+/// saved password. A code prompt in between can take the user a while.
+const ANSWER_FOLLOW: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Answers the app's outstanding password prompt from the store, then follows the attempt until
+/// the gateway accepted or refused the password, and marks a refused one.
+async fn answer_saved(
+    c: &mut Client,
+    store: &dyn fortino_secret::CredentialStore,
+    name: &str,
+    attempt: &str,
+    challenge: &str,
+    username: Option<String>,
+    json: bool,
+) -> CmdResult {
+    let report = |answered: bool, reason: &str| {
+        if json {
+            print_json(&serde_json::json!({"answered": answered, "reason": reason}));
+        } else if answered {
+            println!("Answered with the saved password ({reason}).");
+        } else {
+            println!("Not answered: {reason}.");
+        }
+    };
+    let p = c.profile_get(name).await?;
+    if !p.spec.save_password {
+        report(false, "disabled");
+        return Ok(());
+    }
+    let (st, mut rx) = c.subscribe().await?;
+    let asking = st.attempt_id.as_deref() == Some(attempt)
+        && st.profile_id.as_ref() == Some(&p.id)
+        && st
+            .challenge
+            .as_ref()
+            .is_some_and(|ch| ch.id == challenge && ch.kind == ChallengeKind::Password);
+    if !asking {
+        report(false, "stale");
+        return Ok(());
+    }
+    let Some(username) = username.or_else(|| p.spec.username_hint.clone()) else {
+        report(false, "missing");
+        return Ok(());
+    };
+    let mut keeper = Keeper::new(store, &p.id.0, &p.spec.name, true);
+    let mut quiet = |_: String| {};
+    let Some(secret) = keeper.saved_answer(store, Some(&username), &mut quiet) else {
+        report(false, saved::lookup(store, &p.id.0, &username).reason());
+        return Ok(());
+    };
+    match c
+        .respond(attempt, challenge, secret.expose().to_owned())
+        .await
+    {
+        Ok(()) => {}
+        Err(e) if e.code == ErrorCode::StaleChallenge => {
+            report(false, "stale");
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    }
+    drop(secret);
+    let outcome = tokio::time::timeout(ANSWER_FOLLOW, async {
+        loop {
+            let st = match rx.recv().await {
+                Some(Event::Status { status }) => *status,
+                Some(Event::ResyncRequired) => c.status().await?,
+                None => return Ok::<_, ProtoError>("unknown"),
+            };
+            if st.attempt_id.as_deref() != Some(attempt) {
+                continue;
+            }
+            // A code prompt after the password means the gateway took it.
+            if st
+                .challenge
+                .as_ref()
+                .is_some_and(|ch| ch.id != challenge && ch.kind == ChallengeKind::Otp)
+            {
+                return Ok("accepted");
+            }
+            match st.state {
+                State::Connected => return Ok("accepted"),
+                State::Idle | State::RecoveryRequired => {
+                    let code = st
+                        .last_result
+                        .as_ref()
+                        .filter(|r| r.attempt_id == attempt)
+                        .and_then(|r| r.code);
+                    return Ok(if keeper.finished(store, code) {
+                        "rejected"
+                    } else {
+                        "ended"
+                    });
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap_or(Ok("unknown"))?;
+    report(true, outcome);
     Ok(())
 }

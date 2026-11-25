@@ -10,7 +10,7 @@ publish.workspace = true
 [dependencies]
 fortino-config.workspace = true
 fortino-core.workspace = true
-fortino-secret.workspace = true
+fortino-secret = { workspace = true, features = ["platform-store"] }
 clap = { workspace = true, features = ["env"] }
 rpassword.workspace = true
 serde.workspace = true
