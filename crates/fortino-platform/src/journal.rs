@@ -77,14 +77,23 @@ impl<P: NetPlatform> Journaled<P> {
     /// Records and applies one change. If the apply fails, the change is reverted and removed
     /// from the journal before the error is returned.
     pub fn apply(&mut self, change: &NetChange) -> Result<()> {
-        let undo = self.platform.prepare(change)?;
+        let mut undo = self.platform.prepare(change)?;
         self.entries.push(undo.clone());
         if let Err(e) = self.save() {
             self.entries.pop();
             return Err(e);
         }
         tracing::debug!(?change, "applying network change");
-        if let Err(e) = self.platform.apply(change) {
+        let applied = self.platform.apply_recorded(change, &mut undo);
+        if applied.is_ok() && self.entries.last() != Some(&undo) {
+            // Applying revealed more of the undo (a reference token): keep that, so a
+            // rollback after a crash releases exactly what this change took.
+            if let Some(last) = self.entries.last_mut() {
+                *last = undo.clone();
+            }
+            self.save()?;
+        }
+        if let Err(e) = applied {
             tracing::warn!(error = %e, ?change, "network change failed; reverting it");
             if let Err(re) = self.platform.revert(&undo) {
                 // Leave the entry so a later rollback retries it.

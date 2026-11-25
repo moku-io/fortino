@@ -11,8 +11,9 @@
 //!   `State:/Network/Service/org.fortino.*/DNS` (`ServerAddresses`,
 //!   `SupplementalMatchDomains`). Revert removes only that key.
 //! - IPv6 block: a pf anchor below `com.apple/` (evaluated by the stock `/etc/pf.conf`) with
-//!   `block drop quick inet6`, loopback excepted. pf is enabled only if it was off, and disabled
-//!   again on revert in that case.
+//!   `block drop quick inet6`, loopback excepted. pf is switched on with a reference
+//!   (`pfctl -E`), whose token is journaled and released on revert (`pfctl -X`): pf stays on
+//!   while another program holds its own reference, and nobody else's is switched off.
 //!
 //! PPP creates its own interface and address, so [`NetPlatform::create_tun`] is unsupported.
 
@@ -208,6 +209,28 @@ pub fn parse_route_get(out: &str) -> Option<(String, RouteVia)> {
     Some((dest?, via))
 }
 
+/// The address to look a route up by: one inside it. route(8) reads a bare network address
+/// whose host part is zero as a classful network, so `route get 172.16.0.0` doesn't find
+/// 172.16.0.0/12, nor `0.0.0.0` the 0.0.0.0/1 half of a full tunnel.
+fn probe_addr(dest: &IpNet) -> IpAddr {
+    match dest.addr {
+        IpAddr::V4(a) if dest.prefix < 31 => {
+            IpAddr::V4(std::net::Ipv4Addr::from(u32::from(a).wrapping_add(1)))
+        }
+        a => a,
+    }
+}
+
+/// The reference token `pfctl -E` reports ("Token : 1234…").
+fn pf_token(out: &str) -> Option<String> {
+    out.lines()
+        .filter_map(|l| l.trim().strip_prefix("Token"))
+        .filter_map(|r| r.trim_start().strip_prefix(':'))
+        .map(str::trim)
+        .find(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()))
+        .map(str::to_owned)
+}
+
 fn dns_key(suffix: &str) -> String {
     format!("{DNS_KEY_PREFIX}.{suffix}/DNS")
 }
@@ -274,9 +297,7 @@ impl<R: Runner> NetPlatform for MacNet<R> {
                 domain: domain.clone(),
                 previous: None,
             },
-            NetChange::BlockIpv6 => Undo::UnblockIpv6Pf {
-                disable_pf: !self.pf_enabled()?,
-            },
+            NetChange::BlockIpv6 => Undo::ReleasePf { token: None },
             NetChange::AddAddress { .. } | NetChange::SetMtu { .. } | NetChange::LinkUp { .. } => {
                 return Err(PlatformError::Unsupported(
                     "PPP configures the interface itself".into(),
@@ -293,24 +314,22 @@ impl<R: Runner> NetPlatform for MacNet<R> {
                 if !safe_token(domain) {
                     return Err(PlatformError::Other("invalid DNS domain".into()));
                 }
-                let script = scutil_set(
-                    &dns_key(&format!("split.{domain}")),
-                    servers,
-                    std::slice::from_ref(domain),
-                    &[],
-                );
-                self.must(SCUTIL, &[], Some(&script))
+                let key = dns_key(&format!("split.{domain}"));
+                let script = scutil_set(&key, servers, std::slice::from_ref(domain), &[]);
+                self.must(SCUTIL, &[], Some(&script))?;
+                // scutil exits 0 even when a command fails: read the key back.
+                let out = self.run(SCUTIL, &[], Some(&format!("show {key}\nquit\n")))?;
+                if out.stdout.contains("ServerAddresses") {
+                    Ok(())
+                } else {
+                    Err(PlatformError::Other(format!(
+                        "the resolver for {domain} was not set"
+                    )))
+                }
             }
             NetChange::BlockIpv6 => {
-                self.must(
-                    PFCTL,
-                    &[s("-a"), s(PF_ANCHOR), s("-f"), s("-")],
-                    Some(PF_RULES),
-                )?;
-                if !self.pf_enabled()? {
-                    self.must(PFCTL, &[s("-e")], None)?;
-                }
-                Ok(())
+                let mut undo = Undo::ReleasePf { token: None };
+                self.apply_recorded(change, &mut undo)
             }
             NetChange::AddAddress { .. } | NetChange::SetMtu { .. } | NetChange::LinkUp { .. } => {
                 Err(PlatformError::Unsupported(
@@ -325,7 +344,7 @@ impl<R: Runner> NetPlatform for MacNet<R> {
             Undo::Nothing => Ok(()),
             Undo::DelRoute(r) => {
                 // Compare before undo: only delete the route if it is still ours.
-                let probe = r.dest.addr;
+                let probe = probe_addr(&r.dest);
                 let out = self.run(ROUTE, &[s("-n"), s("get"), s(probe)], None)?;
                 let installed = parse_route_get(&out.stdout);
                 let ours = match (&installed, &r.via) {
@@ -382,8 +401,41 @@ impl<R: Runner> NetPlatform for MacNet<R> {
                 }
                 Ok(())
             }
+            Undo::ReleasePf { token } => {
+                self.must(PFCTL, &[s("-a"), s(PF_ANCHOR), s("-F"), s("rules")], None)?;
+                if let Some(t) = token {
+                    // An unknown token (pf restarted, after a reboot) has nothing left to
+                    // release; failing here would only block recovery.
+                    let out = self.run(PFCTL, &[s("-X"), s(t)], None)?;
+                    if !out.ok {
+                        tracing::info!(stderr = %out.stderr.trim(), "pf reference already gone");
+                    }
+                }
+                Ok(())
+            }
             Undo::DelAddress { .. } | Undo::RestoreMtu { .. } => Ok(()),
         }
+    }
+
+    fn apply_recorded(&mut self, change: &NetChange, undo: &mut Undo) -> Result<()> {
+        let NetChange::BlockIpv6 = change else {
+            return self.apply(change);
+        };
+        self.must(
+            PFCTL,
+            &[s("-a"), s(PF_ANCHOR), s("-f"), s("-")],
+            Some(PF_RULES),
+        )?;
+        let out = self.run(PFCTL, &[s("-E")], None)?;
+        let token = pf_token(&out.stdout).or_else(|| pf_token(&out.stderr));
+        if !out.ok || token.is_none() {
+            return Err(PlatformError::Other(format!(
+                "{PFCTL} -E failed: {}",
+                out.stderr.trim()
+            )));
+        }
+        *undo = Undo::ReleasePf { token };
+        Ok(())
     }
 
     fn route_to(&mut self, dst: IpAddr) -> Result<Option<RouteVia>> {
@@ -593,35 +645,96 @@ mod tests {
             servers: vec!["10.0.0.53".parse().unwrap()],
         };
         let undo = m.prepare(&c).unwrap();
+        m.runner().replies.push_back(ok(""));
+        m.runner()
+            .replies
+            .push_back(ok("<dictionary> {\n  ServerAddresses : <array> {\n"));
         m.apply(&c).unwrap();
         m.revert(&undo).unwrap();
         assert_eq!(
             m.runner().calls,
             vec![
                 "/usr/sbin/scutil <<< d.init; d.add ServerAddresses * 10.0.0.53; d.add SupplementalMatchDomains * corp.example; d.add SupplementalMatchDomainsNoSearch # 1; set State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
+                "/usr/sbin/scutil <<< show State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
                 "/usr/sbin/scutil <<< remove State:/Network/Service/org.fortino.split.corp.example/DNS; quit;",
             ]
         );
+        // configd didn't take it (scutil still exits 0): the apply fails and is rolled back.
+        m.runner().replies.push_back(ok(""));
+        m.runner().replies.push_back(ok("  No such key\n"));
+        assert!(m.apply(&c).is_err());
+    }
 
-        let mut m = MacNet::with_runner(Rec::default());
-        // pf disabled at prepare and at apply.
-        m.runner().replies.push_back(ok("Status: Disabled"));
-        let undo = m.prepare(&NetChange::BlockIpv6).unwrap();
-        assert_eq!(undo, Undo::UnblockIpv6Pf { disable_pf: true });
-        m.runner().replies.push_back(ok(""));
-        m.runner().replies.push_back(ok("Status: Disabled"));
-        m.apply(&NetChange::BlockIpv6).unwrap();
-        // pf still on at disconnect: flush the anchor, then stop pf again.
-        m.runner().replies.push_back(ok(""));
-        m.runner().replies.push_back(ok("Status: Enabled"));
-        m.revert(&undo).unwrap();
-        let calls = &m.runner().calls;
-        assert!(calls.contains(&"/sbin/pfctl -e".to_owned()));
+    /// pf is switched on with a reference of our own and only that reference is released, so
+    /// another program's pf rules stay on, and theirs can't switch our block off. The token is
+    /// journaled, so a rollback after a crash releases it too.
+    #[test]
+    fn ipv6_block_takes_and_releases_a_pf_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut j = crate::journal::Journaled::open(
+            MacNet::with_runner(Rec::default()),
+            dir.path().join("j.json"),
+        )
+        .unwrap();
+        j.platform().runner().replies.push_back(ok("")); // load the anchor
+        j.platform().runner().replies.push_back(CmdOutput {
+            ok: true,
+            stdout: String::new(),
+            stderr: "pf enabled\nToken : 13445936287406718347\n".into(),
+        });
+        j.apply(&NetChange::BlockIpv6).unwrap();
+        let journal = std::fs::read_to_string(dir.path().join("j.json")).unwrap();
+        assert!(journal.contains("13445936287406718347"), "{journal}");
+
+        // After a crash: the new process releases exactly that reference.
+        let mut j = crate::journal::Journaled::open(
+            MacNet::with_runner(Rec::default()),
+            dir.path().join("j.json"),
+        )
+        .unwrap();
+        j.recover().unwrap();
         assert_eq!(
-            calls[calls.len() - 3],
-            "/sbin/pfctl -a com.apple/250.Fortino -F rules"
+            j.platform().runner().calls,
+            [
+                "/sbin/pfctl -a com.apple/250.Fortino -F rules",
+                "/sbin/pfctl -X 13445936287406718347",
+            ]
         );
-        assert_eq!(calls[calls.len() - 1], "/sbin/pfctl -d");
+        assert!(
+            !j.platform()
+                .runner()
+                .calls
+                .iter()
+                .any(|c| c.ends_with(" -d"))
+        );
+
+        // A token pf no longer knows (after a reboot) is nothing left to release.
+        let mut m = MacNet::with_runner(Rec::default());
+        m.runner().replies.push_back(ok(""));
+        m.runner().replies.push_back(CmdOutput {
+            ok: false,
+            stdout: String::new(),
+            stderr: "pfctl: DIOCSTOPREF: Invalid argument\n".into(),
+        });
+        m.revert(&Undo::ReleasePf {
+            token: Some("1".into()),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn routes_are_looked_up_by_an_address_inside_them() {
+        for (net, probe) in [
+            ("172.16.0.0/12", "172.16.0.1"),
+            ("0.0.0.0/1", "0.0.0.1"),
+            ("128.0.0.0/1", "128.0.0.1"),
+            ("203.0.113.10/32", "203.0.113.10"),
+        ] {
+            assert_eq!(
+                probe_addr(&net.parse().unwrap()),
+                probe.parse::<IpAddr>().unwrap()
+            );
+        }
     }
 
     #[test]

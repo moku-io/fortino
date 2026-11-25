@@ -93,6 +93,13 @@ pub trait NetPlatform: Send {
     /// Applies `change`.
     fn apply(&mut self, change: &NetChange) -> Result<()>;
 
+    /// Applies `change` and completes `undo` with what only applying reveals (a reference
+    /// token); the journal saves the completed undo.
+    fn apply_recorded(&mut self, change: &NetChange, undo: &mut Undo) -> Result<()> {
+        let _ = undo;
+        self.apply(change)
+    }
+
     /// Reverses a change. Must succeed (or be a no-op) when the change was never applied,
     /// was partly applied, or was already reverted.
     fn revert(&mut self, undo: &Undo) -> Result<()>;

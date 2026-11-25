@@ -226,6 +226,12 @@ pub enum Undo {
         /// pf was disabled before the block and must be disabled again.
         disable_pf: bool,
     },
+    /// Remove the IPv6 block's pf anchor and release the pf reference taken for it, so pf
+    /// stays on exactly as long as someone else holds a reference.
+    ReleasePf {
+        /// The reference token (`pfctl -E`); `None` until the reference is taken.
+        token: Option<String>,
+    },
 }
 
 #[cfg(test)]
