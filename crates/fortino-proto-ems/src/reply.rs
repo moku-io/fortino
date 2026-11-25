@@ -474,7 +474,9 @@ impl KeepaliveReply {
             tags,
             tenant,
             quarantine,
-            unquarantined: flag(f, "EC_UNQUARANTINED")?,
+            // `QUAR|0` states the device is not quarantined (any more): a release.
+            unquarantined: flag(f, "EC_UNQUARANTINED")?
+                || num::<u8>(f, "QUAR")?.is_some_and(|v| v == 0),
             renew: flag(f, "RENEW_REG")?,
             ems_on_net: num::<u8>(f, "EMS_ONNET")?.map(|v| v != 0),
             pushed: Pushed::from_fields(f),
@@ -555,6 +557,8 @@ mod tests {
         assert!(ka.tags.unwrap().get(8));
         assert_eq!(ka.tenant, Some(Tenant::on_premises()));
         assert!(ka.quarantine.is_none());
+        // QUAR|0 releases a Mac quarantined earlier.
+        assert!(ka.unquarantined);
         assert_eq!(ka.notes.refused, vec!["RUN_SRV_CMD", "FSR_UPLD_TOKEN"]);
         assert_eq!(ka.notes.unknown, vec!["NEWTHING"]);
         assert_eq!(ka.pushed.host_rules.unwrap().1, "abc");
@@ -568,7 +572,14 @@ mod tests {
             "FCKARPLY: CONT|1|QUAR|1|QCODE|secret|QMSG|Isolated|QREASON|policy|",
         ))
         .unwrap();
+        assert!(!ka.unquarantined);
         assert_eq!(ka.quarantine.unwrap().message, "Isolated");
+        // No QUAR at all says nothing either way.
+        assert!(
+            !KeepaliveReply::from_reply(&p("FCKARPLY: CONT|1|"))
+                .unwrap()
+                .unquarantined
+        );
     }
 
     #[test]

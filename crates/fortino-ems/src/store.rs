@@ -25,8 +25,13 @@ pub struct Registration {
     /// Deployment identifier used during first enrollment, scoped to this EMS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_uid: Option<String>,
-    /// Endpoint UID this registration was made with.
+    /// Endpoint UID this registration was made with (the EMS may assign its own).
     pub uid: String,
+    /// This device's UID when the registration was made. A record another device wrote (a
+    /// copied state directory) or made under another `[ems] uid` is not used: presenting its
+    /// serial would claim a registration this device doesn't have.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_uid: Option<String>,
     /// Server serial, from PROBE and REG.
     pub serial: String,
     /// Host the server names itself.
@@ -173,6 +178,7 @@ mod tests {
         Registration {
             server: server.into(),
             uid: "0A1B2C3D4E5F60718293A4B5C6D7E8F9".into(),
+            device_uid: None,
             serial: "FCTEMS0000000001".into(),
             host: "ems.test".into(),
             tenant: None,

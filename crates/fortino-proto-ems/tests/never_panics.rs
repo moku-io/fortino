@@ -69,10 +69,27 @@ proptest! {
         let _ = fortino_proto_ems::message::parse_request(&data);
     }
 
+    /// Framed as a client frames it (`\n\r\n` after the header, `\r\n` around the end
+    /// marker), so header lines, the type, the end search and the body fields are all parsed;
+    /// also cut short anywhere, as reads arrive.
     #[test]
-    fn request_shaped(head in "[A-Z_=0-9\n]{0,80}", body in "[A-Z_|a-z0-9\n:-]{0,120}") {
-        let s = format!("MSG_HEADER: {head}\n\nX-FCCK-KA: {body}\nX-FCCK-KA-END\n");
-        let _ = fortino_proto_ems::message::parse_request(s.as_bytes());
+    fn request_shaped(
+        head in proptest::collection::vec(("[A-Z_]{1,10}", "[ -~]{0,16}"), 0..8),
+        kind in "(KA|REG|PROBE|DEREG|[A-Z]{1,6})",
+        fields in proptest::collection::vec(("[A-Z_]{1,8}", "[ -{}~]{0,16}"), 0..8),
+        tag: bool,
+        cut in 0usize..400,
+    ) {
+        let lines: String = head.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        let body: String = fields.iter().map(|(k, v)| format!("{k}|{v}|")).collect();
+        let s = if tag {
+            format!("X-FCCK-TAG: {lines}X-FCCK-TAG-END\r\n\r\n")
+        } else {
+            format!("MSG_HEADER: {lines}\n\r\nX-FCCK-{kind}: {body}\r\nX-FCCK-{kind}-END\r\n\r\n")
+        };
+        let b = s.as_bytes();
+        let _ = fortino_proto_ems::message::parse_request(b);
+        let _ = fortino_proto_ems::message::parse_request(&b[..cut.min(b.len())]);
     }
 }
 

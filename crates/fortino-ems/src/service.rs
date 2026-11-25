@@ -477,7 +477,17 @@ impl Ctx {
         if let Some(r) = agent.registration(conn)? {
             return Ok(r.serial == fc_serial.as_str());
         }
-        Ok(agent.probe(conn).await?.serial == *fc_serial)
+        match agent.probe(conn).await {
+            Ok(p) => Ok(p.serial == *fc_serial),
+            // Without permission to register nothing can push FortiClient out, so an EMS that
+            // doesn't answer is no reason to end the attempt: it goes on without an identity,
+            // as it would without FortiClient.
+            Err(e) if !self.server_settings.register => {
+                tracing::info!(ems = %self.server, error = %e, "EMS probe failed; connecting without EMS identity");
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// The identity to give the worker, and this device's UID for the gateway. `Err` ends the
@@ -533,6 +543,12 @@ impl Ctx {
                 .register(&conn, key.as_deref().map(String::as_str))
                 .await?;
         }
+        // The gateway gets the UID the EMS knows this device by: the registration's, which
+        // the EMS may have assigned (NEW_GUID), so tags and the tunnel address line up.
+        let gateway_uid = agent
+            .registration(&conn)?
+            .and_then(|r| Uid::parse(&r.uid).ok())
+            .unwrap_or_else(|| agent.uid.clone());
         Ok((
             Prepared::Agent(
                 agent
@@ -542,7 +558,7 @@ impl Ctx {
                         tenant: tenant.as_str().to_owned(),
                     }),
             ),
-            agent.uid.clone(),
+            gateway_uid,
         ))
     }
 
@@ -881,6 +897,7 @@ mod status_tests {
             server: "ems.test:8013".into(),
             install_uid: None,
             uid: "0A1B2C3D4E5F60718293A4B5C6D7E8F9".into(),
+            device_uid: None,
             serial: "FCTEMS0000000001".into(),
             host: "ems.test".into(),
             tenant: None,

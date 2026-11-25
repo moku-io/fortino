@@ -118,9 +118,16 @@ impl Agent {
         Uid::parse(&reg.uid).map_err(|_| Error::Store("stored endpoint UID is invalid".into()))
     }
 
-    /// The registration for the connection's server, if any.
+    /// The registration for the connection's server, if this device made it.
     pub fn registration(&self, conn: &Connection) -> Result<Option<Registration>, Error> {
-        self.store.load(&server_key(conn.server()))
+        let r = self.store.load(&server_key(conn.server()))?;
+        if let Some(d) = r.as_ref().and_then(|r| r.device_uid.as_deref())
+            && d != self.uid.to_string()
+        {
+            tracing::warn!(ems = %conn.server(), "the stored EMS registration was made by another device; not using it");
+            return Ok(None);
+        }
+        Ok(r)
     }
 
     /// PROBE: checks that the server is an EMS and reads its serial. Registers nothing.
@@ -185,6 +192,7 @@ impl Agent {
         let mut reg = Registration {
             server: server_key(conn.server()),
             uid: uid.to_string(),
+            device_uid: Some(self.uid.to_string()),
             serial: r.serial.to_string(),
             host: r.host,
             tenant: None,
@@ -367,5 +375,64 @@ impl Agent {
             .and_then(|t| Tenant::parse(t).ok())
             .unwrap_or_else(Tenant::on_premises);
         Ok(Some((serial, tenant)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    const THIS: &str = "0A1B2C3D4E5F60718293A4B5C6D7E8F9";
+    const OTHER: &str = "277963E3DEAC437E9BB2B91DE1C49AFE";
+
+    /// A registration this device didn't make (a state directory copied from another Mac, or
+    /// one made under another `[ems] uid`) is not used: its serial would claim a registration
+    /// this device doesn't have, and its keepalives would keep another Mac's record alive.
+    #[test]
+    fn a_registration_from_another_device_is_not_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = |device: Option<&str>| Registration {
+            server: "ems.test:8013".into(),
+            install_uid: None,
+            uid: THIS.into(),
+            device_uid: device.map(str::to_owned),
+            serial: "FCTEMS0000000001".into(),
+            host: "ems.test".into(),
+            tenant: None,
+            vdom: "default".into(),
+            ka_interval: 60,
+            full_ka_interval: 600,
+            tags: String::new(),
+            rules_sent: String::new(),
+            quarantined: false,
+            conf: Received::default(),
+            host_rules: Received::default(),
+            server_list: Received::default(),
+            on_net: Received::default(),
+            off_net: Received::default(),
+            registered_at: 1,
+            last_keepalive: None,
+        };
+        let agent = Agent {
+            compat: Compat::default(),
+            facts: Facts::default(),
+            uid: Uid::parse(THIS).unwrap(),
+            store: Store::open(dir.path()).unwrap(),
+            overrides: Default::default(),
+        };
+        let conn = Connection::new(
+            "ems.test:8013".parse().unwrap(),
+            &fortino_tls::Trust::Pinned(vec![[0; 32]]),
+        )
+        .unwrap();
+        for (device, used) in [(Some(OTHER), false), (Some(THIS), true), (None, true)] {
+            agent.store.save(&record(device)).unwrap();
+            assert_eq!(
+                agent.registration(&conn).unwrap().is_some(),
+                used,
+                "{device:?}"
+            );
+        }
     }
 }
