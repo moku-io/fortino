@@ -29,8 +29,7 @@ Connects to your company's FortiGate. Then gets out of your way.
 - **A sleek native menu-bar app** (SwiftUI) **and a headless `fortino` CLI.**
 - **Dark mode**, matching both your terminal and your mood about corporate VPNs.
 - **You can quit it.** No icon squatting in your menu bar forever.
-- **Signed, notarized, self-updating.** New versions arrive with their release notes; install now, later, or skip.
-- **Saved passwords** in your login Keychain, per profile. Saved only after the gateway accepts them and never retried once rejected; one-time codes are always asked for.
+- **Saved passwords** in your macOS Keychain, per profile.
 
 ## No backdoor, by design
 
@@ -45,7 +44,7 @@ macOS 13 or later on Apple silicon. The download runs on Intel Macs too, but has
 
 ## Install
 
-Download the DMG from the [latest release](https://github.com/moku-io/fortino/releases/latest), drag Fortino to Applications, open it and allow its VPN service once in System Settings → General → Login Items. Fortino checks for updates once a day ([changelog](CHANGELOG.md)). To uninstall, drag it to the Trash.
+Download the DMG from the [latest release](https://github.com/moku-io/fortino/releases/latest), drag Fortino to Applications, open it and allow its VPN service once in System Settings → General → Login Items. To uninstall, drag it to the Trash.
 
 Building from source? See [DEVELOPMENT.md](DEVELOPMENT.md): dev daemon, mock gateway, tests and the signed DMG.
 
