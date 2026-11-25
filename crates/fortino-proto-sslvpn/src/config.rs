@@ -584,5 +584,30 @@ mod tests {
         fn never_panics(s: String) {
             let _ = parse(&s);
         }
+
+        /// Real element and attribute names with arbitrary values, so routes, masks, domains
+        /// and resolvers are parsed and bounded.
+        #[test]
+        fn never_panics_on_shaped_settings(
+            elems in proptest::collection::vec(
+                ("(addr|dns|split-dns|assigned-addr|tunnel-method|idle-timeout|auth-ses|ipv4|ipv6|split-tunnel-info|[a-z-]{1,10})",
+                 proptest::collection::vec(
+                     ("(ip|mask|domain|domains|dnsserver1|dnsserver2|ipv6|prefix-len|value|negate|dtls|[a-z]{1,6})",
+                      "[0-9a-zA-Z.:;,* /_-]{0,30}"),
+                     0..4)),
+                0..24),
+        ) {
+            let mut xml = String::from("<?xml version='1.0'?><sslvpn-tunnel ver='2' dtls='0'><ipv4>");
+            for (name, attrs) in &elems {
+                xml.push('<');
+                xml.push_str(name);
+                for (k, v) in attrs {
+                    xml.push_str(&format!(" {k}='{v}'"));
+                }
+                xml.push_str("/>");
+            }
+            xml.push_str("</ipv4></sslvpn-tunnel>");
+            let _ = parse(&xml);
+        }
     }
 }
