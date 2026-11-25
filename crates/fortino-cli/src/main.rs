@@ -876,6 +876,7 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             .username_hint
             .as_deref()
             .filter(|_| p.spec.save_password && a.password_fd.is_none()),
+        &saved::gateway(&p.spec),
     );
     // The daemon uses the same rule; a username prompt replaces it.
     let mut username = a.username.clone().or_else(|| p.spec.username_hint.clone());
@@ -1239,6 +1240,7 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                     &p.id.0,
                     &p.spec.name,
                     &username,
+                    &saved::gateway(&p.spec),
                     &fortino_secret::Secret::new(pw.as_str()),
                 )
                 .map_err(|e| store_failure(&e))?;
@@ -1286,17 +1288,28 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
         PasswordCmd::Status { name } => {
             let p = c.profile_get(&name).await?;
             let info = store.info(&p.id.0);
+            let gateway = saved::gateway(&p.spec);
+            // Saved for another gateway than the profile's: it is not used.
+            let elsewhere =
+                |i: &fortino_secret::SavedPassword| i.gateway.as_deref() != Some(gateway.as_str());
             if json {
-                let (saved, username, rejected, error) = match &info {
-                    Ok(Some(i)) => (true, Some(i.username.clone()), i.rejected, None),
-                    Ok(None) => (false, None, false, None),
-                    Err(e) => (false, None, false, Some(e.to_string())),
+                let (saved, username, rejected, other, error) = match &info {
+                    Ok(Some(i)) => (
+                        true,
+                        Some(i.username.clone()),
+                        i.rejected,
+                        elsewhere(i),
+                        None,
+                    ),
+                    Ok(None) => (false, None, false, false, None),
+                    Err(e) => (false, None, false, false, Some(e.to_string())),
                 };
                 print_json(&serde_json::json!({
                     "enabled": p.spec.save_password,
                     "saved": saved,
                     "username": username,
                     "rejected": rejected,
+                    "otherGateway": other,
                     "location": store.location(),
                     "error": error,
                 }));
@@ -1307,6 +1320,11 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                 if p.spec.save_password { "on" } else { "off" }
             );
             match info {
+                Ok(Some(i)) if elsewhere(&i) => println!(
+                    "Saved:         for {} in {}, for another gateway, so it is not used",
+                    i.username,
+                    store.location()
+                ),
                 Ok(Some(i)) if i.rejected => println!(
                     "Saved:         for {} in {}; the gateway rejected it, so it is not used",
                     i.username,
@@ -1373,15 +1391,20 @@ async fn answer_saved(
         report(false, "missing");
         return Ok(());
     };
+    let gateway = saved::gateway(&p.spec);
     let mut keeper = Keeper::new(
         store,
         &p.id.0,
         &p.spec.name,
         p.spec.username_hint.as_deref(),
+        &gateway,
     );
     let mut quiet = |_: String| {};
     let Some(secret) = keeper.saved_answer(store, Some(&username), &mut quiet) else {
-        report(false, saved::lookup(store, &p.id.0, &username).reason());
+        report(
+            false,
+            saved::lookup(store, &p.id.0, &username, &gateway).reason(),
+        );
         return Ok(());
     };
     match c

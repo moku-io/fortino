@@ -34,6 +34,8 @@ mod file {
     struct Item {
         label: String,
         username: String,
+        #[serde(default)]
+        gateway: Option<String>,
         password: String,
         rejected: bool,
     }
@@ -72,6 +74,7 @@ mod file {
         fn info(&self, profile_id: &str) -> Result<Option<SavedPassword>, StoreError> {
             Ok(self.load()?.get(profile_id).map(|i| SavedPassword {
                 username: i.username.clone(),
+                gateway: i.gateway.clone(),
                 rejected: i.rejected,
             }))
         }
@@ -87,6 +90,7 @@ mod file {
             profile_id: &str,
             label: &str,
             username: &str,
+            gateway: &str,
             password: &Secret,
         ) -> Result<(), StoreError> {
             let mut m = self.load()?;
@@ -95,6 +99,7 @@ mod file {
                 Item {
                     label: label.to_owned(),
                     username: username.to_owned(),
+                    gateway: Some(gateway.to_owned()),
                     password: password.expose().to_owned(),
                     rejected: false,
                 },

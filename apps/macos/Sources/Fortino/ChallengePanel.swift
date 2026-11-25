@@ -158,6 +158,8 @@ struct ChallengeView: View {
             notice("The gateway refused the saved password.")
         case .unavailable:
             notice("The saved password couldn't be read from your keychain.")
+        case .otherGateway:
+            notice("The saved password is for another gateway, so it wasn't sent.")
         case .willSave, nil:
             if passwordFromKeychain {
                 Label("Password filled in from your keychain.", systemImage: "key.fill")
@@ -182,7 +184,7 @@ struct ChallengeView: View {
         switch saved {
         case .willSave:
             Toggle("Save in Keychain after connecting", isOn: $remember)
-        case .rejected:
+        case .rejected, .otherGateway:
             Toggle("Replace the saved password after connecting", isOn: $remember)
         case .unavailable, nil:
             EmptyView()
@@ -195,7 +197,7 @@ struct ChallengeView: View {
         let v = value
         value = ""
         model.noteTyped(challenge.kind, value: v,
-                        savePassword: remember && (saved == .willSave || saved == .rejected))
+                        savePassword: remember && [.willSave, .rejected, .otherGateway].contains(saved))
         Task {
             if let e = await model.respond(challenge: challenge, value: v) {
                 error = e.code == "stale_challenge"

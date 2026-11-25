@@ -11,6 +11,8 @@ struct SavedPasswordState: Decodable, Equatable {
     var saved: Bool
     var username: String?
     var rejected: Bool
+    /// Saved for another gateway than the profile's (it was moved): not used.
+    var otherGateway: Bool?
     var location: String
     var error: String?
 }
@@ -23,6 +25,8 @@ enum SavedPasswordNote: Equatable {
     case rejected
     /// The keychain couldn't be read (locked, or access was denied).
     case unavailable
+    /// The saved password is for another gateway: the profile was moved since.
+    case otherGateway
 }
 
 /// A typed password waiting for its attempt to connect before it is saved.
@@ -76,6 +80,7 @@ extension AppModel {
         }
         switch r.reason {
         case "rejected": return .rejected
+        case "other-gateway": return .otherGateway
         case "unavailable": return .unavailable
         default: return .willSave
         }

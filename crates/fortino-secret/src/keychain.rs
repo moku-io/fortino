@@ -1,8 +1,9 @@
 //! [`CredentialStore`] in the user's login Keychain (macOS).
 //!
 //! One generic password per profile: service `org.fortino.vpn.<profile ID>`, account the
-//! username, label "Fortino: <profile name>" (what Keychain Access shows). The item's comment
-//! records that the gateway rejected the password. Keychain Access lets the user see, change or
+//! username, label "Fortino: <profile name>" (what Keychain Access shows), description ("Kind"
+//! in Keychain Access) naming the gateway it was saved for. The item's comment records that the
+//! gateway rejected the password. Keychain Access lets the user see, change or
 //! delete the item like any other.
 //!
 //! The item belongs to the program that created it: macOS lets that program (the `fortino`
@@ -24,6 +25,9 @@ use crate::store::{CredentialStore, SavedPassword, StoreError};
 /// `errSecItemNotFound`.
 const NOT_FOUND: i32 = -25300;
 
+/// Start of the description; the gateway follows.
+const DESCRIPTION: &str = "Fortino VPN password for ";
+
 /// The comment that marks a rejected password.
 const REJECTED: &str = "The VPN gateway rejected this password. Fortino asks for it again.";
 
@@ -39,8 +43,15 @@ fn unavailable(e: &Error) -> StoreError {
     StoreError::Unavailable(format!("the login keychain: {e}"))
 }
 
-/// The accounts saved for a profile, with their comments.
-fn items(profile_id: &str) -> Result<Vec<(String, Option<String>)>, StoreError> {
+/// One saved item's attributes.
+struct Attrs {
+    account: String,
+    comment: Option<String>,
+    description: Option<String>,
+}
+
+/// The accounts saved for a profile, with their comments and descriptions.
+fn items(profile_id: &str) -> Result<Vec<Attrs>, StoreError> {
     let found = ItemSearchOptions::new()
         .class(ItemClass::generic_password())
         .service(&service(profile_id))
@@ -56,8 +67,11 @@ fn items(profile_id: &str) -> Result<Vec<(String, Option<String>)>, StoreError> 
         .iter()
         .filter_map(|r| r.simplify_dict())
         .filter_map(|d| {
-            let account = d.get("acct")?.clone();
-            Some((account, d.get("icmt").cloned()))
+            Some(Attrs {
+                account: d.get("acct")?.clone(),
+                comment: d.get("icmt").cloned(),
+                description: d.get("desc").cloned(),
+            })
         })
         .collect())
 }
@@ -71,9 +85,14 @@ impl CredentialStore for Keychain {
         Ok(items(profile_id)?
             .into_iter()
             .next()
-            .map(|(username, comment)| SavedPassword {
-                username,
-                rejected: comment.as_deref() == Some(REJECTED),
+            .map(|a| SavedPassword {
+                gateway: a
+                    .description
+                    .as_deref()
+                    .and_then(|d| d.strip_prefix(DESCRIPTION))
+                    .map(str::to_owned),
+                username: a.account,
+                rejected: a.comment.as_deref() == Some(REJECTED),
             }))
     }
 
@@ -101,13 +120,14 @@ impl CredentialStore for Keychain {
         profile_id: &str,
         label: &str,
         username: &str,
+        gateway: &str,
         password: &Secret,
     ) -> Result<(), StoreError> {
         // Start from a fresh item: this drops another account's password and a rejected mark.
         self.remove(profile_id)?;
         let mut o = PasswordOptions::new_generic_password(&service(profile_id), username);
         o.set_label(&format!("Fortino: {label}"));
-        o.set_description("Fortino VPN password");
+        o.set_description(&format!("{DESCRIPTION}{gateway}"));
         set_generic_password_options(password.expose().as_bytes(), o).map_err(|e| unavailable(&e))
     }
 
@@ -129,8 +149,8 @@ impl CredentialStore for Keychain {
     fn remove(&self, profile_id: &str) -> Result<bool, StoreError> {
         let svc = service(profile_id);
         let accounts = items(profile_id)?;
-        for (account, _) in &accounts {
-            match delete_generic_password(&svc, account) {
+        for a in &accounts {
+            match delete_generic_password(&svc, &a.account) {
                 Ok(()) => {}
                 Err(e) if e.code() == NOT_FOUND => {}
                 Err(e) => return Err(unavailable(&e)),
@@ -153,12 +173,19 @@ mod tests {
         let id = format!("test-{}", std::process::id());
         let _ = k.remove(&id);
         assert_eq!(k.info(&id).unwrap(), None);
-        k.save(&id, "Test", "alice", &Secret::new("p@ss wörd"))
-            .unwrap();
+        k.save(
+            &id,
+            "Test",
+            "alice",
+            "vpn.example.org:443",
+            &Secret::new("p@ss wörd"),
+        )
+        .unwrap();
         assert_eq!(
             k.info(&id).unwrap(),
             Some(SavedPassword {
                 username: "alice".into(),
+                gateway: Some("vpn.example.org:443".into()),
                 rejected: false
             })
         );
@@ -166,7 +193,14 @@ mod tests {
         assert_eq!(k.read(&id, "bob").unwrap(), None);
         k.mark_rejected(&id, "alice").unwrap();
         assert!(k.info(&id).unwrap().unwrap().rejected);
-        k.save(&id, "Test", "bob", &Secret::new("other")).unwrap();
+        k.save(
+            &id,
+            "Test",
+            "bob",
+            "vpn.example.org:443",
+            &Secret::new("other"),
+        )
+        .unwrap();
         let i = k.info(&id).unwrap().unwrap();
         assert_eq!((i.username.as_str(), i.rejected), ("bob", false));
         assert_eq!(k.read(&id, "alice").unwrap(), None);

@@ -2,7 +2,10 @@
 //!
 //! Only a client running in the user's session uses this; the root daemon never does. A store
 //! keeps at most one password per profile, keyed by the profile's opaque ID (so a rename keeps
-//! it) and the username (so a different account never gets another account's password).
+//! it) and the username (so a different account never gets another account's password). It
+//! also records the gateway the password was saved for: a profile moved to another gateway
+//! (edited, re-imported, or changed by another program over the service's socket) never
+//! sends it there.
 //!
 //! A store can also remember that the gateway rejected the saved password. A rejected password
 //! is never sent again: the client asks the user instead, and saving a new password clears the
@@ -19,6 +22,9 @@ use crate::Secret;
 pub struct SavedPassword {
     /// The account the password belongs to.
     pub username: String,
+    /// The gateway it was saved for (see the CLI's `saved::gateway`); `None` for an item that
+    /// doesn't say, which is never used.
+    pub gateway: Option<String>,
     /// The gateway rejected this password the last time it was sent.
     pub rejected: bool,
 }
@@ -58,12 +64,13 @@ pub trait CredentialStore: Send + Sync {
 
     /// Saves `password` as the profile's only saved password, replacing any other (also one for
     /// another username) and clearing a rejected mark. `label` is the profile's display name,
-    /// shown by the system's password manager.
+    /// shown by the system's password manager; `gateway` the gateway it is for.
     fn save(
         &self,
         profile_id: &str,
         label: &str,
         username: &str,
+        gateway: &str,
         password: &Secret,
     ) -> Result<(), StoreError>;
 
@@ -88,7 +95,7 @@ impl CredentialStore for NoStore {
     fn read(&self, _: &str, _: &str) -> Result<Option<Secret>, StoreError> {
         Ok(None)
     }
-    fn save(&self, _: &str, _: &str, _: &str, _: &Secret) -> Result<(), StoreError> {
+    fn save(&self, _: &str, _: &str, _: &str, _: &str, _: &Secret) -> Result<(), StoreError> {
         Err(StoreError::NoStore)
     }
     fn mark_rejected(&self, _: &str, _: &str) -> Result<(), StoreError> {
@@ -132,10 +139,12 @@ impl CredentialStore for MemoryStore {
         profile_id: &str,
         _label: &str,
         username: &str,
+        gateway: &str,
         password: &Secret,
     ) -> Result<(), StoreError> {
         let info = SavedPassword {
             username: username.to_owned(),
+            gateway: Some(gateway.to_owned()),
             rejected: false,
         };
         self.items()
@@ -176,7 +185,7 @@ mod tests {
     fn memory_store_keeps_one_password_per_profile_and_username() {
         let s = MemoryStore::default();
         assert_eq!(s.info("p1").unwrap(), None);
-        s.save("p1", "Office", "alice", &Secret::new("one"))
+        s.save("p1", "Office", "alice", "gw:443", &Secret::new("one"))
             .unwrap();
         assert_eq!(s.read("p1", "alice").unwrap().unwrap().expose(), "one");
         assert_eq!(s.read("p1", "bob").unwrap(), None);
@@ -188,7 +197,8 @@ mod tests {
         assert!(s.info("p1").unwrap().unwrap().rejected);
 
         // Saving again replaces the account and clears the mark.
-        s.save("p1", "Office", "bob", &Secret::new("two")).unwrap();
+        s.save("p1", "Office", "bob", "gw:443", &Secret::new("two"))
+            .unwrap();
         let i = s.info("p1").unwrap().unwrap();
         assert_eq!((i.username.as_str(), i.rejected), ("bob", false));
         assert_eq!(s.read("p1", "alice").unwrap(), None);
@@ -203,7 +213,7 @@ mod tests {
         assert_eq!(s.info("p").unwrap(), None);
         assert_eq!(s.read("p", "u").unwrap(), None);
         assert_eq!(
-            s.save("p", "P", "u", &Secret::new("x")),
+            s.save("p", "P", "u", "gw:443", &Secret::new("x")),
             Err(StoreError::NoStore)
         );
         assert!(!s.remove("p").unwrap());

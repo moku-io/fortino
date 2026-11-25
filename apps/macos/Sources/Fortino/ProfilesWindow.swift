@@ -737,6 +737,7 @@ struct SavedPasswordRow: View {
         if let u = s.username, let mine = profile.spec.usernameHint, u != mine {
             return "Saved for \(u), not \(mine); asked next time"
         }
+        if s.otherGateway == true { return "Saved for another gateway; asked next time" }
         if s.rejected { return "Refused by the gateway; asked next time" }
         return s.username.map { "Saved for \($0)" } ?? "Saved"
     }

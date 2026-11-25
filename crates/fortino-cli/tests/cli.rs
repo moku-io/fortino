@@ -749,3 +749,45 @@ fn prompt_answered_elsewhere_is_dropped() {
     // Nothing was typed in the terminal, so nothing was saved.
     assert!(creds(&d).get(profile_id(&d, "GW")).is_none());
 }
+
+/// A saved password belongs to the gateway it was saved for. A program running as the user can
+/// point the profile at a server of its own over the service's socket; asked to answer, the CLI
+/// then sends nothing.
+#[test]
+fn saved_password_is_never_sent_to_another_gateway() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    // Changed behind the CLI's back, straight over the socket.
+    d.rt.block_on(async {
+        let c = fortino_core::client::Client::connect(&d.sock, "other")
+            .await
+            .unwrap();
+        let p = c.profile_get("GW").await.unwrap();
+        let mut spec = p.spec.clone();
+        spec.endpoint.host = "collector.example.net".parse().unwrap();
+        c.profile_update(p.id.clone(), p.revision, spec)
+            .await
+            .unwrap();
+    });
+    let st = json(&d.run("--json password status GW"));
+    assert_eq!(st["result"]["otherGateway"], true, "{st}");
+
+    let (c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let r = &json(&o)["result"];
+    assert_eq!(
+        (r["answered"].as_bool(), r["reason"].as_str()),
+        (Some(false), Some("other-gateway"))
+    );
+    // Still waiting for a typed password.
+    let st = d.rt.block_on(c.status()).unwrap();
+    assert_eq!(st.challenge.map(|c| c.id), Some(ch));
+}
