@@ -121,6 +121,9 @@ pub enum WorkerEvent {
         kind: ChallengeKind,
         /// Sanitized prompt.
         prompt: String,
+        /// A one-time code prompt where an empty answer asks for a push notification instead
+        /// (FortiToken Mobile).
+        push: bool,
     },
     /// Tunnel interface is up with these settings. The daemon applies and verifies them.
     Up(TunnelConfig),
@@ -293,6 +296,7 @@ impl FakeRun {
             id: id.clone(),
             kind,
             prompt: prompt.into(),
+            push: false,
         })
         .await?;
         loop {

@@ -37,6 +37,7 @@ struct PendingChallenge {
     id: String,
     kind: ChallengeKind,
     prompt: String,
+    push: bool,
     deadline: Instant,
 }
 
@@ -136,6 +137,7 @@ impl Snapshot {
                     id: c.id.clone(),
                     kind: c.kind,
                     prompt: c.prompt.clone(),
+                    push: c.push,
                     expires_in_secs: c
                         .deadline
                         .saturating_duration_since(Instant::now())
@@ -599,6 +601,7 @@ impl Session {
                 "answer too long",
             ));
         }
+        let empty = value.expose().is_empty();
         let sent = a.cmd.try_send(WorkerCommand::Respond {
             challenge_id: challenge_id.to_owned(),
             value,
@@ -616,9 +619,16 @@ impl Session {
                 "tunnel worker stopped accepting input",
             ));
         }
+        // The gateway must answer within the progress deadline; asked for a push, it answers
+        // once the user approved it on the phone, which gets a prompt's time.
+        let push = a.challenge.as_ref().is_some_and(|c| c.push);
         a.challenge = None;
-        // The gateway must answer within the progress deadline.
-        a.progress_deadline = Some(Instant::now() + self.timeouts.transport);
+        let wait = if push && empty {
+            self.timeouts.challenge
+        } else {
+            self.timeouts.transport
+        };
+        a.progress_deadline = Some(Instant::now() + wait);
         a.wake.notify_one();
         g.state = State::Authenticating;
         self.publish(&mut g);
@@ -820,13 +830,19 @@ impl Session {
                 };
                 self.publish(&mut g);
             }
-            WorkerEvent::Challenge { id, kind, prompt } => {
+            WorkerEvent::Challenge {
+                id,
+                kind,
+                prompt,
+                push,
+            } => {
                 let id = id.chars().take(64).collect();
                 let prompt = sanitize_prompt(&prompt);
                 a.progress_deadline = None;
                 a.challenge = Some(PendingChallenge {
                     id,
                     kind,
+                    push,
                     prompt,
                     deadline: Instant::now() + self.timeouts.challenge,
                 });

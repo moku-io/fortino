@@ -54,6 +54,16 @@ impl Ctx {
     /// Asks the user through the daemon and waits for the answer. The daemon owns the
     /// deadline; it stops the attempt when the challenge expires.
     pub async fn ask(&mut self, kind: ChallengeKind, prompt: &str) -> Result<Secret, Failure> {
+        self.ask_with(kind, prompt, false).await
+    }
+
+    /// [`Ctx::ask`], saying whether an empty one-time code asks for a push notification.
+    pub async fn ask_with(
+        &mut self,
+        kind: ChallengeKind,
+        prompt: &str,
+        push: bool,
+    ) -> Result<Secret, Failure> {
         self.next_challenge += 1;
         let id = format!("c{}", self.next_challenge);
         self.emit(WorkerEvent::Challenge {
@@ -64,6 +74,7 @@ impl Ctx {
                 .filter(|c| !c.is_control())
                 .take(128)
                 .collect(),
+            push,
         })
         .await;
         loop {
@@ -236,7 +247,9 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
             }
             LoginOutcome::SecondFactor(ch) => {
                 let prompt = ch.message.clone().unwrap_or_else(|| "Token code".into());
-                let code = ctx.ask(ChallengeKind::Otp, &prompt).await?;
+                let code = ctx
+                    .ask_with(ChallengeKind::Otp, &prompt, ch.kind == TokenKind::Push)
+                    .await?;
                 // An empty answer requests a FortiToken Mobile push where offered.
                 let push = code.expose().is_empty() && ch.kind == TokenKind::Push;
                 let form = login::token_form(
@@ -254,7 +267,15 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
                     &[],
                     Some(Body::form(form)),
                 );
-                resp = ctx.guard(gw.exchange(&req)).await?;
+                // With a push the gateway answers once the user approved it on the phone,
+                // which can take longer than a request normally may.
+                let normal = gw.timeout;
+                if push {
+                    gw.timeout = PUSH_APPROVAL;
+                }
+                let r = ctx.guard(gw.exchange(&req)).await;
+                gw.timeout = normal;
+                resp = r?;
             }
             LoginOutcome::CookieSwap { tmp_cookie, path } => {
                 let req = identity::build(
@@ -441,6 +462,10 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     logout(&mut session).await;
     r
 }
+
+/// Longest wait for a push notification to be approved (FortiToken Mobile). The daemon gives
+/// the answer the same time (its challenge timeout).
+const PUSH_APPROVAL: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Takes a new non-empty `SVPNCOOKIE` from a response.
 /// The gateway set `/remote/info` `0x100`, this attempt has no EMS serial, and the login

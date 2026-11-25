@@ -381,3 +381,38 @@ async fn stop_during_challenge_cancels() {
     };
     assert_eq!(t.code, Some(ErrorCode::Cancelled));
 }
+
+/// A gateway offering FortiToken Mobile push says so on the code prompt, so a client can offer
+/// "approve on your phone" (an empty answer); a plain code prompt doesn't.
+#[tokio::test]
+async fn code_prompt_says_when_a_push_is_offered() {
+    for (tokeninfo, push) in [("ftm_push", true), ("remote_token_auth", false)] {
+        let mut sc = scenario();
+        sc.login.tokeninfo = tokeninfo.into();
+        let mut r = start(sc).await;
+        loop {
+            match next(&mut r.h).await {
+                WorkerEvent::Stage(_) => {}
+                WorkerEvent::Challenge {
+                    id,
+                    kind: ChallengeKind::Password,
+                    ..
+                } => {
+                    r.h.commands
+                        .send(WorkerCommand::Respond {
+                            challenge_id: id,
+                            value: Secret::new("hunter2"),
+                        })
+                        .await
+                        .unwrap();
+                }
+                WorkerEvent::Challenge { kind, push: p, .. } => {
+                    assert_eq!(kind, ChallengeKind::Otp);
+                    assert_eq!(p, push, "{tokeninfo}");
+                    break;
+                }
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+}

@@ -104,9 +104,14 @@ let j = #"{"daemonInstance":"i","seq":3,"state":"awaiting-input","attemptId":"a1
 if let s = try? JSONDecoder().decode(Status.self, from: Data(j.utf8)) {
     check(s.state == .awaitingInput, "state")
     check(s.challenge?.kind == .otp && s.challenge?.kind.isSecret == true, "challenge")
+    check(s.challenge?.push == nil, "no push hint from a service that doesn't send one")
 } else {
     check(false, "status decodes")
 }
+
+// A code prompt that offers a push (FortiToken Mobile): the panel offers Send Push.
+let pj = #"{"id":"c2","kind":"otp","prompt":"Token code","push":true,"expiresInSecs":119}"#
+check((try? JSONDecoder().decode(Challenge.self, from: Data(pj.utf8)))?.push == true, "push hint decodes")
 
 // EMS status decoding
 let ej = #"{"state":"registered","registeredAt":1,"lastKeepalive":2}"#

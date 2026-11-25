@@ -179,8 +179,8 @@ pub async fn run() -> io::Result<()> {
                 let a = attempt.clone();
                 let (msg, last) = match ev {
                     WorkerEvent::Stage(stage) => (WorkerMsg::Stage { v, attempt: a, seq, stage }, false),
-                    WorkerEvent::Challenge { id, kind, prompt } => {
-                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt }, false)
+                    WorkerEvent::Challenge { id, kind, prompt, push } => {
+                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt, push }, false)
                     }
                     WorkerEvent::Up(tc) => (
                         WorkerMsg::Up {

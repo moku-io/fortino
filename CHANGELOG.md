@@ -9,6 +9,7 @@ What changed in each release of Fortino. Each section is also the release's note
 - **Stopping the service while connected** (uninstalling Fortino, or `launchctl bootout`) now disconnects and restores DNS and IPv6 first.
 - **IPv6 is always blocked while connected**, also when the gateway assigns an IPv6 address: Fortino doesn't tunnel IPv6, so it no longer leaks.
 - **Full IPv4 with the gateway's DNS** is refused before anything changes, with a message to choose this Mac's DNS, instead of failing after sign-in.
+- **Push notifications.** When the gateway offers FortiToken Mobile push, the sign-in panel has **Send Push**: approve the sign-in on your phone instead of typing the code. In the terminal, press Return on an empty code.
 - **Sign In…** in the menu-bar panel and the Profiles window brings back a sign-in panel closed with its close button.
 - **Terminal and app together.** `fortino connect` notices a prompt answered in the app and carries on, instead of waiting at a dead prompt. An unusable `--password-fd` or `--otp-fd` frees the VPN at once.
 - **Re-importing from FortiClient** keeps your username, routing and DNS choices and the saved password; the password is removed only when the gateway changes.

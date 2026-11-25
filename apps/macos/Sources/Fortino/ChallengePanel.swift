@@ -118,6 +118,11 @@ struct ChallengeView: View {
             .focused($focused)
             .onSubmit(submit)
             .accessibilityLabel(title)
+            if offersPush {
+                Text("Or send a push notification and approve the sign-in on your phone.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let error {
                 Text(error).foregroundStyle(.red).font(.callout)
             }
@@ -126,6 +131,11 @@ struct ChallengeView: View {
                 Spacer()
                 Button("Cancel Connection", role: .cancel) { model.disconnect() }
                     .keyboardShortcut(.cancelAction)
+                if offersPush {
+                    Button("Send Push", action: sendPush)
+                        .disabled(busy)
+                        .help("The gateway sends a notification to your authenticator app")
+                }
                 Button("Continue", action: submit)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -188,6 +198,23 @@ struct ChallengeView: View {
             Toggle("Replace the saved password after connecting", isOn: $remember)
         case .unavailable, nil:
             EmptyView()
+        }
+    }
+
+    /// The gateway offers FortiToken Mobile push for this code.
+    private var offersPush: Bool { challenge.kind == .otp && challenge.push == true }
+
+    /// An empty code asks the gateway for a push notification instead.
+    private func sendPush() {
+        busy = true
+        error = nil
+        Task {
+            if let e = await model.respond(challenge: challenge, value: "") {
+                error = e.code == "stale_challenge"
+                    ? "This prompt expired or was answered elsewhere."
+                    : e.message
+            }
+            busy = false
         }
     }
 
