@@ -9,6 +9,8 @@ final class ChallengePanelController {
     weak var model: AppModel?
     private var panel: NSPanel?
     private var shownId: String?
+    /// The challenge whose view the panel holds (it may be hidden by its close button).
+    private var presentedId: String?
 
     func update(status: Status) {
         guard let ch = status.challenge else {
@@ -40,6 +42,7 @@ final class ChallengePanelController {
                                  backing: .buffered, defer: false)
         p.title = "Sign in to \(status.profileName ?? "VPN")"
         p.contentViewController = host
+        presentedId = ch.id
         p.isReleasedWhenClosed = false
         // A menu-bar app is usually inactive; keep the prompt visible anyway.
         p.hidesOnDeactivate = false
@@ -53,7 +56,18 @@ final class ChallengePanelController {
 
     func close() {
         shownId = nil
+        presentedId = nil
         panel?.orderOut(nil)
+    }
+
+    /// Shows the panel again for the open prompt after the user closed it: closing hides it,
+    /// and the attempt keeps waiting for the answer. Nothing to show while the keychain is
+    /// still answering the prompt.
+    func reopen() {
+        guard let p = panel, let id = model?.status?.challenge?.id, id == presentedId else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        p.makeKeyAndOrderFront(nil)
+        p.orderFrontRegardless()
     }
 }
 

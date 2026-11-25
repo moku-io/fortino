@@ -141,7 +141,8 @@ pub struct ProbeReply {
 }
 
 impl ProbeReply {
-    /// Interprets a reply. Rejects a server whose serial is not an EMS serial, as FortiClient does.
+    /// Interprets a reply. Rejects a server whose serial is not an EMS serial: anything else
+    /// answering on the port is not an EMS, and nothing about it is stored.
     pub fn from_reply(reply: &Reply) -> Result<Self, ReplyError> {
         expect_kind(reply, "FCPROBERPLY")?;
         let f = &reply.fields;

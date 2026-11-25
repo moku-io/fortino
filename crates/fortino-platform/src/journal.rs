@@ -97,8 +97,14 @@ impl<P: NetPlatform> Journaled<P> {
         Ok(())
     }
 
-    /// Applies changes in order; on the first failure, reverts all of them.
+    /// Applies changes in order; on the first failure, reverts all of them. A change the
+    /// platform can't make at all is refused before anything is changed.
     pub fn apply_all(&mut self, changes: &[NetChange]) -> Result<()> {
+        for c in changes {
+            if let Err(e @ PlatformError::Unsupported(_)) = self.platform.prepare(c) {
+                return Err(e);
+            }
+        }
         let mark = self.entries.len();
         for c in changes {
             if let Err(e) = self.apply(c) {

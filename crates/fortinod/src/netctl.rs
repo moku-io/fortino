@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use fortino_config::{DnsMode, IpPolicy};
 use fortino_core::worker::TunnelConfig;
 use fortino_platform::journal::Journaled;
-use fortino_platform::{DnsConfig, IpNet, NetChange, NetPlatform, Route, RouteVia};
+use fortino_platform::{DnsConfig, IpNet, NetChange, NetPlatform, PlatformError, Route, RouteVia};
 
 /// Maximum split routes accepted from a gateway.
 pub const MAX_ROUTES: usize = 1024;
@@ -33,6 +33,9 @@ pub enum NetError {
     /// Rollback failed; recovery is required.
     #[error("network cleanup failed: {0}")]
     Cleanup(String),
+    /// This platform can't apply the settings; nothing was changed.
+    #[error("{0}")]
+    PlatformUnsupported(String),
 }
 
 /// Network controller used by the session manager.
@@ -262,7 +265,11 @@ impl<P: NetPlatform> NetController for JournaledController<P> {
             );
         }
         self.inner.apply_all(&changes).map_err(|e| {
-            if self.inner.pending() > 0 {
+            if let PlatformError::Unsupported(m) = &e
+                && self.inner.pending() == 0
+            {
+                NetError::PlatformUnsupported(m.clone())
+            } else if self.inner.pending() > 0 {
                 NetError::Cleanup(e.to_string())
             } else {
                 NetError::Apply(e.to_string())

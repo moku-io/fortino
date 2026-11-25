@@ -5,6 +5,14 @@ What changed in each release of Fortino. Each section is also the release's note
 ## Unreleased
 
 - **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A password is saved for the profile's username, so the option needs one. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
+- **Connecting after a restart.** A Mac restarted while connected no longer blocks new connections with "network settings could not be restored".
+- **Stopping the service while connected** (uninstalling Fortino, or `launchctl bootout`) now disconnects and restores DNS and IPv6 first.
+- **IPv6 is always blocked while connected**, also when the gateway assigns an IPv6 address: Fortino doesn't tunnel IPv6, so it no longer leaks.
+- **Full IPv4 with the gateway's DNS** is refused before anything changes, with a message to choose this Mac's DNS, instead of failing after sign-in.
+- **Sign In…** in the menu-bar panel and the Profiles window brings back a sign-in panel closed with its close button.
+- **Terminal and app together.** `fortino connect` notices a prompt answered in the app and carries on, instead of waiting at a dead prompt. An unusable `--password-fd` or `--otp-fd` frees the VPN at once.
+- **Re-importing from FortiClient** keeps your username, routing and DNS choices and the saved password; the password is removed only when the gateway changes.
+- **Fixes:** split-DNS domains listed twice by the gateway, EMS certificates trusted by macOS but not by Fortino's CA bundle, error details from export and saved passwords, connections left open by `fortino status --watch`, an EMS check-in that failed once after connecting.
 
 ## 0.7.0
 

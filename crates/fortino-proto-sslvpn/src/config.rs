@@ -298,7 +298,10 @@ fn element(
             for k in [&b"ip"[..], b"ipv6"] {
                 if let Some(v) = a(k)? {
                     match v.parse::<IpAddr>() {
-                        Ok(ip) if !s.dns.contains(&ip) => s.dns.push(ip),
+                        // One past the limit is kept, so the check after parsing rejects it.
+                        Ok(ip) if !s.dns.contains(&ip) && s.dns.len() <= MAX_DNS_SERVERS => {
+                            s.dns.push(ip)
+                        }
                         Ok(_) => {}
                         Err(_) => s.rejected.push("invalid DNS server".into()),
                     }
@@ -306,6 +309,11 @@ fn element(
             }
             if let Some(d) = a(b"domain")? {
                 for d in split_domains(&d) {
+                    // Bounded while parsing: every element may add more, and the check against
+                    // duplicates is linear.
+                    if s.dns_suffixes.len() > MAX_DNS_DOMAINS {
+                        break;
+                    }
                     if !s.dns_suffixes.contains(&d) {
                         s.dns_suffixes.push(d);
                     }
@@ -424,6 +432,32 @@ fn valid_domain(d: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gateway can repeat `<dns>` elements without end; what is kept stays bounded and the
+    /// settings are refused.
+    #[test]
+    fn repeated_dns_elements_stay_bounded() {
+        let mut xml = String::from("<sslvpn-tunnel><ipv4>");
+        for i in 0..200 {
+            let domains: Vec<String> = (0..60).map(|j| format!("d{i}x{j}.example")).collect();
+            xml.push_str(&format!("<dns domain='{}'/>", domains.join(";")));
+            xml.push_str(&format!("<dns ip='10.0.{}.{}'/>", i / 250, i % 250 + 1));
+        }
+        xml.push_str("</ipv4></sslvpn-tunnel>");
+        let st = parse(&xml).unwrap();
+        assert!(st.dns_suffixes.len() <= MAX_DNS_DOMAINS + 1);
+        assert!(st.dns.len() <= MAX_DNS_SERVERS + 1);
+        assert!(
+            st.rejected.iter().any(|r| r.contains("DNS domains")),
+            "{:?}",
+            st.rejected
+        );
+        assert!(
+            st.rejected.iter().any(|r| r.contains("DNS servers")),
+            "{:?}",
+            st.rejected
+        );
+    }
 
     const SAMPLE: &str = r#"<?xml version='1.0' encoding='utf-8'?>
 <sslvpn-tunnel ver='2' dtls='1' patch='1'>

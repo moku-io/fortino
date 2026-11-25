@@ -325,6 +325,7 @@ impl ProcessWorker {
         let mut last_seq = 0u64;
         let mut stopping = false;
         let mut stop_deadline: Option<tokio::time::Instant> = None;
+        let mut timed_out = false;
         let result = loop {
             let deadline = async {
                 match stop_deadline {
@@ -387,12 +388,17 @@ impl ProcessWorker {
                         }
                     }
                 }
-                () = deadline => break backend("tunnel worker did not stop in time"),
+                () = deadline => {
+                    timed_out = true;
+                    break backend("tunnel worker did not stop in time");
+                }
             }
         };
         drop(wr);
         drop(rd);
-        let graceful = result.code.is_none() || stopping;
+        // A worker that already let its stop grace pass gets no second one: it is signalled
+        // now, well before the session's own shutdown deadline frees the VPN for a new attempt.
+        let graceful = !timed_out && (result.code.is_none() || stopping);
         reap(&mut child, pgid, graceful).await;
         result
     }

@@ -52,9 +52,11 @@ extension AppModel {
         return t.value
     }
 
-    /// The profile of `status`'s attempt, when it saves its password.
+    /// The profile of `status`'s attempt, when it saves its password and this app started the
+    /// attempt (see `ownAttempt`).
     func savingProfile(for status: Status) -> Profile? {
-        profiles.first { $0.id == status.profileId && $0.spec.savePassword == true }
+        guard status.attemptId != nil, status.attemptId == ownAttempt else { return nil }
+        return profiles.first { $0.id == status.profileId && $0.spec.savePassword == true }
     }
 
     /// Answers `challenge` with the saved password. Returns nil when it was answered (the
@@ -108,12 +110,12 @@ extension AppModel {
         guard s.state == .connected else { return }
         pendingPasswordSave = nil
         Task {
-            let (code, _, err) = await runCLI(
+            let (code, out, err) = await runCLI(
                 ["password", "save", pending.profileId, "--username", pending.username, "--stdin"],
                 input: Data((pending.password + "\n").utf8))
             if code != 0 {
                 actionError = "The password could not be saved: "
-                    + err.trimmingCharacters(in: .whitespacesAndNewlines)
+                    + (cliFailure(stdout: out, stderr: err) ?? "the fortino command failed.")
             }
             await refreshSavedPassword(pending.profileId)
         }
@@ -128,10 +130,10 @@ extension AppModel {
 
     /// Removes a profile's saved password; the profile's choice stays as it is.
     func forgetSavedPassword(_ profileId: String) async {
-        let (code, _, err) = await runCLI(["password", "forget", profileId])
+        let (code, out, err) = await runCLI(["password", "forget", profileId])
         if code != 0 {
             actionError = "The saved password could not be removed: "
-                + err.trimmingCharacters(in: .whitespacesAndNewlines)
+                + (cliFailure(stdout: out, stderr: err) ?? "the fortino command failed.")
         }
         await refreshSavedPassword(profileId)
     }

@@ -334,6 +334,34 @@ impl Session {
         let _ = rx.wait_for(|exit| *exit).await;
     }
 
+    /// Stops the active attempt, if any, and waits until it has ended and its network changes
+    /// are rolled back, for at most the shutdown timeout plus a little. Called when the service
+    /// is told to stop: an uninstall or `launchctl bootout` never restarts it, so recovery at the
+    /// next start would come too late (or never) for the user's DNS and IPv6.
+    pub async fn shutdown(&self) {
+        {
+            let mut g = lock(&self.inner);
+            if g.active.is_none() {
+                return;
+            }
+            self.request_stop(
+                &mut g,
+                StopCause {
+                    code: Some(ErrorCode::ServiceUnavailable),
+                    message: "the VPN service stopped".into(),
+                },
+            );
+        }
+        let deadline = Instant::now() + self.timeouts.shutdown + std::time::Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if lock(&self.inner).active.is_none() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tracing::warn!("the attempt did not end in time; its network changes stay journaled");
+    }
+
     /// Daemon instance ID.
     pub fn instance(&self) -> String {
         lock(&self.inner).instance.clone()
@@ -815,7 +843,9 @@ impl Session {
                             a.network_applied = true;
                         }
                         let code = match e {
-                            NetError::Unsupported(_) => ErrorCode::UnsupportedPolicy,
+                            NetError::Unsupported(_) | NetError::PlatformUnsupported(_) => {
+                                ErrorCode::UnsupportedPolicy
+                            }
                             _ => ErrorCode::NetworkConfigFailure,
                         };
                         self.request_stop(

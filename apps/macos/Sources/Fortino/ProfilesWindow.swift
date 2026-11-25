@@ -85,7 +85,7 @@ struct ProfilesWindow: View {
                 .accessibilityLabel("New Profile")
             }
             ToolbarItem(placement: .primaryAction) {
-                ConnectButton(model: model)
+                ConnectButton(model: model, creating: creating)
             }
         }
         .frame(minWidth: 680, minHeight: 500)
@@ -139,6 +139,8 @@ struct ContentUnavailableCompat<Actions: View>: View {
 /// The toolbar's primary action for the selected profile.
 struct ConnectButton: View {
     @ObservedObject var model: AppModel
+    /// The new-profile form is shown: Connect would act on another, hidden profile.
+    var creating = false
 
     /// The active attempt belongs to a profile other than the selected one.
     private var otherActive: Bool {
@@ -168,7 +170,8 @@ struct ConnectButton: View {
         case .idle, .recoveryRequired:
             Button("Connect") { model.connect(savingEdits: true) }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.selectedProfile == nil || model.serviceError != nil)
+                .disabled(creating || model.selectedProfile == nil || model.serviceError != nil)
+                .help(creating ? "Create the profile first" : "")
         }
     }
 }
@@ -187,13 +190,18 @@ struct ConnectionSection: View {
                 HStack(spacing: 6) {
                     StatusDot(color: dotColor)
                     Text(isCurrent && model.state.isActive ? model.state.label : "Not Connected")
+                    if isCurrent, model.state == .awaitingInput, model.status?.challenge != nil {
+                        Button("Sign In…") { model.showSignIn() }
+                            .controlSize(.small)
+                            .help("Shows the sign-in panel")
+                    }
                 }
             }
             if let ems = profile.spec.endpoint.ems {
                 EmsStatusRow(model: model, profileId: profile.id, server: ems,
                              status: model.emsStatus[ems.display])
                 if model.emsStatus[ems.display]?.checkedInWithoutRules == true {
-                    EmsNoRulesNote()
+                    EmsNoRulesNote(model: model, profileId: profile.id)
                 }
             }
             if isCurrent, model.state == .connected, let st = model.status {
@@ -262,6 +270,8 @@ struct StatusDot: View {
 /// The EMS accepted this Mac but assigned it nothing. Often harmless, but on gateways that admit
 /// devices by EMS tag it explains a VPN that connects while nothing loads.
 struct EmsNoRulesNote: View {
+    @ObservedObject var model: AppModel
+    let profileId: String
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -280,6 +290,8 @@ struct EmsNoRulesNote: View {
             HStack {
                 Spacer()
                 Button("Enroll with Package…") {
+                    // The package is checked against this profile's EMS.
+                    model.emsSetupProfileId = profileId
                     openWindow(id: "enrollment")
                     NSApp.activate(ignoringOtherApps: true)
                 }
@@ -327,9 +339,13 @@ struct EmsStatusRow: View {
         ["unconfigured", "not-registered", "held-by-forticlient", "quarantined", nil].contains(status?.state)
     }
 
+    /// The last attempt failed verifying this EMS server (its own profile's, or another
+    /// profile's with the same server).
     private var emsTrustFailed: Bool {
-        guard model.state == .idle, let r = model.status?.lastResult,
-              r.attemptId != model.reviewedEmsFailure else { return false }
+        guard model.state == .idle, let st = model.status, let r = st.lastResult,
+              r.attemptId != model.reviewedEmsFailure,
+              model.profiles.first(where: { $0.id == st.profileId })?.spec.endpoint.ems == server
+        else { return false }
         return r.code == "trust_failure" && r.message.hasPrefix("EMS:")
     }
 

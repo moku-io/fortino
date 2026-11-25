@@ -67,7 +67,9 @@ pub enum AfterConnect {
 pub struct Keeper {
     profile_id: String,
     label: String,
-    enabled: bool,
+    /// The profile's username when its password is saved: the only account whose password is
+    /// read from or saved to the store. `None` leaves the store alone.
+    account: Option<String>,
     /// The store's item when the attempt started.
     initial: Option<SavedPassword>,
     /// The username whose saved password was sent in this attempt.
@@ -81,9 +83,16 @@ pub struct Keeper {
 }
 
 impl Keeper {
-    /// A keeper for `profile_id`. `enabled` is the profile's **Save password** choice.
-    pub fn new(store: &dyn CredentialStore, profile_id: &str, label: &str, enabled: bool) -> Self {
-        let initial = if enabled {
+    /// A keeper for `profile_id`. `account` is the profile's username when it has **Save
+    /// password** on (`None` otherwise): an attempt that signs in as anyone else neither gets
+    /// that account's password nor replaces it.
+    pub fn new(
+        store: &dyn CredentialStore,
+        profile_id: &str,
+        label: &str,
+        account: Option<&str>,
+    ) -> Self {
+        let initial = if account.is_some() {
             store.info(profile_id).ok().flatten()
         } else {
             None
@@ -91,7 +100,7 @@ impl Keeper {
         Self {
             profile_id: profile_id.to_owned(),
             label: label.to_owned(),
-            enabled,
+            account: account.map(str::to_owned),
             initial,
             sent_saved: None,
             typed: None,
@@ -108,10 +117,10 @@ impl Keeper {
         username: Option<&str>,
         note: &mut dyn FnMut(String),
     ) -> Option<Secret> {
-        if !self.enabled || self.sent_saved.is_some() {
+        if self.sent_saved.is_some() {
             return None;
         }
-        let username = username?;
+        let username = username.filter(|u| self.account.as_deref() == Some(*u))?;
         let l = lookup(store, &self.profile_id, username);
         self.typed_because = Some(l.reason());
         match l {
@@ -134,8 +143,8 @@ impl Keeper {
 
     /// Remembers a password the user typed, to save once connected.
     pub fn typed(&mut self, username: Option<&str>, password: &str) {
-        if self.enabled
-            && let Some(u) = username
+        if let Some(u) = username.filter(|u| self.account.as_deref() == Some(*u))
+            && !password.is_empty()
         {
             self.typed = Some((u.to_owned(), Secret::new(password)));
         }
@@ -196,7 +205,7 @@ mod tests {
     fn disabled_profile_never_reads_or_saves() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("pw")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", false);
+        let mut k = Keeper::new(&s, "p", "P", None);
         assert!(k.saved_answer(&s, Some("alice"), &mut quiet()).is_none());
         k.typed(Some("alice"), "typed");
         assert_eq!(k.connected(), AfterConnect::Nothing);
@@ -205,7 +214,7 @@ mod tests {
     #[test]
     fn first_connection_saves_the_typed_password_once_connected() {
         let s = MemoryStore::default();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         assert!(k.saved_answer(&s, Some("alice"), &mut quiet()).is_none());
         k.typed(Some("alice"), "secret");
         k.saw_challenge(ChallengeKind::Otp);
@@ -218,7 +227,7 @@ mod tests {
     fn saved_password_answers_once_per_attempt() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("pw")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         let mut notes = Vec::new();
         let a = k.saved_answer(&s, Some("alice"), &mut |n| notes.push(n));
         assert_eq!(a.unwrap().expose(), "pw");
@@ -228,26 +237,28 @@ mod tests {
     }
 
     #[test]
-    fn another_username_is_not_given_the_saved_password() {
+    fn another_username_neither_gets_nor_replaces_the_saved_password() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("pw")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        // `fortino connect --username bob` on alice's profile.
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         assert!(k.saved_answer(&s, Some("bob"), &mut quiet()).is_none());
         k.typed(Some("bob"), "bobs");
-        assert_eq!(k.connected(), AfterConnect::Save);
+        assert_eq!(k.connected(), AfterConnect::Nothing);
+        assert_eq!(s.read("p", "alice").unwrap().unwrap().expose(), "pw");
     }
 
     #[test]
     fn rejected_saved_password_is_marked_and_not_sent_again() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("old")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         assert!(k.saved_answer(&s, Some("alice"), &mut quiet()).is_some());
         assert!(k.finished(&s, Some(ErrorCode::AuthDenied)));
         assert!(s.info("p").unwrap().unwrap().rejected);
 
         // Next attempt: not sent, the user types it and is asked before it replaces the old one.
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         let mut notes = Vec::new();
         assert!(
             k.saved_answer(&s, Some("alice"), &mut |n| notes.push(n))
@@ -264,7 +275,7 @@ mod tests {
     fn a_refusal_after_the_code_prompt_is_not_blamed_on_the_password() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("pw")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         assert!(k.saved_answer(&s, Some("alice"), &mut quiet()).is_some());
         k.saw_challenge(ChallengeKind::Otp);
         assert!(!k.finished(&s, Some(ErrorCode::AuthDenied)));
@@ -275,7 +286,7 @@ mod tests {
     fn other_failures_do_not_mark_the_password() {
         let s = MemoryStore::default();
         s.save("p", "P", "alice", &Secret::new("pw")).unwrap();
-        let mut k = Keeper::new(&s, "p", "P", true);
+        let mut k = Keeper::new(&s, "p", "P", Some("alice"));
         assert!(k.saved_answer(&s, Some("alice"), &mut quiet()).is_some());
         assert!(!k.finished(&s, Some(ErrorCode::TransportFailure)));
         assert!(!k.finished(&s, None));

@@ -93,10 +93,19 @@ async fn daemon() -> ExitCode {
         let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .map_err(|e| format!("SIGTERM handler: {e}"))?;
         let restart = session.clone();
+        let stopping = session.clone();
         tokio::select! {
             () = fortinod::server::serve(listener, session, auth) => {}
-            _ = tokio::signal::ctrl_c() => tracing::info!("shutting down"),
-            _ = term.recv() => tracing::info!("shutting down"),
+            // Stop a connected VPN and undo its routes, DNS and IPv6 block before exiting:
+            // after an uninstall or a bootout nothing would restore them until a reboot.
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("shutting down");
+                stopping.shutdown().await;
+            }
+            _ = term.recv() => {
+                tracing::info!("shutting down");
+                stopping.shutdown().await;
+            }
             () = restart.exit_requested() => {
                 // No attempt is active. Let the connection tasks deliver the answer to
                 // `daemon.restart`, then exit; launchd (KeepAlive) starts the installed binary.

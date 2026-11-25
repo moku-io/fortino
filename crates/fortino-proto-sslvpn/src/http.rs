@@ -230,9 +230,16 @@ fn dechunk(mut b: &[u8]) -> Result<Option<(Vec<u8>, usize)>, HttpError> {
             usize::from_str_radix(size_hex, 16).map_err(|_| HttpError::Malformed("chunk size"))?;
         b = &b[eol + 2..];
         if size == 0 {
-            // Skip trailers up to the blank line.
+            // Skip trailers up to the blank line; they are headers and get the same limit.
+            let trailers = b.len();
             loop {
+                if trailers - b.len() > MAX_HEADER {
+                    return Err(HttpError::TooLarge("trailer"));
+                }
                 let Some(e) = find(b, b"\r\n") else {
+                    if b.len() > MAX_HEADER {
+                        return Err(HttpError::TooLarge("trailer"));
+                    }
                     return Ok(None);
                 };
                 let blank = e == 0;
@@ -292,6 +299,24 @@ mod tests {
             );
         }
         assert!(parse_response(&raw[..raw.len() - 1], true).is_err());
+    }
+
+    #[test]
+    fn endless_trailers_are_refused() {
+        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+        for _ in 0..4096 {
+            raw.extend_from_slice(b"X-Trailer: aaaaaaaaaaaaaaaa\r\n");
+        }
+        assert!(matches!(
+            parse_response(&raw, false),
+            Err(HttpError::TooLarge(_))
+        ));
+        let mut open = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+        open.extend(std::iter::repeat_n(b'a', MAX_HEADER + 1));
+        assert!(matches!(
+            parse_response(&open, false),
+            Err(HttpError::TooLarge(_))
+        ));
     }
 
     #[test]

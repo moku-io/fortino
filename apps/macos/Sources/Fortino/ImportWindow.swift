@@ -310,7 +310,7 @@ struct ImportWindow: View {
                         set: { if $0 { replace.insert(e.ordinal) } else { replace.remove(e.ordinal) } }))
                         .controlSize(.small)
                         .disabled(!on)
-                        .help("Replace the existing profile with this one. Saved passwords are cleared if the gateway or account changes.")
+                        .help("Replace the existing profile with this one. Its username, routing and DNS choices stay; a saved password is removed if the gateway changes.")
                 }
             }
             VStack(alignment: .leading, spacing: 4) {

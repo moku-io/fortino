@@ -152,6 +152,14 @@ if let d0 = try? JSONEncoder().encode(spec),
     check(false, "save password encodes")
 }
 
+// Errors of the bundled CLI: with --json they come on standard output, notes on standard error.
+let cliError = Data(#"{"v":1,"error":{"code":"internal","message":"the login keychain: locked"}}"#.utf8)
+check(cliFailure(stdout: cliError, stderr: "fortino: note: something\n") == "the login keychain: locked",
+      "CLI error read from the JSON envelope")
+check(cliFailure(stdout: Data(), stderr: "fortino was not found\n") == "fortino was not found",
+      "CLI error falls back to standard error")
+check(cliFailure(stdout: Data(), stderr: " ") == nil, "no CLI error text")
+
 // Live daemon round trip, when FORTINO_SOCKET points at a development daemon.
 if let path = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] {
     let sem = DispatchSemaphore(value: 0)

@@ -134,7 +134,8 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
     let ep = &cfg.endpoint;
     let mut gw = Gateway::new(ep.host.clone(), ep.port, &w.trust)?;
     gw.connect_override = w.connect_override;
-    // Like FortiClient, present the EMS serial only once `/remote/info` asks for it.
+    // Present the EMS serial only once `/remote/info` asks for it: a gateway that doesn't learns
+    // nothing about this Mac's EMS.
     let mut identity = w.identity.clone();
     let registered = cfg
         .ems
@@ -298,9 +299,9 @@ async fn attempt(w: &NativeWorker, cfg: &WorkerConfig, ctx: &mut Ctx) -> Result<
 
     ctx.emit(WorkerEvent::Stage(WorkerStage::Negotiating)).await;
     let mut cookie = cookie;
-    // VPN allocation: the login's own redirect target, then the portal page (openfortivpn's
-    // `auth_request_vpn_allocation`; FortiClient's login form names `/remote/index` as redir).
-    // Both are "non-essential" for their status but may refresh the cookie.
+    // VPN allocation: the login's own redirect target (`/remote/index`), then the portal page,
+    // as openfortivpn's `auth_request_vpn_allocation` does. Their status doesn't matter, but
+    // either may refresh the cookie.
     for path in ["/remote/index", "/remote/fortisslvpn"] {
         let r = ctx
             .guard(gw.exchange(&identity::build(

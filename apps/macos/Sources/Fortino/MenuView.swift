@@ -89,6 +89,13 @@ struct MenuView: View {
                 ForEach(model.profiles) { p in
                     ProfileRow(model: model, profile: p)
                 }
+                if model.state == .awaitingInput, model.status?.challenge != nil {
+                    // The sign-in panel may have been closed; the attempt still waits for it.
+                    MenuRow(title: "Sign In…", help: "Shows the sign-in panel") {
+                        closePanel()
+                        model.showSignIn()
+                    }
+                }
             }
 
             if let e = model.actionError {

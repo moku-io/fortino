@@ -748,3 +748,55 @@ async fn restart_while_connected_waits_for_disconnect_and_cleanup() {
     // The exit comes after the network state was rolled back.
     assert_eq!(h.net.lock().unwrap().net_only(), before);
 }
+
+/// Stopping the service (SIGTERM from launchd on uninstall or bootout) while connected stops
+/// the tunnel and restores the network before the process exits.
+#[tokio::test]
+async fn shutdown_while_connected_restores_network() {
+    let h = start(fake(|_| {}), quick()).await;
+    let before = h.net.lock().unwrap().net_only();
+    let mut c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    c.connect_profile(&connect_params(&p, "k1")).await.unwrap();
+    answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
+    answer(&c, &mut rx, ChallengeKind::Otp, "123456").await;
+    wait_for(&mut rx, |s| s.state == State::Connected).await;
+    assert_ne!(h.net.lock().unwrap().net_only(), before);
+
+    tokio::time::timeout(Duration::from_secs(5), h.session.shutdown())
+        .await
+        .expect("shutdown waits for the rollback, within its timeout");
+    assert_eq!(h.net.lock().unwrap().net_only(), before);
+    let st = c.status().await.unwrap();
+    assert_eq!(st.state, State::Idle);
+    assert_eq!(
+        st.last_result.unwrap().code,
+        Some(ErrorCode::ServiceUnavailable)
+    );
+}
+
+/// Every client that subscribes and leaves gives its connection back: the per-user limit
+/// counts open connections, and an idle service sends no event that would close them.
+#[tokio::test]
+async fn clients_that_leave_free_their_connection() {
+    let h = start(fake(|_| {}), quick()).await;
+    for _ in 0..fortinod::server::MAX_CONNECTIONS_PER_UID + 8 {
+        let mut c = h.client().await;
+        c.subscribe().await.unwrap();
+        drop(c);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let ok = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(c) = Client::connect(&h.sock, "test").await
+                && c.status().await.is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(ok.is_ok(), "new connections refused after clients left");
+}

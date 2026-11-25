@@ -17,7 +17,8 @@ use crate::device::LinkParams;
 use crate::session::{Ctx, Session};
 use crate::{Failure, NativeWorker};
 
-/// FortiClient's SSL VPN MTU.
+/// Tunnel interface MTU: fits a 1500-byte path with the TCP, TLS, frame and PPP overhead to
+/// spare.
 pub const DEFAULT_MTU: u16 = 1300;
 /// How long an orderly PPP close may take.
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
@@ -51,8 +52,13 @@ pub(crate) async fn run(w: &NativeWorker, s: &mut Session, ctx: &mut Ctx) -> Res
                 }
                 PppEvent::Packet(p) => {
                     if let Some(t) = &to_dev {
-                        // Drop rather than stall the tunnel when the OS side is slow.
-                        let _ = t.try_send(p);
+                        // Drop rather than stall the tunnel when the OS side is slow; but a
+                        // device that is gone ends the session, which the daemon then cleans up.
+                        if let Err(mpsc::error::TrySendError::Closed(_)) = t.try_send(p) {
+                            return Err(Failure::LocalNetwork(
+                                "the tunnel interface closed".into(),
+                            ));
+                        }
                     }
                 }
                 PppEvent::Up(link) => {
@@ -243,8 +249,9 @@ fn up_config(
         dns_domains: Vec::new(),
         split_dns,
         gateway_ip,
-        // Like FortiClient, block IPv6 on an IPv4-only tunnel.
-        block_ipv6: st.assigned_v6.is_none(),
+        // IPv6 is never carried (IPv6CP is refused), so it is blocked for the session even when
+        // the gateway assigns an IPv6 address: otherwise it would leave on the physical uplink.
+        block_ipv6: true,
     })
 }
 
@@ -263,18 +270,26 @@ fn dns_policy(st: &TunnelSettings, link: &Ipv4Link) -> (Vec<Ipv4Addr>, Vec<Split
         servers = link.dns.clone();
     }
     servers.dedup();
+    // A domain listed twice (`corp.example` and `*.corp.example` normalize alike, or one domain
+    // in two rules) goes to the first rule's servers; the daemon refuses duplicates.
+    let mut seen = std::collections::HashSet::new();
     let rules = st
         .split_dns
         .iter()
         .map(|r| SplitDnsRule {
-            domains: r.domains.clone(),
+            domains: r
+                .domains
+                .iter()
+                .filter(|d| seen.insert((*d).clone()))
+                .cloned()
+                .collect(),
             servers: if r.servers.is_empty() {
                 servers.clone()
             } else {
                 r.servers.clone()
             },
         })
-        .filter(|r| !r.servers.is_empty())
+        .filter(|r| !r.servers.is_empty() && !r.domains.is_empty())
         .collect();
     (servers, rules)
 }
@@ -296,14 +311,52 @@ async fn pump(
                 Err(_) => return,
             },
             p = from_tunnel.recv() => match p {
-                Some(p) => {
-                    if dev.io.send(&p).await.is_err() {
-                        return;
-                    }
-                }
+                Some(p) => match dev.io.send(&p).await {
+                    Ok(_) => {}
+                    // A packet the device refuses (empty, not IPv4 or IPv6) is dropped, as a
+                    // link would; it must not take the interface down.
+                    Err(e) if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::InvalidData | std::io::ErrorKind::InvalidInput
+                    ) => {}
+                    Err(_) => return,
+                },
                 // The tunnel ended: dropping the device removes the interface.
                 None => return,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// A gateway may name a domain twice; the session must still come up, with each domain
+    /// sent once, to the first rule's servers.
+    #[test]
+    fn duplicate_split_dns_domains_are_sent_once() {
+        let st = fortino_proto_sslvpn::config::parse(
+            "<?xml version='1.0'?><sslvpn-tunnel><ipv4>\
+             <assigned-addr ipv4='10.212.134.200'/>\
+             <split-dns domains='corp.example,*.corp.example' dnsserver1='10.0.0.53'/>\
+             <split-dns domains='lab.example;corp.example' dnsserver1='10.0.0.54'/>\
+             </ipv4></sslvpn-tunnel>",
+        )
+        .unwrap();
+        let link = Ipv4Link {
+            local: "10.212.134.200".parse().unwrap(),
+            peer: None,
+            dns: vec![],
+            peer_mru: 1354,
+        };
+        let (_, rules) = dns_policy(&st, &link);
+        let all: Vec<&str> = rules
+            .iter()
+            .flat_map(|r| r.domains.iter().map(String::as_str))
+            .collect();
+        assert_eq!(all, ["corp.example", "lab.example"]);
+        assert_eq!(rules[0].servers, ["10.0.0.53".parse::<Ipv4Addr>().unwrap()]);
     }
 }

@@ -130,7 +130,7 @@ pub struct EmsWorkers {
     facts: FactsSource,
     forticlient: FortiClientSource,
     /// This device's UID, for gateways that ask for it (`/remote/info` `0x80`) whether or not
-    /// the profile names an EMS, as FortiClient does.
+    /// the profile names an EMS: the gateway asks for the endpoint, not for an EMS identity.
     device_uid: Option<String>,
     /// Connect EMS exchanges here instead of resolving (tests).
     pub connect_override: Option<std::net::SocketAddr>,
@@ -255,9 +255,17 @@ impl EmsWorkers {
         // The same rules as a connect: FortiClient's registration is used only when it has
         // this device's UID; under another UID it still holds this Mac's place on the EMS.
         let uid = self.device_uid.as_deref().and_then(|u| Uid::parse(u).ok());
-        if let Some(fc) = (self.forticlient)()
-            .filter(|fc| fc.running && fc.serial.is_some() && fc.uses_address(server))
-        {
+        // As in a connect: FortiClient is on this EMS if it uses this address, or if its serial
+        // is the one Fortino's own registration with this server holds (the EMS reached by
+        // another name or address). Local records only: no PROBE here.
+        let record = Store::open(&self.settings.state_dir)?.load(&server_key(server))?;
+        if let Some(fc) = (self.forticlient)().filter(|fc| {
+            fc.running
+                && fc.serial.as_ref().is_some_and(|s| {
+                    fc.uses_address(server)
+                        || record.as_ref().is_some_and(|r| r.serial == s.as_str())
+                })
+        }) {
             return Ok(EmsStatusInfo::bare(
                 if uid.as_ref().is_some_and(|u| fc.active_with(u)) {
                     EmsState::ManagedByForticlient
@@ -266,7 +274,7 @@ impl EmsWorkers {
                 },
             ));
         }
-        let Some(r) = Store::open(&self.settings.state_dir)?.load(&server_key(server))? else {
+        let Some(r) = record else {
             return Ok(EmsStatusInfo::bare(EmsState::NotRegistered));
         };
         let now = std::time::SystemTime::now()
@@ -546,7 +554,15 @@ impl Ctx {
         let mut registered_again: Option<tokio::time::Instant> = None;
         loop {
             let interval = match self.round(full).await {
-                Ok(Round::Next(i)) => i,
+                Ok(Round::Next(i)) => {
+                    if full {
+                        // The EMS has the tunnel address and the host check; the next full
+                        // keepalive is a full interval away.
+                        full = false;
+                        since_full = Duration::ZERO;
+                    }
+                    i
+                }
                 Ok(Round::Stop) => return,
                 Ok(Round::Dropped) => {
                     // Dropped again soon after registering again: something else keeps taking
@@ -571,6 +587,8 @@ impl Ctx {
                         }
                     }
                 }
+                // Retried as it was: a full keepalive that didn't get through still has to tell
+                // the EMS the tunnel address, which gateways that admit by tag depend on.
                 Err(e) => {
                     tracing::warn!(ems = %self.server, error = %e, "EMS keepalive failed");
                     Duration::from_secs(60)
@@ -578,12 +596,13 @@ impl Ctx {
             };
             tokio::time::sleep(interval).await;
             since_full += interval;
-            full = false;
+            if full {
+                continue;
+            }
             if let Ok(agent) = self.agent().await {
                 if let Ok(Some(r)) = self.connection().and_then(|c| agent.registration(&c)) {
                     if since_full >= Duration::from_secs(u64::from(r.full_ka_interval)) {
                         full = true;
-                        since_full = Duration::ZERO;
                     }
                 }
             }
@@ -767,6 +786,8 @@ impl WorkerFactory for EmsWorkers {
                 Ok((Prepared::Agent(identity), uid)) => {
                     if identity.is_none() {
                         hint = Some(ctx.no_identity_hint().to_owned());
+                        // No registration, so nothing to keep alive.
+                        keep_alive = false;
                     }
                     cfg.ems = identity;
                     cfg.fct_uid = Some(uid.to_string());

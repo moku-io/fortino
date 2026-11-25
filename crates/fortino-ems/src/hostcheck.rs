@@ -111,6 +111,8 @@ enum Outcome {
 
 fn criterion(feature: &str, os: &Os, c: &Criterion) -> Outcome {
     match feature {
+        // The version couldn't be read: nothing is known about it, not even what it isn't.
+        "os_version" if os.version.is_empty() => Outcome::Unknown,
         "os_version" => Outcome::Known(os_matches(os, c)),
         // Fortino is not an antivirus and installs none: every antivirus predicate is false.
         "antivirus" => Outcome::Known(false),
@@ -201,6 +203,29 @@ mod tests {
             &rule("os_version", "macOS Sonoma", "=", true),
             &f
         ));
+    }
+
+    /// When the OS version couldn't be read (facts say just "macOS"), no version rule may
+    /// match, negated or not: the posture report would claim a check that never ran.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn unknown_os_version_matches_no_rule() {
+        let f = Facts {
+            os_version: "macOS".into(),
+            ..Facts::default()
+        };
+        for (content, op, negative) in [
+            ("26", "<", false),
+            ("15", "<=", false),
+            ("macOS Monterey", "!=", false),
+            ("macOS Monterey", "=", true),
+            ("15", ">=", true),
+        ] {
+            assert!(
+                !rule_matches(&rule("os_version", content, op, negative), &f),
+                "{op} {content} negative={negative}"
+            );
+        }
     }
 
     #[cfg(target_os = "macos")]
