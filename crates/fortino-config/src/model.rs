@@ -207,9 +207,12 @@ pub fn validate_realm(r: &str) -> Result<(), &'static str> {
     if r.len() > MAX_REALM_LEN {
         return Err("too_long");
     }
-    let ok = r
-        .bytes()
-        .all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'?' | b'#' | b'%' | b'\\'));
+    // `@` and `;` too: a FortiClient file writes the realm into the server field
+    // (`host:port/realm`), where they mean a user and the next gateway, so such a realm could
+    // be exported but never imported again.
+    let ok = r.bytes().all(|b| {
+        b.is_ascii_graphic() && !matches!(b, b'/' | b'?' | b'#' | b'%' | b'\\' | b'@' | b';')
+    });
     if ok { Ok(()) } else { Err("invalid_realm") }
 }
 

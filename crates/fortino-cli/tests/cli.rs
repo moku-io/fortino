@@ -21,7 +21,11 @@ struct Daemon {
 }
 
 fn daemon() -> Daemon {
-    let dir = tempfile::tempdir().unwrap();
+    daemon_in(tempfile::tempdir().unwrap())
+}
+
+/// A daemon in `dir`, at `dir/d.sock`: a second one there is the first one restarted.
+fn daemon_in(dir: tempfile::TempDir) -> Daemon {
     let sock = dir.path().join("d.sock");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let session = Session::new(
@@ -790,4 +794,46 @@ fn saved_password_is_never_sent_to_another_gateway() {
     // Still waiting for a typed password.
     let st = d.rt.block_on(c.status()).unwrap();
     assert_eq!(st.challenge.map(|c| c.id), Some(ch));
+}
+
+/// `status --watch` follows the service across a restart (an update, launchd) instead of
+/// ending: the next status comes from the new instance.
+#[test]
+fn status_watch_follows_a_restarted_service() {
+    use std::io::BufRead;
+    let d = daemon();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fortino"))
+        .args(["--json", "status", "--watch"])
+        .env("FORTINO_SOCKET", &d.sock)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, lines) = std::sync::mpsc::channel();
+    let out = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for l in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            let _ = tx.send(l);
+        }
+    });
+    let instance = |l: String| -> String {
+        let v: serde_json::Value = serde_json::from_str(&l).unwrap();
+        v["status"]["daemonInstance"].as_str().unwrap().to_owned()
+    };
+    let wait = std::time::Duration::from_secs(10);
+    let first = instance(lines.recv_timeout(wait).unwrap());
+
+    // Restart: the old service goes away, a new one listens on the same socket.
+    let Daemon { dir, rt, .. } = d;
+    drop(rt);
+    let d2 = daemon_in(dir);
+    let second = instance(
+        lines
+            .recv_timeout(wait)
+            .expect("no status from the new service"),
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_ne!(first, second);
+    drop(d2);
 }

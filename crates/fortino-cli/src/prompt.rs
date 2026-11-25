@@ -80,25 +80,6 @@ impl SecretSource {
     }
 }
 
-/// Asks on the controlling terminal. Returns `None` when there is no terminal.
-pub fn ask(kind: ChallengeKind, prompt: &str) -> Option<String> {
-    let mut tty = File::options()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .ok()?;
-    let label = format!("{prompt}: ");
-    if kind.is_secret() {
-        rpassword::prompt_password(label).ok()
-    } else {
-        tty.write_all(label.as_bytes()).ok()?;
-        let mut line = String::new();
-        BufReader::new(tty).read_line(&mut line).ok()?;
-        let v = line.trim().to_owned();
-        (!v.is_empty()).then_some(v)
-    }
-}
-
 /// A terminal prompt the caller can give up on, because the question was answered elsewhere (the
 /// desktop app shows the same prompts) or the attempt ended. Resolves to the line typed, or
 /// `None` without a terminal.

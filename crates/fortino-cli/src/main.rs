@@ -358,7 +358,7 @@ async fn run(cli: Cli) -> CmdResult {
     match cli.cmd {
         Cmd::Profile(p) => profile(&client, p, json).await,
         Cmd::Connect(a) => connect(&mut client, a, json).await,
-        Cmd::Status { watch } => status(&mut client, watch, json).await,
+        Cmd::Status { watch } => status(&mut client, &cli.socket, watch, json).await,
         Cmd::Disconnect => disconnect(&mut client, json).await,
         Cmd::Password(p) => password(&mut client, p, json).await,
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
@@ -772,7 +772,7 @@ fn build_mismatch(daemon: Option<&str>) -> Option<String> {
     }
 }
 
-async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
+async fn status(c: &mut Client, socket: &std::path::Path, watch: bool, json: bool) -> CmdResult {
     if !json {
         if let Some(note) = build_mismatch(c.hello.build.as_deref()) {
             eprintln!("fortino: note: {note}");
@@ -791,6 +791,7 @@ async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
     }
     let (st, mut rx) = c.subscribe().await?;
     show(&st);
+    let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
@@ -801,14 +802,45 @@ async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
                     show(&status);
                 }
                 Some(Event::ResyncRequired) => show(&c.status().await?),
+                // The service restarted (an update, launchd): follow the new one.
                 None => {
-                    return Err(Failure(ProtoError::new(
-                        ErrorCode::ServiceUnavailable,
-                        "lost connection to the VPN service",
-                    )));
+                    if !json {
+                        eprintln!("fortino: lost the VPN service; waiting for it to come back…");
+                    }
+                    loop {
+                        tokio::select! {
+                            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                            _ = &mut ctrl_c => return Ok(()),
+                        }
+                        let Ok(mut next) = Client::connect(socket, "fortino").await else {
+                            continue;
+                        };
+                        if let Ok((st, next_rx)) = next.subscribe().await {
+                            *c = next;
+                            rx = next_rx;
+                            if !json {
+                                println!();
+                            }
+                            show(&st);
+                            break;
+                        }
+                    }
                 }
             },
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            _ = &mut ctrl_c => return Ok(()),
+        }
+    }
+}
+
+/// Asks on the terminal for a command that runs no attempt; Ctrl-C cancels, and the terminal
+/// mode is restored either way.
+async fn ask_here(kind: ChallengeKind, text: &str) -> Result<Option<String>, Failure> {
+    let _term = TermGuard::save();
+    tokio::select! {
+        v = prompt::Prompt::start(kind, text) => Ok(v),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!();
+            Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")))
         }
     }
 }
@@ -1190,14 +1222,14 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                 }
                 (Some(h), _) => h.clone(),
                 (None, Some(u)) => u,
-                (None, None) => {
-                    prompt::ask(ChallengeKind::Username, "Username").ok_or_else(|| {
+                (None, None) => ask_here(ChallengeKind::Username, "Username")
+                    .await?
+                    .ok_or_else(|| {
                         Failure(ProtoError::new(
                             ErrorCode::InteractionRequired,
                             "this profile has no username: pass --username",
                         ))
-                    })?
-                }
+                    })?,
             };
             let p = if p.spec.username_hint.is_none() {
                 let mut spec = p.spec.clone();
@@ -1226,7 +1258,8 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                 read_stdin_line()?
             } else {
                 zeroize::Zeroizing::new(
-                    prompt::ask(ChallengeKind::Password, &format!("Password for {username}"))
+                    ask_here(ChallengeKind::Password, &format!("Password for {username}"))
+                        .await?
                         .ok_or_else(|| {
                             Failure(ProtoError::new(
                                 ErrorCode::InteractionRequired,

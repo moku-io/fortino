@@ -65,6 +65,20 @@ mod tests {
     use crate::import;
     use crate::model::{EmsServer, Host};
 
+    proptest::proptest! {
+        /// Every realm a profile accepts comes back from its own export.
+        #[test]
+        fn every_valid_realm_round_trips(realm in "[!-~]{1,24}") {
+            proptest::prop_assume!(crate::model::validate_realm(&realm).is_ok());
+            let mut a = ProfileSpec::new("Office", "vpn.example.test".parse().unwrap());
+            a.endpoint.realm = Some(realm.clone());
+            let xml = to_forticlient_xml([&a]);
+            let p = import::parse(xml.as_bytes()).unwrap();
+            let got: Vec<_> = p.eligible().map(|e| e.spec.endpoint.realm.clone()).collect();
+            proptest::prop_assert_eq!(got, vec![Some(realm)]);
+        }
+    }
+
     #[test]
     fn round_trips_through_the_importer() {
         let mut a = ProfileSpec::new("R&D <lab>", "vpn.example.test".parse().unwrap());
