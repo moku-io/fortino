@@ -13,7 +13,8 @@
 //!
 //! Everything debug lives here and behind the `debug_ems_sysinfo` profile field, so removing the
 //! feature is a clean delete: this module, that field, the two [`apply`] call sites and the
-//! [`host_facts`] call site in [`crate::agent`].
+//! [`host_facts`] call site in [`crate::agent`], and `EmsWorkers::enroll_with` with the daemon's
+//! lookup of a profile's overrides for an explicit registration.
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;

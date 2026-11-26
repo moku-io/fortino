@@ -228,6 +228,18 @@ impl EmsWorkers {
         server: EmsServer,
         install_uid: Option<&str>,
     ) -> Result<(&'static str, bool), Error> {
+        self.enroll_with(server, install_uid, std::collections::BTreeMap::new())
+            .await
+    }
+
+    /// [`Self::enroll`] with debug SYSINFO overrides (see [`crate::debug_override`]), so a
+    /// registration made outside a connection reports what the profile's connections report.
+    pub async fn enroll_with(
+        &self,
+        server: EmsServer,
+        install_uid: Option<&str>,
+        overrides: std::collections::BTreeMap<String, String>,
+    ) -> Result<(&'static str, bool), Error> {
         if install_uid.is_some_and(|id| {
             id.is_empty()
                 || id.len() > 256
@@ -242,8 +254,7 @@ impl EmsWorkers {
             }
             _ => return Err(Error::RegistrationDisabled),
         };
-        // Explicit package enrollment carries no per-profile debug overrides.
-        let ctx = self.context(server, settings, std::collections::BTreeMap::new());
+        let ctx = self.context(server, settings, overrides);
         match ctx.prepare(install_uid).await?.0 {
             Prepared::Deferred(_) => Ok(("managed-by-forticlient", false)),
             Prepared::HeldByForticlient => Ok(("held-by-forticlient", false)),

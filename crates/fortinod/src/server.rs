@@ -320,8 +320,9 @@ impl Conn {
                 let ems = s.ems.as_ref().ok_or_else(|| {
                     ProtoError::new(ErrorCode::UnsupportedPolicy, "EMS enrollment unavailable")
                 })?;
+                let overrides = s.ems_debug_overrides(self.peer.uid, &server)?;
                 let (status, rules) = ems
-                    .enroll(server, p.install_uid.as_deref())
+                    .enroll_with(server, p.install_uid.as_deref(), overrides)
                     .await
                     .map_err(enrollment_error)?;
                 Ok(serde_json::json!({"status":status,"rules":rules}))

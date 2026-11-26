@@ -883,6 +883,62 @@ async fn a_saved_connection_key_gets_a_refused_registration_through() {
     assert!(!workers.status(&server).unwrap().key);
 }
 
+/// Debug overrides reach a registration made outside a connection, as they reach one made on
+/// connect.
+#[tokio::test]
+async fn explicit_registration_applies_debug_overrides() {
+    use fortino_core::worker::{FakeWorker, FakeWorkerConfig};
+
+    let mock = ems::start(&ems_scenario()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let mut workers = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: FakeWorkerConfig::default(),
+        }),
+        Settings {
+            state_dir: dir.path().into(),
+            package_approvals: None,
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::from([(
+                "ems.test:8013".into(),
+                ServerSettings {
+                    trust: Trust::Roots(vec![mock.handle.cert_der.clone()]),
+                    register: true,
+                    key_file: None,
+                },
+            )]),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    workers.connect_override = Some(mock.handle.addr);
+
+    assert_eq!(workers.set_key(&server, Some("k3y")).unwrap(), "saved");
+    let overrides =
+        std::collections::BTreeMap::from([("OSVER".to_string(), "macOS 26.1.0".to_string())]);
+    assert_eq!(
+        workers
+            .enroll_with(server, None, overrides)
+            .await
+            .unwrap()
+            .0,
+        "registered"
+    );
+    let st = mock.state.lock().unwrap();
+    let ep = st.endpoints.values().next().unwrap();
+    assert!(
+        ep.sysinfo
+            .iter()
+            .any(|(k, v)| k == "OSVER" && v == "macOS 26.1.0"),
+        "{:?}",
+        ep.sysinfo
+    );
+}
+
 #[tokio::test]
 async fn leaving_removes_the_record_and_everything_local() {
     use fortino_core::worker::{FakeWorker, FakeWorkerConfig};

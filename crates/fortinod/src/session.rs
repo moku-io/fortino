@@ -381,6 +381,40 @@ impl Session {
         Ok(servers.iter().map(fortino_ems::store::server_key).collect())
     }
 
+    /// Debug only: the SYSINFO overrides for a registration with `server` made outside a
+    /// connection, taken from `owner`'s profiles that name it. Empty unless those profiles
+    /// agree on one map; when they disagree none is applied, with a warning.
+    pub fn ems_debug_overrides(
+        &self,
+        owner: u32,
+        server: &fortino_config::EmsServer,
+    ) -> Result<std::collections::BTreeMap<String, String>, ProtoError> {
+        let key = fortino_ems::store::server_key(server);
+        let profiles = lock(&self.store).list(owner).map_err(store_err)?;
+        let mut maps: Vec<std::collections::BTreeMap<String, String>> = Vec::new();
+        for p in profiles {
+            let names_server = p
+                .spec
+                .endpoint
+                .ems
+                .as_ref()
+                .is_some_and(|e| fortino_ems::store::server_key(e) == key);
+            if names_server && !maps.contains(&p.spec.debug_ems_sysinfo) {
+                maps.push(p.spec.debug_ems_sysinfo);
+            }
+        }
+        match maps.len() {
+            0 | 1 => Ok(maps.pop().unwrap_or_default()),
+            _ => {
+                tracing::warn!(
+                    ems = %server,
+                    "profiles for this EMS have different debug SYSINFO overrides; registering without any"
+                );
+                Ok(Default::default())
+            }
+        }
+    }
+
     /// After a profile change: removes connection keys that no profile needs any more.
     pub fn forget_unused_ems_keys(&self) {
         let Some(ems) = &self.ems else { return };
