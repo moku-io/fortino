@@ -937,3 +937,64 @@ async fn leaving_removes_the_record_and_everything_local() {
     assert_eq!(workers.forget_unused_keys(&Default::default()).unwrap(), 1);
     assert!(!workers.status(&server).unwrap().key);
 }
+
+/// A record another device made (a copied state directory) is not this Mac's registration: the
+/// status says "not registered", so a refusal (here for the connection key) shows, and leaving
+/// drops the record locally without deregistering the other device.
+#[tokio::test]
+async fn a_record_from_another_device_is_not_this_macs() {
+    use fortino_core::worker::{FakeWorker, FakeWorkerConfig};
+    use fortino_ems::Error;
+    use fortino_ems::service::EmsState;
+
+    let mock = ems::start(&ems_scenario()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let mut workers = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: FakeWorkerConfig::default(),
+        }),
+        Settings {
+            state_dir: dir.path().into(),
+            package_approvals: None,
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::from([(
+                "ems.test:8013".into(),
+                ServerSettings {
+                    trust: Trust::Roots(vec![mock.handle.cert_der.clone()]),
+                    register: true,
+                    key_file: None,
+                },
+            )]),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    workers.connect_override = Some(mock.handle.addr);
+    workers.set_key(&server, Some("k3y")).unwrap();
+    assert_eq!(
+        workers.enroll(server.clone(), None).await.unwrap().0,
+        "registered"
+    );
+    let store = Store::open(dir.path()).unwrap();
+    let mut record = store.load("ems.test:8013").unwrap().unwrap();
+    record.device_uid = Some("277963E3DEAC437E9BB2B91DE1C49AFE".into());
+    store.save(&record).unwrap();
+
+    workers.set_key(&server, None).unwrap();
+    assert!(matches!(
+        workers.enroll(server.clone(), None).await,
+        Err(Error::KeyRefused(_))
+    ));
+    let st = workers.status(&server).unwrap();
+    assert_eq!(st.state, EmsState::NotRegistered);
+    assert!(st.refusal.as_ref().is_some_and(|f| f.key), "{st:?}");
+
+    let left = workers.leave(&server).await.unwrap();
+    assert!(!left.deregistered && left.kept.is_none(), "{left:?}");
+    assert_eq!(mock.state.lock().unwrap().endpoints.len(), 1);
+    assert!(store.load("ems.test:8013").unwrap().is_none());
+}

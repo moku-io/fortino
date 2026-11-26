@@ -287,7 +287,7 @@ impl EmsWorkers {
         // As in a connect: FortiClient is on this EMS if it uses this address, or if its serial
         // is the one Fortino's own registration with this server holds (the EMS reached by
         // another name or address). Local records only: no PROBE here.
-        let record = Store::open(&self.settings.state_dir)?.load(&server_key(server))?;
+        let record = self.own_registration(&Store::open(&self.settings.state_dir)?, server)?;
         if let Some(fc) = (self.forticlient)().filter(|fc| {
             fc.running
                 && fc.serial.as_ref().is_some_and(|s| {
@@ -317,6 +317,18 @@ impl EmsWorkers {
             key: false,
             refusal: None,
         })
+    }
+
+    /// This device's record for `server`, as a connect sees it: a record another device made (a
+    /// copied state directory, or one made under another `[ems] uid`) is not this Mac's.
+    fn own_registration(
+        &self,
+        store: &Store,
+        server: &EmsServer,
+    ) -> Result<Option<crate::store::Registration>, Error> {
+        Ok(store
+            .load(&server_key(server))?
+            .filter(|r| r.device_uid.is_none() || r.device_uid == self.device_uid))
     }
 
     /// Saves the connection key the user gave for `server` (`Some`), or removes it (`None`).
@@ -372,7 +384,7 @@ impl EmsWorkers {
         let name = server_key(server);
         let store = Store::open(&self.settings.state_dir)?;
         let mut left = Left::default();
-        if store.load(&name)?.is_some() {
+        if self.own_registration(&store, server)?.is_some() {
             match self.server_settings(server) {
                 Some(settings) => {
                     let ctx = self.context(server.clone(), settings, Default::default());
@@ -386,8 +398,10 @@ impl EmsWorkers {
                 }
                 None => left.kept = Some("the server isn't approved on this Mac".into()),
             }
-            store.remove(&name)?;
         }
+        // Also a record another device made: it goes from this Mac, and its EMS record stays
+        // untouched (this Mac can't speak for that device).
+        store.remove(&name)?;
         store.remove_key(&name)?;
         self.refusals.clear(server);
         if let Some(a) = &self.settings.package_approvals {
