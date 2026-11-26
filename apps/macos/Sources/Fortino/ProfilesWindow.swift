@@ -508,7 +508,9 @@ struct ProfileEditor: View {
     /// What deleting `p` also removes, and the choice about its EMS.
     private func deleteNotes(_ p: Profile) -> String {
         var notes: [String] = []
-        if p.spec.savePassword == true {
+        // Deleting removes a saved password whether or not the option is on (one can be saved
+        // from the terminal), so the keychain is checked when the dialog opens.
+        if p.spec.savePassword == true || model.savedPasswords[p.id]?.saved == true {
             notes.append("Its saved password is also removed from your login keychain.")
         }
         if let ems = model.emsToLeave(with: p) {
@@ -651,7 +653,12 @@ struct ProfileEditor: View {
             }
             HStack {
                 if let p = profile {
-                    Button("Delete Profile…", role: .destructive) { confirmDelete = true }
+                    Button("Delete Profile…", role: .destructive) {
+                        Task {
+                            await model.refreshSavedPassword(p.id)
+                            confirmDelete = true
+                        }
+                    }
                         .disabled(isActiveProfile)
                         .confirmationDialog("Delete \(p.spec.name)?", isPresented: $confirmDelete) {
                             if let ems = model.emsToLeave(with: p) {
