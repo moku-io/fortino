@@ -73,7 +73,7 @@ async fn register_keepalive_tag_deregister() {
     );
 
     match a.register(&c, Some("wrong")).await {
-        Err(Error::Refused(m)) => assert!(m.contains("key")),
+        Err(Error::KeyRefused(m)) => assert!(m.contains("key")),
         other => panic!("{other:?}"),
     }
     let reg = a.register(&c, Some("k3y")).await.unwrap();

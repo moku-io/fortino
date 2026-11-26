@@ -252,7 +252,8 @@ impl Session {
         Self::with_ems(store, workers, net, timeouts, None)
     }
 
-    pub(crate) fn with_ems(
+    /// Like [`Session::new`], with the EMS steps around the worker.
+    pub fn with_ems(
         store: ProfileStore,
         workers: Box<dyn WorkerFactory>,
         mut net: Box<dyn NetController>,
@@ -342,6 +343,24 @@ impl Session {
     /// Runs `f` on the profile store.
     pub fn with_store<R>(&self, f: impl FnOnce(&mut ProfileStore) -> R) -> R {
         f(&mut lock(&self.store))
+    }
+
+    /// The EMS servers any profile on this machine names (any owner), as EMS store keys.
+    pub fn ems_in_use(&self) -> Result<std::collections::HashSet<String>, ProtoError> {
+        let servers = lock(&self.store).ems_servers().map_err(store_err)?;
+        Ok(servers.iter().map(fortino_ems::store::server_key).collect())
+    }
+
+    /// After a profile change: removes connection keys that no profile needs any more.
+    pub fn forget_unused_ems_keys(&self) {
+        let Some(ems) = &self.ems else { return };
+        let r = self
+            .ems_in_use()
+            .map_err(|e| e.message)
+            .and_then(|in_use| ems.forget_unused_keys(&in_use).map_err(|e| e.to_string()));
+        if let Err(e) = r {
+            tracing::warn!(error = %e, "could not remove unused EMS connection keys");
+        }
     }
 
     /// Runs a profile mutation unless `id` is pinned by the active attempt.

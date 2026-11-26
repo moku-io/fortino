@@ -748,3 +748,86 @@ async fn restart_while_connected_waits_for_disconnect_and_cleanup() {
     // The exit comes after the network state was rolled back.
     assert_eq!(h.net.lock().unwrap().net_only(), before);
 }
+
+#[tokio::test]
+async fn connection_keys_follow_the_profiles_and_leaving_needs_none() {
+    use fortino_ems::service::{EmsWorkers, ServerSettings, Settings};
+
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("fortinod.sock");
+    let net = Arc::new(Mutex::new(FakeState::typical_host()));
+    let journal =
+        Journaled::open(FakeNet::new(net.clone()), dir.path().join("journal.json")).unwrap();
+    let ems = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: fake(|_| {}),
+        }),
+        Settings {
+            package_approvals: None,
+            state_dir: dir.path().join("ems"),
+            uid: None,
+            compat: Default::default(),
+            servers: [(
+                "ems1.example.org:8013".to_owned(),
+                ServerSettings {
+                    // Never contacted: nothing here registers.
+                    trust: fortino_tls::Trust::Pinned(vec![[0; 32]]),
+                    key_file: None,
+                    register: true,
+                },
+            )]
+            .into(),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+        },
+        Arc::new(|| None),
+    );
+    let session = Session::with_ems(
+        ProfileStore::open(&dir.path().join("profiles.db")).unwrap(),
+        Box::new(FakeWorker {
+            config: fake(|_| {}),
+        }),
+        Box::new(JournaledController::new(journal)),
+        quick(),
+        Some(ems),
+    );
+    let auth = Arc::new(Authorizer::new(vec![my_uid()], vec![], None).unwrap());
+    let listener = fortinod::bind_socket(&sock, None).unwrap();
+    tokio::spawn(fortinod::server::serve(listener, session, auth));
+    let c = Client::connect(&sock, "test").await.unwrap();
+
+    let server = serde_json::json!({"server": "ems1.example.org"});
+    let key = |k: &str| serde_json::json!({"server": "ems1.example.org", "key": k});
+    let has_key = |v: serde_json::Value| v["key"].as_bool();
+    let mut spec = ProfileSpec::new("TG", "vpn.example.org".parse().unwrap());
+    spec.endpoint.ems = Some("ems1.example.org".parse().unwrap());
+    let p = c.profile_create(spec.clone()).await.unwrap();
+
+    let r: serde_json::Value = c.call(method::EMS_SET_KEY, &key("k3y")).await.unwrap();
+    assert_eq!(r["status"], "saved");
+    let st: serde_json::Value = c.call(method::EMS_STATUS, &server).await.unwrap();
+    assert_eq!(has_key(st.clone()), Some(true), "{st}");
+    let bad: Result<serde_json::Value, _> = c.call(method::EMS_SET_KEY, &key("a|b")).await;
+    assert_eq!(bad.unwrap_err().code, ErrorCode::InvalidRequest);
+
+    // A profile still uses the server: leaving is refused.
+    let r: Result<serde_json::Value, _> = c.call(method::EMS_LEAVE, &server).await;
+    assert_eq!(r.unwrap_err().code, ErrorCode::InvalidRequest);
+
+    // The profile stops using it: the key goes with it.
+    spec.endpoint.ems = None;
+    c.profile_update(p.id.clone(), p.revision, spec)
+        .await
+        .unwrap();
+    let st: serde_json::Value = c.call(method::EMS_STATUS, &server).await.unwrap();
+    assert_eq!(has_key(st), Some(false));
+
+    // Leaving an unused server forgets what is left, without contacting it.
+    let _: serde_json::Value = c.call(method::EMS_SET_KEY, &key("k3y")).await.unwrap();
+    let r: serde_json::Value = c.call(method::EMS_LEAVE, &server).await.unwrap();
+    assert_eq!(r["deregistered"], false);
+    assert!(r.get("kept").is_none(), "{r}");
+    let st: serde_json::Value = c.call(method::EMS_STATUS, &server).await.unwrap();
+    assert_eq!(has_key(st.clone()), Some(false));
+    assert_eq!(st["state"], "not-registered");
+}
