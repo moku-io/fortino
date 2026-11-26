@@ -63,11 +63,18 @@ fortino profile export -o profiles.xml                    # FortiClient XML; all
 fortino log-level debug                               # or error, warn, info, trace; no argument shows it
 fortino ems-status ems.example.org:8013                  # registration state and the next step
 fortino ems-register ems.example.org:8013                # register now (server must be approved)
+fortino ems-key set ems.example.org:8013                 # connection key the EMS asks for (prompts; --stdin reads a line)
+fortino ems-key forget ems.example.org:8013
+fortino ems-leave ems.example.org:8013                   # no profile uses it: deregister, forget approval and key
 ```
 
 `fortinod` starts at `RUST_LOG` (default `info`); `fortino log-level` and the app's **Log level** setting change it at runtime until the daemon restarts. At every level, logs go through a redacting writer and never carry passwords, codes or cookie values. The installed service logs to `/var/log/fortinod.log`.
 
 Saved passwords live in the user's login Keychain, written and read only by `fortino` (the app runs its bundled copy), never by the daemon: one item per profile, service `org.fortino.vpn.<profile ID>`, account the username, kind (description) naming the gateway it was saved for (`host:port`, and `/realm`). A password saved for another gateway or username is never sent: a profile moved elsewhere asks again, and the typed password replaces the item once connected. A password typed during a connection is saved once the tunnel is up; a saved password the gateway rejects is marked in the item's comment and not sent again until a new one is saved. Save password needs the profile's username (the service refuses the profile otherwise); `fortino password save` on a profile without one sets it from `--username` or a prompt, and only while disconnected. `--password-fd` bypasses the store. `FORTINO_CREDENTIAL_STORE=none` turns saved passwords off for one run.
+
+Some EMS servers accept a registration only with a connection key from the administrator. When an EMS refuses one, `ems.status` reports why (`refusal`, with `key: true` when the key is missing or wrong) until a registration succeeds or the key changes, and EMS Setup offers **Enter Connection Key…**. `ems.setKey` saves the key for a server that is configured or approved on this Mac, in the daemon's registration store (`<state_dir>/ems/keys`, root-only, mode 0600). The daemon sends it in REGISTER and never returns or logs it; `ems.status` only says whether one is saved (`key`). A `key_file` in the daemon configuration takes precedence. A saved key lasts while a profile names its server: when a profile change leaves no profile (of any user) using it, the daemon removes it.
+
+Deleting the last profile that uses an EMS asks whether to leave it too (**Delete and Leave EMS** or **Delete Profile Only**). `ems.leave` refuses while any profile still names the server. It asks the EMS to remove the device record (never one FortiClient's agent uses), then forgets the registration, the key and the approval marker even when the EMS can't be reached; a server listed in the daemon configuration stays configured.
 
 Exit codes: 0 success, 2 invalid input or profile, 3 busy or stale revision, 4 authentication or required input, 5 trust failure, 6 network/backend failure, 7 service unavailable or permission denied, 8 unsupported policy, 9 cancellation. With `--json`, errors are printed as `{"v":1,"error":{"code":…}}`.
 

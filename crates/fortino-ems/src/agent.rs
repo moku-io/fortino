@@ -8,7 +8,7 @@ use fortino_proto_ems::blob;
 use fortino_proto_ems::ids::{EmsSerial, Mac, Tenant, Uid};
 use fortino_proto_ems::message::{self, Header, Kind, TagRequest, User};
 use fortino_proto_ems::reply::{
-    KeepaliveReply, KeyNotes, ProbeReply, Pushed, RegisterReply, TagReply,
+    KeepaliveReply, KeyNotes, ProbeReply, Pushed, RegStatus, RegisterReply, TagReply,
 };
 use fortino_proto_ems::tags::Bits;
 
@@ -173,7 +173,12 @@ impl Agent {
             Ok(r) => r,
             Err(status) => {
                 let detail = rr.message.map(|m| format!(" ({m})")).unwrap_or_default();
-                return Err(Error::Refused(format!("{status}{detail}")));
+                let reason = format!("{status}{detail}");
+                return Err(if status == RegStatus::KeyMismatch {
+                    Error::KeyRefused(reason)
+                } else {
+                    Error::Refused(reason)
+                });
             }
         };
         if r.serial != probe.serial {

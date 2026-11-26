@@ -27,6 +27,10 @@ pub mod method {
     pub const EMS_ENROLL: &str = "ems.enroll";
     /// This machine's registration state with one EMS, from local records.
     pub const EMS_STATUS: &str = "ems.status";
+    /// Save or remove the connection key an EMS asks for when registering.
+    pub const EMS_SET_KEY: &str = "ems.setKey";
+    /// Leave an EMS no profile uses: deregister, and forget its registration, key and approval.
+    pub const EMS_LEAVE: &str = "ems.leave";
     /// List the caller's profiles.
     pub const PROFILE_LIST: &str = "profile.list";
     /// Fetch one profile by ID or name.

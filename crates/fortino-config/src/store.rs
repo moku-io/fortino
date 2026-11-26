@@ -145,6 +145,21 @@ impl ProfileStore {
         rows.map(|r| decode(r?)).collect()
     }
 
+    /// The EMS servers named by any profile of any owner.
+    pub fn ems_servers(&self) -> Result<Vec<crate::EmsServer>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT id, owner, revision, spec FROM profiles")?;
+        let rows = st.query_map([], row_raw)?;
+        let mut out = Vec::new();
+        for r in rows {
+            if let Some(ems) = decode(r?)?.spec.endpoint.ems {
+                out.push(ems);
+            }
+        }
+        Ok(out)
+    }
+
     /// Fetches one profile by ID.
     pub fn get(&self, owner: u32, id: &ProfileId) -> Result<Profile> {
         get_tx(&self.conn, owner, id)?.ok_or(StoreError::NotFound)

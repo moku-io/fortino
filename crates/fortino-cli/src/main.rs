@@ -69,6 +69,34 @@ enum Cmd {
         /// EMS server, `host` or `host:port` (default port 8013).
         server: String,
     },
+    /// Manage the connection key an EMS asks for when registering (kept by the service, never
+    /// shown again).
+    #[command(subcommand)]
+    EmsKey(EmsKeyCmd),
+    /// Leave an EMS server no profile uses any more: remove this Mac's device record on the
+    /// EMS, and forget the server's registration, connection key and approval on this Mac.
+    EmsLeave {
+        /// EMS server, `host` or `host:port` (default port 8013).
+        server: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum EmsKeyCmd {
+    /// Save the connection key your IT administrator gave you for an EMS server. The next
+    /// registration sends it.
+    Set {
+        /// EMS server, `host` or `host:port` (default port 8013).
+        server: String,
+        /// Read the key from one line of standard input instead of the terminal.
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Remove the saved connection key for an EMS server.
+    Forget {
+        /// EMS server, `host` or `host:port` (default port 8013).
+        server: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -364,7 +392,87 @@ async fn run(cli: Cli) -> CmdResult {
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
         Cmd::EmsStatus { server } => ems_status(&client, &server, json).await,
         Cmd::EmsRegister { server } => ems_register(&client, &server, json).await,
+        Cmd::EmsKey(k) => ems_key(&client, k, json).await,
+        Cmd::EmsLeave { server } => ems_leave(&client, &server, json).await,
     }
+}
+
+async fn ems_leave(c: &Client, server: &str, json: bool) -> CmdResult {
+    let server = parse_ems(server)?;
+    let v: serde_json::Value = c
+        .call(
+            fortino_core::proto::method::EMS_LEAVE,
+            &serde_json::json!({"server": server.to_string()}),
+        )
+        .await?;
+    if json {
+        print_json(&v);
+        return Ok(());
+    }
+    if v["deregistered"].as_bool() == Some(true) {
+        println!("The EMS removed this Mac's device record.");
+    } else if let Some(k) = v["kept"].as_str() {
+        println!(
+            "The EMS kept this Mac's device record ({k}); ask your IT administrator to delete it if needed."
+        );
+    }
+    println!("Fortino forgot {server} on this Mac (registration, connection key and approval).");
+    Ok(())
+}
+
+async fn ems_key(c: &Client, cmd: EmsKeyCmd, json: bool) -> CmdResult {
+    let (server, key) = match cmd {
+        EmsKeyCmd::Set { server, stdin } => {
+            let server = parse_ems(&server)?;
+            let key = if stdin {
+                read_stdin_line()?
+            } else {
+                zeroize::Zeroizing::new(
+                    ask_here(
+                        ChallengeKind::Password,
+                        &format!("Connection key for {server}"),
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        Failure(ProtoError::new(
+                            ErrorCode::InteractionRequired,
+                            "connection key required but no terminal is available; use --stdin",
+                        ))
+                    })?,
+                )
+            };
+            (server, Some(key))
+        }
+        EmsKeyCmd::Forget { server } => (parse_ems(&server)?, None),
+    };
+    let params = match &key {
+        Some(k) => serde_json::json!({"server": server.to_string(), "key": k.as_str()}),
+        None => serde_json::json!({"server": server.to_string()}),
+    };
+    let v: serde_json::Value = c
+        .call(fortino_core::proto::method::EMS_SET_KEY, &params)
+        .await?;
+    if json {
+        print_json(&v);
+        return Ok(());
+    }
+    let status = v["status"].as_str().unwrap_or("unknown");
+    println!(
+        "{}",
+        match status {
+            "saved" => "Connection key saved. Register with: fortino ems-register <server>",
+            "removed" => "Connection key removed.",
+            "none" => "No connection key was saved for this server.",
+            "configured" => {
+                "This server's key is set in the service configuration; nothing changed."
+            }
+            "approval-required" => {
+                "Approve this EMS server on this Mac first (app: EMS Setup), then save the key."
+            }
+            other => other,
+        }
+    );
+    Ok(())
 }
 
 async fn ems_register(c: &Client, server: &str, json: bool) -> CmdResult {
@@ -416,8 +524,21 @@ async fn ems_status(c: &Client, server: &str, json: bool) -> CmdResult {
     }
     let state = v["state"].as_str().unwrap_or("unknown");
     println!("State:      {state}");
-    if let Some(next) = ems_next_step(state) {
+    let refusal = &v["refusal"];
+    if let Some(reason) = refusal["reason"].as_str() {
+        println!("Refused:    {reason}");
+        if refusal["key"].as_bool() == Some(true) {
+            println!(
+                "Next:       fortino ems-key set <server> with the key from IT, then fortino ems-register <server>"
+            );
+        } else {
+            println!("Next:       ask your IT administrator; the EMS gave the reason above");
+        }
+    } else if let Some(next) = ems_next_step(state) {
         println!("Next:       {next}");
+    }
+    if v["key"].as_bool() == Some(true) {
+        println!("Key:        saved");
     }
     if let Some(t) = v["lastKeepalive"].as_u64() {
         println!("Check-in:   unix {t}");

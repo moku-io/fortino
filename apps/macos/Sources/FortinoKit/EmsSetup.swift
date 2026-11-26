@@ -7,6 +7,9 @@ import Foundation
 /// Start of a connect failure caused by a missing EMS serial (the daemon's wording).
 public let emsRegistrationRequiredPrefix = "gateway requires EMS registration"
 
+/// In a connect failure where the EMS refused this Mac's registration (the daemon's wording).
+public let emsRefusalMarker = "refused by EMS"
+
 public enum EmsStepID: String, CaseIterable, Sendable {
     case server, approval, registration, compliance, gateway
 }
@@ -31,6 +34,7 @@ public enum EmsAction: Equatable, Sendable {
     case editProfile
     case approve
     case registerNow
+    case enterKey
     case enrollWithPackage
     case connect
     case openFortiClient
@@ -189,10 +193,35 @@ public extension EmsSetupInput {
             step.watches = true
             return step
         default: // not-registered
+            if let refusal = status?.refusal {
+                return refusedStep(refusal)
+            }
             return EmsStep(id: .registration, state: .todo, title: title,
                            detail: "Registering creates a device record for this Mac on the EMS, which your IT administrator can see. Register now to find problems before you enter your VPN password; otherwise Fortino registers when you connect.",
                            action: .registerNow, secondary: .enrollWithPackage)
         }
+    }
+
+    /// The EMS refused the last registration.
+    private func refusedStep(_ refusal: EmsRefusal) -> EmsStep {
+        let title = "Registration"
+        guard refusal.key else {
+            var step = EmsStep(id: .registration, state: .blocked, title: title,
+                               detail: "The EMS refused to register this Mac: \(refusal.reason). Only your IT administrator can change that.",
+                               action: .registerNow, secondary: nil)
+            step.fixes = [
+                EmsFix(title: "Contact your IT administrator",
+                       detail: "Send them the details of this setup, with the EMS's reason above. When they have fixed it, register again.",
+                       action: .copyDetails),
+            ]
+            return step
+        }
+        let had = status?.key == true
+            ? "The key saved on this Mac wasn't accepted."
+            : "No key is saved on this Mac yet."
+        return EmsStep(id: .registration, state: .blocked, title: title,
+                       detail: "The EMS refused to register this Mac: \(refusal.reason). This EMS asks for a connection key (sometimes called the telemetry password), which your IT administrator gives you. \(had)",
+                       action: .enterKey, secondary: .copyDetails)
     }
 
     private var complianceStep: EmsStep {

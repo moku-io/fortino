@@ -15,6 +15,7 @@ struct EmsSetupWindow: View {
     @State private var messageIsError = false
     /// The last action failed verifying the EMS certificate: offer to review and pin it.
     @State private var certificateFailed = false
+    @State private var enteringKey = false
 
     private var profile: Profile? { model.emsSetupProfile }
 
@@ -26,6 +27,14 @@ struct EmsSetupWindow: View {
         }
         .frame(minWidth: 520, idealWidth: 560, minHeight: 460, alignment: .topLeading)
         .disabled(busy)
+        .sheet(isPresented: $enteringKey) {
+            if let server = profile?.spec.endpoint.ems {
+                ConnectionKeySheet(server: server, hasKey: model.emsStatus[server.display]?.key == true) { key in
+                    enteringKey = false
+                    if let key { saveKeyAndRegister(key, server: server) }
+                }
+            }
+        }
     }
 
     private var steps: some View {
@@ -157,6 +166,8 @@ struct EmsSetupWindow: View {
                 }
                 return nil
             }
+        case .enterKey:
+            enteringKey = true
         case .registerNow:
             run {
                 let r = try await model.registerEms(server)
@@ -174,6 +185,29 @@ struct EmsSetupWindow: View {
                 default:
                     return "The service answered “\(r.status)”."
                 }
+            }
+        }
+    }
+
+    /// Saves the connection key, then registers with it.
+    private func saveKeyAndRegister(_ key: String, server: EmsServer) {
+        run {
+            switch try await model.setEmsKey(server, key: key) {
+            case "saved":
+                break
+            case "configured":
+                return "This server's key is set in the Fortino service's configuration, so the key you entered wasn't saved. Ask your IT administrator."
+            case "approval-required":
+                return "This server needs to be allowed on this Mac first."
+            case let other:
+                return "The service answered “\(other)”."
+            }
+            let r = try await model.registerEms(server)
+            switch r.status {
+            case "registered":
+                return "Key accepted: this Mac is registered with the EMS."
+            default:
+                return "Key saved. The service answered “\(r.status)”."
             }
         }
     }
@@ -264,7 +298,9 @@ struct EmsSetupWindow: View {
         var lines = ["Fortino EMS Setup", "Profile: \(profile.spec.name)",
                      "Gateway: \(profile.spec.endpoint.host):\(profile.spec.endpoint.port)",
                      "EMS: \(input.server.display)",
-                     "EMS state: \(input.status?.state ?? "unknown")"]
+                     "EMS state: \(input.status?.state ?? "unknown")",
+                     "Connection key saved: \(input.status?.key == true ? "yes" : "no")"]
+        if let f = input.status?.refusal { lines.append("EMS refused registration: \(f.reason)") }
         for s in input.steps {
             lines.append("- \(s.title): \(Self.word(s.state)). \(s.detail)")
         }
@@ -289,6 +325,42 @@ struct EmsSetupWindow: View {
 
 // MARK: Pieces
 
+/// Asks for the connection key an EMS wants. The key goes to the Fortino service and is never
+/// shown again.
+private struct ConnectionKeySheet: View {
+    let server: EmsServer
+    let hasKey: Bool
+    /// The key, or nil when cancelled.
+    let done: (String?) -> Void
+    @State private var key = ""
+
+    private var trimmed: String { key.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Connection Key for \(server.display)").font(.headline)
+            Text("Enter the connection key your IT administrator gave you for this EMS (sometimes called the telemetry password). Fortino keeps it for this server and sends it when registering this Mac.")
+                .fixedSize(horizontal: false, vertical: true)
+            if hasKey {
+                Text("It replaces the key saved earlier.").font(.callout).foregroundStyle(.secondary)
+            }
+            SecureField("Connection key", text: $key)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { if !trimmed.isEmpty { done(trimmed) } }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { done(nil) }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save and Register") { done(trimmed) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmed.isEmpty || trimmed.contains("|"))
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+    }
+}
+
 extension EmsAction {
     var title: String {
         switch self {
@@ -296,6 +368,7 @@ extension EmsAction {
         case .editProfile: return "Edit EMS Address…"
         case .approve: return "Allow on This Mac…"
         case .registerNow: return "Register Now"
+        case .enterKey: return "Enter Connection Key…"
         case .enrollWithPackage: return "Use a Deployment Package…"
         case .connect: return "Connect"
         case .openFortiClient: return "Open FortiClient"

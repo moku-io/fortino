@@ -63,6 +63,18 @@ do {
     check(input("not-registered", last: refused).steps[4].state == .blocked, "gateway refused, not registered")
     check(input("registered", rules: true, ka: 1, last: refused).roadblock?.action == .connect, "registered since: connect again")
     check(input("registered", rules: true, ka: 1, connected: true).steps[4].state == .done, "connected")
+    func emsRefused(key: Bool, saved: Bool = false) -> EmsSetupInput {
+        var i = input("not-registered")
+        i.status = EmsStatus(state: "not-registered", key: saved,
+                             refusal: EmsRefusal(reason: "a connection key is required or the key is wrong", key: key))
+        return i
+    }
+    check(emsRefused(key: true).roadblock?.action == .enterKey, "key refused: enter the key")
+    check(emsRefused(key: true).roadblock?.state == .blocked, "key refused is a roadblock")
+    check(emsRefused(key: true).roadblock?.detail.contains("No key is saved") == true, "says no key was sent")
+    check(emsRefused(key: true, saved: true).roadblock?.detail.contains("wasn't accepted") == true, "says the saved key was wrong")
+    check(emsRefused(key: false).roadblock?.fixes.first?.action == .copyDetails, "other refusals go to IT")
+    check(emsRefused(key: false).roadblock?.action == .registerNow, "other refusals can be retried")
     check(input("registered", rules: true, ka: 1, last: "credentials rejected").steps[4].state == .waiting, "other failures aren't EMS roadblocks")
 }
 

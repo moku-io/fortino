@@ -68,6 +68,18 @@ impl PackageApprovals {
             fortino_tls::markers::read_protected(&self.directory, &server_key(server), 0)?;
         marker_trust(&content, &self.ca_file)
     }
+
+    /// Withdraws the approval of `server`. Returns whether there was one.
+    fn withdraw(&self, server: &EmsServer) -> Result<bool, Error> {
+        let path = self
+            .directory
+            .join(fortino_tls::markers::marker_name(&server_key(server)));
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(Error::Store(format!("remove EMS approval: {e}"))),
+        }
+    }
 }
 
 /// Parses an approval marker's content (see [`PackageApprovals::trust_for`]).
@@ -127,6 +139,7 @@ pub fn system_facts() -> FactsSource {
 #[derive(Clone)]
 pub struct EmsWorkers {
     registration_lock: Arc<tokio::sync::Mutex<()>>,
+    refusals: Refusals,
     inner: Arc<dyn WorkerFactory>,
     settings: Arc<Settings>,
     facts: FactsSource,
@@ -162,6 +175,7 @@ impl EmsWorkers {
         }
         Self {
             registration_lock: Arc::default(),
+            refusals: Refusals::default(),
             inner,
             settings: Arc::new(settings),
             facts,
@@ -179,6 +193,7 @@ impl EmsWorkers {
     ) -> Ctx {
         Ctx {
             registration_lock: self.registration_lock.clone(),
+            refusals: self.refusals.clone(),
             settings: self.settings.clone(),
             facts: self.facts.clone(),
             forticlient: self.forticlient.clone(),
@@ -251,9 +266,21 @@ impl EmsWorkers {
     /// This device's registration state with `server`, from local records only: no network
     /// exchange, nothing created. Reveals no serial, UID or keys.
     pub fn status(&self, server: &EmsServer) -> Result<EmsStatusInfo, Error> {
-        if self.server_settings(server).is_none() {
+        let Some(settings) = self.server_settings(server) else {
             return Ok(EmsStatusInfo::bare(EmsState::Unconfigured));
+        };
+        let mut info = self.registration_status(server)?;
+        info.key = settings.key_file.is_some()
+            || Store::open(&self.settings.state_dir)?
+                .load_key(&server_key(server))?
+                .is_some();
+        if info.state == EmsState::NotRegistered {
+            info.refusal = self.refusals.get(server);
         }
+        Ok(info)
+    }
+
+    fn registration_status(&self, server: &EmsServer) -> Result<EmsStatusInfo, Error> {
         // The same rules as a connect: FortiClient's registration is used only when it has
         // this device's UID; under another UID it still holds this Mac's place on the EMS.
         let uid = self.device_uid.as_deref().and_then(|u| Uid::parse(u).ok());
@@ -287,7 +314,87 @@ impl EmsWorkers {
             registered_at: Some(r.registered_at),
             last_keepalive: r.last_keepalive,
             rules: Some(r.host_rules.content.is_some()),
+            key: false,
+            refusal: None,
         })
+    }
+
+    /// Saves the connection key the user gave for `server` (`Some`), or removes it (`None`).
+    /// The next registration sends it. A key in the daemon configuration takes precedence, and
+    /// saving needs the server to be configured or approved on this Mac. Returns the outcome:
+    /// `saved`, `removed`, `none` (nothing to remove), `configured` (the configuration's key
+    /// is used; nothing changed) or `approval-required`. Never returns the key.
+    pub fn set_key(&self, server: &EmsServer, key: Option<&str>) -> Result<&'static str, Error> {
+        let store = Store::open(&self.settings.state_dir)?;
+        let name = server_key(server);
+        let Some(key) = key else {
+            let removed = store.remove_key(&name)?;
+            return Ok(if removed { "removed" } else { "none" });
+        };
+        check_key(key).map_err(|e| Error::Protocol(e.into()))?;
+        match self.server_settings(server) {
+            None => return Ok("approval-required"),
+            Some(s) if s.key_file.is_some() => return Ok("configured"),
+            Some(_) => {}
+        }
+        store.save_key(&name, key)?;
+        // The refusal was for the previous key (or none).
+        self.refusals.clear(server);
+        tracing::info!(ems = %server, "connection key saved");
+        Ok("saved")
+    }
+
+    /// Removes the saved connection keys of servers no profile names any more (`in_use` holds
+    /// server keys, as [`server_key`] gives them). A key only serves registrations for profiles
+    /// that use its server. Returns how many were removed.
+    pub fn forget_unused_keys(
+        &self,
+        in_use: &std::collections::HashSet<String>,
+    ) -> Result<usize, Error> {
+        let store = Store::open(&self.settings.state_dir)?;
+        let mut n = 0;
+        for server in store.key_servers()? {
+            if !in_use.contains(&server) && store.remove_key(&server)? {
+                tracing::info!(ems = %server, "no profile uses this EMS any more; its connection key was removed");
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
+    /// Leaves `server`: asks the EMS to remove this device's record (Fortino's own
+    /// registration only, never one FortiClient's agent uses), then forgets the local
+    /// registration, the saved connection key and this Mac's approval of the server. Local
+    /// state goes even when the EMS can't be reached or keeps the record. A server listed in
+    /// the daemon configuration stays configured.
+    pub async fn leave(&self, server: &EmsServer) -> Result<Left, Error> {
+        let _guard = self.registration_lock.lock().await;
+        let name = server_key(server);
+        let store = Store::open(&self.settings.state_dir)?;
+        let mut left = Left::default();
+        if store.load(&name)?.is_some() {
+            match self.server_settings(server) {
+                Some(settings) => {
+                    let ctx = self.context(server.clone(), settings, Default::default());
+                    match ctx.deregister().await {
+                        Ok(()) => left.deregistered = true,
+                        Err(e) => {
+                            tracing::warn!(ems = %server, error = %e, "the EMS kept this device's record");
+                            left.kept = Some(e.to_string());
+                        }
+                    }
+                }
+                None => left.kept = Some("the server isn't approved on this Mac".into()),
+            }
+            store.remove(&name)?;
+        }
+        store.remove_key(&name)?;
+        self.refusals.clear(server);
+        if let Some(a) = &self.settings.package_approvals {
+            left.approval_withdrawn = a.withdraw(server)?;
+        }
+        tracing::info!(ems = %server, deregistered = left.deregistered, "left EMS");
+        Ok(left)
     }
 
     /// Defers to an installed FortiClient's EMS agent where it manages the same device on the
@@ -346,6 +453,10 @@ pub struct EmsStatusInfo {
     /// the device and assigns it a policy sends them; none after a keepalive usually means
     /// the EMS doesn't recognize this Mac or its policy doesn't cover it.
     pub rules: Option<bool>,
+    /// Whether a connection key is set for this server (in the configuration or by the user).
+    pub key: bool,
+    /// Why the EMS refused this device's last registration, while it is not registered.
+    pub refusal: Option<Refusal>,
 }
 
 impl EmsStatusInfo {
@@ -355,8 +466,93 @@ impl EmsStatusInfo {
             registered_at: None,
             last_keepalive: None,
             rules: None,
+            key: false,
+            refusal: None,
         }
     }
+}
+
+/// What [`EmsWorkers::leave`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Left {
+    /// The EMS removed this device's record.
+    pub deregistered: bool,
+    /// Why a registration's record stayed on the EMS.
+    pub kept: Option<String>,
+    /// This Mac's approval of the server was withdrawn.
+    pub approval_withdrawn: bool,
+}
+
+/// A registration the EMS refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    /// The reason, with the EMS's own message when it gave one.
+    pub reason: String,
+    /// The EMS wants a connection key, or a different one.
+    pub key: bool,
+}
+
+/// The last refusal per server, kept in memory until a registration succeeds or the key changes.
+#[derive(Debug, Clone, Default)]
+struct Refusals(Arc<std::sync::Mutex<HashMap<String, Refusal>>>);
+
+impl Refusals {
+    fn map(&self) -> std::sync::MutexGuard<'_, HashMap<String, Refusal>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn get(&self, server: &EmsServer) -> Option<Refusal> {
+        self.map().get(&server_key(server)).cloned()
+    }
+
+    fn clear(&self, server: &EmsServer) {
+        self.map().remove(&server_key(server));
+    }
+
+    /// Records the outcome of one registration.
+    fn record<T>(&self, server: &EmsServer, r: &Result<T, Error>) {
+        let refusal = match r {
+            Ok(_) => None,
+            Err(Error::KeyRefused(m)) => Some(Refusal {
+                reason: m.clone(),
+                key: true,
+            }),
+            Err(Error::Refused(m)) => Some(Refusal {
+                reason: m.clone(),
+                key: false,
+            }),
+            // Not an answer from the EMS: keep what it said last.
+            Err(_) => return,
+        };
+        let mut map = self.map();
+        match refusal {
+            Some(f) => map.insert(server_key(server), f),
+            None => map.remove(&server_key(server)),
+        };
+    }
+}
+
+/// Longest connection key accepted.
+pub const MAX_KEY_LEN: usize = 256;
+
+/// Checks a connection key before it is saved. It travels as one SYSINFO value, so it can't
+/// hold the field separator.
+pub fn check_key(key: &str) -> Result<(), &'static str> {
+    if key.is_empty() {
+        return Err("the connection key is empty");
+    }
+    if key.len() > MAX_KEY_LEN {
+        return Err("the connection key is too long");
+    }
+    if key.trim() != key {
+        return Err("the connection key starts or ends with a space");
+    }
+    if key.chars().any(|c| c.is_control() || c == '|') {
+        return Err("the connection key contains a control character or '|'");
+    }
+    Ok(())
 }
 
 /// Keepalives only run while a tunnel is up, so "stale" means "not checked in recently", not an
@@ -386,6 +582,7 @@ enum Prepared {
 /// One attempt's EMS context.
 struct Ctx {
     registration_lock: Arc<tokio::sync::Mutex<()>>,
+    refusals: Refusals,
     settings: Arc<Settings>,
     facts: FactsSource,
     forticlient: FortiClientSource,
@@ -434,13 +631,25 @@ impl Ctx {
         })
     }
 
+    /// The connection key: the configuration's key file, else the key the user saved.
     fn key(&self) -> Result<Option<zeroize::Zeroizing<String>>, Error> {
         let Some(p) = &self.server_settings.key_file else {
-            return Ok(None);
+            return Store::open(&self.settings.state_dir)?.load_key(&server_key(&self.server));
         };
-        let text =
-            std::fs::read_to_string(p).map_err(|e| Error::Store(format!("EMS key file: {e}")))?;
+        let text = zeroize::Zeroizing::new(
+            std::fs::read_to_string(p).map_err(|e| Error::Store(format!("EMS key file: {e}")))?,
+        );
         Ok(Some(zeroize::Zeroizing::new(text.trim().to_owned())))
+    }
+
+    /// REGISTER with the connection key, remembering a refusal for EMS Setup.
+    async fn register(&self, agent: &Agent, conn: &Connection) -> Result<(), Error> {
+        let key = self.key()?;
+        let r = agent
+            .register(conn, key.as_deref().map(String::as_str))
+            .await;
+        self.refusals.record(&self.server, &r);
+        r.map(|_| ())
     }
 
     /// The identity to give the worker. `Err` ends the attempt.
@@ -540,10 +749,7 @@ impl Ctx {
                 return Ok((Prepared::Agent(None), agent.uid.clone()));
             }
             tracing::info!(ems = %self.server, "registering with EMS");
-            let key = self.key()?;
-            agent
-                .register(&conn, key.as_deref().map(String::as_str))
-                .await?;
+            self.register(&agent, &conn).await?;
         }
         // The gateway gets the UID the EMS knows this device by: the registration's, which
         // the EMS may have assigned (NEW_GUID), so tags and the tunnel address line up.
@@ -562,6 +768,23 @@ impl Ctx {
             ),
             gateway_uid,
         ))
+    }
+
+    /// Deregisters Fortino's own registration. Refused when FortiClient's agent uses the same
+    /// device record (same UID on this EMS): removing it would remove FortiClient's too.
+    async fn deregister(&self) -> Result<(), Error> {
+        let agent = self.agent().await?;
+        let conn = self.connection()?;
+        if let Some(fc) = self.forticlient_state().await {
+            if fc.active_with(&agent.uid)
+                && self.forticlient_on_this_ems(&agent, &conn, &fc).await?
+            {
+                return Err(Error::Refused(
+                    "FortiClient's EMS agent uses the same device record".into(),
+                ));
+            }
+        }
+        agent.deregister(&conn).await
     }
 
     /// Keepalives and host checks while the tunnel is up.
@@ -646,10 +869,7 @@ impl Ctx {
             }
         }
         if agent.registration(&conn)?.is_none() {
-            let key = self.key()?;
-            agent
-                .register(&conn, key.as_deref().map(String::as_str))
-                .await?;
+            self.register(&agent, &conn).await?;
         }
         tracing::info!(ems = %self.server, "the EMS dropped this device; Fortino registered it again");
         Ok(true)
@@ -757,14 +977,24 @@ fn termination(e: &Error) -> Termination {
     let code = match e {
         Error::Trust(_) => ErrorCode::TrustFailure,
         Error::Transport(_) => ErrorCode::TransportFailure,
-        Error::RegistrationDisabled | Error::Refused(_) => ErrorCode::UnsupportedPolicy,
+        Error::RegistrationDisabled | Error::Refused(_) | Error::KeyRefused(_) => {
+            ErrorCode::UnsupportedPolicy
+        }
         Error::Protocol(_) | Error::NotRegistered | Error::Store(_) => ErrorCode::BackendFailure,
     };
+    let mut message: String = format!("EMS: {e}").chars().take(200).collect();
+    if matches!(e, Error::KeyRefused(_)) {
+        message.push_str(". ");
+        message.push_str(KEY_HINT);
+    }
     Termination {
         code: Some(code),
-        message: format!("EMS: {e}").chars().take(200).collect(),
+        message,
     }
 }
+
+/// Added when the EMS refused the registration for its connection key.
+const KEY_HINT: &str = "Enter the connection key from your IT administrator in EMS Setup.";
 
 impl WorkerFactory for EmsWorkers {
     fn spawn(&self, mut cfg: WorkerConfig) -> WorkerHandle {
@@ -886,6 +1116,62 @@ mod marker_tests {
         }
         assert!(marker_trust("not a pin", ca).is_none());
         assert!(marker_trust(&"ab".repeat(31), ca).is_none());
+    }
+
+    #[test]
+    fn withdrawing_removes_the_servers_marker_only() {
+        let d = tempfile::tempdir().unwrap();
+        let approvals = PackageApprovals {
+            directory: d.path().into(),
+            ca_file: "/etc/ssl/cert.pem".into(),
+        };
+        let a: EmsServer = "EMS-A.test:8013".parse().unwrap();
+        let b: EmsServer = "ems-b.test:8013".parse().unwrap();
+        let marker = |s: &EmsServer| {
+            d.path()
+                .join(fortino_tls::markers::marker_name(&server_key(s)))
+        };
+        std::fs::write(marker(&a), "").unwrap();
+        std::fs::write(marker(&b), "").unwrap();
+        assert!(approvals.withdraw(&a).unwrap());
+        assert!(!approvals.withdraw(&a).unwrap());
+        assert!(!marker(&a).exists());
+        assert!(marker(&b).exists());
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+
+    #[test]
+    fn keys_are_checked() {
+        assert!(check_key("k3y-With.Symbols!").is_ok());
+        assert!(check_key("chiave è").is_ok());
+        assert!(check_key("").is_err());
+        assert!(check_key(" k3y").is_err());
+        assert!(check_key("k3y\n").is_err());
+        assert!(check_key("a|b").is_err());
+        assert!(check_key(&"x".repeat(MAX_KEY_LEN)).is_ok());
+        assert!(check_key(&"x".repeat(MAX_KEY_LEN + 1)).is_err());
+    }
+
+    #[test]
+    fn refusals_follow_registrations() {
+        let r = Refusals::default();
+        let a: EmsServer = "ems-a.test:8013".parse().unwrap();
+        let b: EmsServer = "ems-b.test:8013".parse().unwrap();
+        r.record::<()>(&a, &Err(Error::KeyRefused("no key".into())));
+        r.record::<()>(&b, &Err(Error::Refused("blocked".into())));
+        assert_eq!(r.get(&a).map(|f| f.key), Some(true));
+        assert_eq!(r.get(&b).map(|f| f.key), Some(false));
+        // A network failure says nothing new about the EMS's answer.
+        r.record::<()>(&a, &Err(Error::Transport("down".into())));
+        assert!(r.get(&a).is_some());
+        r.record(&a, &Ok(()));
+        assert!(r.get(&a).is_none());
+        r.clear(&b);
+        assert!(r.get(&b).is_none());
     }
 }
 

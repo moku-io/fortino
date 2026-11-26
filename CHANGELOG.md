@@ -4,7 +4,7 @@ What changed in each release of Fortino. Each section is also the release's note
 
 ## Unreleased
 
-- **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A password is saved for the profile's username, so the option needs one. It is also tied to the gateway: after the profile moves to another gateway, Fortino asks again instead of sending it there. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
+- **Saved passwords are tied to their gateway.** After a profile moves to another gateway, Fortino asks for the password again instead of sending the saved one there, and replaces it once connected.
 - **Connecting after a restart.** A Mac restarted while connected no longer blocks new connections with "network settings could not be restored".
 - **Stopping the service while connected** (uninstalling Fortino, or `launchctl bootout`) now disconnects and restores DNS and IPv6 first.
 - **IPv6 is always blocked while connected**, also when the gateway assigns an IPv6 address: Fortino doesn't tunnel IPv6, so it no longer leaks.
@@ -14,6 +14,13 @@ What changed in each release of Fortino. Each section is also the release's note
 - **Terminal and app together.** `fortino connect` notices a prompt answered in the app and carries on, instead of waiting at a dead prompt. An unusable `--password-fd` or `--otp-fd` frees the VPN at once.
 - **Re-importing from FortiClient** keeps your username, routing and DNS choices and the saved password; the password is removed only when the gateway changes.
 - **Fixes:** split-DNS domains listed twice by the gateway, EMS certificates trusted by macOS but not by Fortino's CA bundle, error details from export and saved passwords, connections left open by `fortino status --watch`, an EMS check-in that failed once after connecting.
+
+## 0.7.1
+
+- **EMS connection key.** Some EMS servers register a Mac only with a connection key (also called the telemetry password) from your IT administrator. When the EMS refuses the registration, EMS Setup and the profile now say so, show the EMS's reason and offer **Enter Connection Key…**, which saves the key for that EMS and registers right away. Before, the app kept offering **Register Now**, which failed the same way. From the terminal: `fortino ems-key set <server>`; `fortino ems-status` shows the refusal.
+- **Leaving an EMS.** Deleting the last profile that uses an EMS now offers **Delete and Leave EMS**: the EMS removes this Mac's device record, and Fortino forgets the server's approval and registration on this Mac. **Delete Profile Only** keeps them. A saved connection key is removed as soon as no profile uses its EMS. From the terminal: `fortino ems-leave <server>`.
+
+- **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A password is saved for the profile's username, so the option needs one. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
 
 ## 0.7.0
 

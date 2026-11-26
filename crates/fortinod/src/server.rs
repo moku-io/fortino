@@ -350,6 +350,69 @@ impl Conn {
                 if let Some(r) = info.rules {
                     v["rules"] = r.into();
                 }
+                v["key"] = info.key.into();
+                if let Some(f) = info.refusal {
+                    v["refusal"] = serde_json::json!({"reason": f.reason, "key": f.key});
+                }
+                Ok(v)
+            }
+            method::EMS_SET_KEY => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct SetKey {
+                    server: String,
+                    /// Absent to remove the key.
+                    #[serde(default)]
+                    key: Option<String>,
+                }
+                let p: SetKey = parse_params(params)?;
+                let key = p.key.map(zeroize::Zeroizing::new);
+                let server = p.server.parse().map_err(|_| {
+                    ProtoError::new(ErrorCode::InvalidRequest, "Invalid EMS address")
+                })?;
+                if let Some(k) = &key {
+                    fortino_ems::service::check_key(k).map_err(|m| {
+                        ProtoError::new(ErrorCode::InvalidRequest, format!("Invalid key: {m}."))
+                    })?;
+                }
+                let ems = s.ems.as_ref().ok_or_else(|| {
+                    ProtoError::new(ErrorCode::UnsupportedPolicy, "EMS enrollment unavailable")
+                })?;
+                let status = ems
+                    .set_key(&server, key.as_deref().map(String::as_str))
+                    .map_err(enrollment_error)?;
+                Ok(serde_json::json!({"status": status}))
+            }
+            method::EMS_LEAVE => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Leave {
+                    server: String,
+                }
+                let p: Leave = parse_params(params)?;
+                let server: fortino_config::EmsServer = p.server.parse().map_err(|_| {
+                    ProtoError::new(ErrorCode::InvalidRequest, "Invalid EMS address")
+                })?;
+                let ems = s.ems.as_ref().ok_or_else(|| {
+                    ProtoError::new(ErrorCode::UnsupportedPolicy, "EMS enrollment unavailable")
+                })?;
+                // Another profile, possibly another user's, may still need this EMS.
+                if s.ems_in_use()?
+                    .contains(&fortino_ems::store::server_key(&server))
+                {
+                    return Err(ProtoError::new(
+                        ErrorCode::InvalidRequest,
+                        "A profile on this Mac still uses this EMS server.",
+                    ));
+                }
+                let left = ems.leave(&server).await.map_err(enrollment_error)?;
+                let mut v = serde_json::json!({
+                    "deregistered": left.deregistered,
+                    "approvalWithdrawn": left.approval_withdrawn,
+                });
+                if let Some(k) = left.kept {
+                    v["kept"] = k.into();
+                }
                 Ok(v)
             }
             method::PROFILE_LIST => {
@@ -384,15 +447,18 @@ impl Conn {
             method::PROFILE_UPDATE => {
                 let p: ProfileUpdateParams = parse_params(params)?;
                 let id = p.id.clone();
-                to_value(s.mutate_profile(&id, |st| {
+                let updated = s.mutate_profile(&id, |st| {
                     st.update(uid, &p.id, p.revision, p.spec).map_err(store_err)
-                })?)
+                })?;
+                s.forget_unused_ems_keys();
+                to_value(updated)
             }
             method::PROFILE_DELETE => {
                 let p: ProfileDeleteParams = parse_params(params)?;
                 s.mutate_profile(&p.id, |st| {
                     st.delete(uid, &p.id, p.revision).map_err(store_err)
                 })?;
+                s.forget_unused_ems_keys();
                 to_value(serde_json::json!({}))
             }
             method::PROFILE_IMPORT => {
@@ -401,6 +467,7 @@ impl Conn {
                     return Err(ProtoError::new(ErrorCode::TooLarge, "too many entries"));
                 }
                 let results = s.import(uid, p.store_revision, p.entries, &p.replace)?;
+                s.forget_unused_ems_keys();
                 to_value(ProfileImportResult { results })
             }
             method::CONNECT => {
@@ -528,7 +595,7 @@ fn enrollment_error(e: fortino_ems::Error) -> ProtoError {
             ErrorCode::TransportFailure,
             "Could not establish a verified TLS connection to EMS.",
         ),
-        Error::Refused(reason) => {
+        Error::Refused(reason) | Error::KeyRefused(reason) => {
             // The EMS's own reason (connection key, invitation, quarantine) tells the user
             // what IT has to provide.
             let message: String = format!("The EMS refused the registration: {reason}")
