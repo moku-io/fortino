@@ -51,6 +51,10 @@ final class AppModel: ObservableObject {
     var pendingPasswordSave: PendingPasswordSave?
     /// The attempt whose password prompt the keychain answered.
     @Published var keychainAnsweredAttempt: String?
+    /// The last attempt this app started. Only its password prompt is answered from the
+    /// keychain: an attempt started elsewhere (`fortino connect --username …`) may sign in as
+    /// another account, and the command that started it handles its own saved password.
+    var ownAttempt: String?
 
     let socketPath: String
     private var client: DaemonClient?
@@ -94,6 +98,11 @@ final class AppModel: ObservableObject {
             ticks += 1
             if ticks % 15 == 0 && state == .connected {
                 await refreshEmsStatus()
+            }
+            // The service sends no event when a profile changes, so changes made elsewhere (the
+            // terminal, another window) show up within 30 s.
+            if ticks % 15 == 0, client != nil {
+                await refreshProfiles()
             }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
@@ -221,7 +230,7 @@ final class AppModel: ObservableObject {
         if changed && (s.state == .connected || s.state == .idle) {
             Task { await self.refreshEmsStatus() }
             // An attempt may have saved a password or marked a saved one refused.
-            if let p = savingProfile(for: s) {
+            if let p = profiles.first(where: { $0.id == s.profileId && $0.spec.savePassword == true }) {
                 Task { await self.refreshSavedPassword(p.id) }
             }
         }
@@ -323,9 +332,10 @@ final class AppModel: ObservableObject {
                 await refreshProfiles()
                 let cur = profiles.first { $0.id == p.id } ?? p
                 guard try await approveEmsBeforeConnecting(cur, client: c) else { return }
-                _ = try await c.connect(ConnectParams(
+                let r = try await c.connect(ConnectParams(
                     profileId: cur.id, revision: cur.revision,
                     requestKey: UUID().uuidString, username: nil))
+                ownAttempt = r.attemptId
             } catch {
                 report(error)
             }
@@ -367,6 +377,11 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Brings the sign-in panel back after the user closed it while the prompt is still open.
+    func showSignIn() {
+        challenges.reopen()
+    }
+
     func disconnect() {
         guard let a = status?.attemptId, state.isActive else { return }
         Task {
@@ -393,7 +408,7 @@ final class AppModel: ObservableObject {
         let failed = status?.lastResult?.attemptId
         Task {
             do {
-                if try await approveWithCertificateCheck(server) {
+                if try await approveWithCertificateCheck(server, afterFailure: true) {
                     reviewedEmsFailure = failed
                     await refreshEmsStatus()
                 }
@@ -438,11 +453,20 @@ final class AppModel: ObservableObject {
 
     /// Checks the server's certificate, warns once if macOS doesn't trust it, and writes the
     /// approval (pinning the certificate the user accepted). False when the user cancelled.
-    func approveWithCertificateCheck(_ server: EmsServer) async throws -> Bool {
+    /// `afterFailure`: the service has just failed to verify this certificate, so it is pinned
+    /// even when macOS trusts it. The service checks against its own CA bundle, which lacks
+    /// roots that only the keychain has (one installed by device management, for example);
+    /// approving without a pin would fail the same way again.
+    func approveWithCertificateCheck(_ server: EmsServer, afterFailure: Bool = false) async throws -> Bool {
         let cert = try await ServerCertificate.fetch(server)
         var pin: String?
-        if !cert.trusted {
-            guard cert.confirmTrust(for: server) else { return false }
+        if !cert.trusted || afterFailure {
+            let reason = cert.trusted
+                ? "macOS trusts this certificate, but Fortino could not verify it against its CA bundle."
+                : nil
+            guard cert.confirmTrust(kind: "EMS server", server: server.display, reason: reason) else {
+                return false
+            }
             pin = cert.sha256
         }
         try EnrollmentApproval(server: server).requestInApp(pin: pin)
@@ -540,10 +564,9 @@ final class AppModel: ObservableObject {
     func delete(_ p: Profile) async -> ProtoError? {
         do {
             try await require().delete(p.id, revision: p.revision)
-            if p.spec.savePassword == true {
-                _ = await runCLI(["password", "forget", p.id])
-                savedPasswords[p.id] = nil
-            }
+            // Also with the option off: a password can be saved without it.
+            _ = await runCLI(["password", "forget", p.id])
+            savedPasswords[p.id] = nil
             await refreshProfiles()
             return nil
         } catch let e as ProtoError {
@@ -571,11 +594,11 @@ final class AppModel: ObservableObject {
         panel.allowedContentTypes = [.xml]
         NSApp.activate(ignoringOtherApps: true)
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        let (code, _, err) = await runCLI(["profile", "export", "--output", url.path])
+        let (code, out, err) = await runCLI(["profile", "export", "--output", url.path])
         guard code != 0 else { return }
         let alert = NSAlert()
         alert.messageText = "Export failed."
-        alert.informativeText = err.trimmingCharacters(in: .whitespacesAndNewlines)
+        alert.informativeText = cliFailure(stdout: out, stderr: err) ?? ""
         alert.runModal()
     }
 

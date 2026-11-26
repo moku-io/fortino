@@ -281,11 +281,7 @@ impl ProfileStore {
                     });
                 }
                 Some(existing) => {
-                    let same_gateway = existing.spec.endpoint.host == spec.endpoint.host
-                        && existing.spec.endpoint.port == spec.endpoint.port;
-                    if same_gateway && spec.endpoint.ems.is_none() {
-                        spec.endpoint.ems = existing.spec.endpoint.ems.clone();
-                    }
+                    keep_local_settings(&existing.spec, &mut spec);
                     if spec == existing.spec {
                         out.push(ImportResult {
                             name: existing.spec.name,
@@ -314,6 +310,47 @@ impl ProfileStore {
         }
         tx.commit()?;
         Ok(out)
+    }
+}
+
+/// Carries settings an import entry doesn't describe over from the profile it matches by name.
+///
+/// A FortiClient file gives the name, the description and the gateway (host, port, realm);
+/// the importer leaves everything else at its default. So a default here means "not in the
+/// file": the username, routing, DNS, trust and debug settings stay as the user set them, and
+/// re-importing an unchanged file stays a no-op. The EMS server stays while the gateway's host
+/// and port do. Save password stays only while the gateway, the realm and the username all
+/// stay: a saved password belongs to the account and the gateway it was given to, so a
+/// replacement that moves the profile elsewhere turns it off (the client then removes the
+/// password).
+fn keep_local_settings(existing: &ProfileSpec, spec: &mut ProfileSpec) {
+    let defaults = ProfileSpec::new(String::new(), spec.endpoint.host.clone());
+    let (old, new) = (&existing.endpoint, &mut spec.endpoint);
+    let same_gateway = old.host == new.host && old.port == new.port;
+    if same_gateway && new.ems.is_none() {
+        new.ems = old.ems.clone();
+    }
+    let same_realm = old.realm == new.realm;
+    if spec.username_hint.is_none() {
+        spec.username_hint = existing.username_hint.clone();
+    }
+    if spec.ip_policy == defaults.ip_policy {
+        spec.ip_policy = existing.ip_policy;
+    }
+    if spec.dns_mode == defaults.dns_mode {
+        spec.dns_mode = existing.dns_mode;
+    }
+    if spec.trust_id == defaults.trust_id {
+        spec.trust_id = existing.trust_id.clone();
+    }
+    if spec.debug_ems_sysinfo.is_empty() {
+        spec.debug_ems_sysinfo = existing.debug_ems_sysinfo.clone();
+    }
+    if !spec.save_password {
+        spec.save_password = existing.save_password
+            && same_gateway
+            && same_realm
+            && spec.username_hint == existing.username_hint;
     }
 }
 
@@ -558,5 +595,41 @@ mod tests {
         assert_eq!(r[0].id, a.id);
         let a2 = s.get(501, &a.id).unwrap();
         assert_eq!(a2.spec.endpoint.ems, None);
+    }
+
+    /// A FortiClient file can't express the username, Save password, routing or DNS, so
+    /// re-importing it keeps what the user set; a replacement that moves the profile to another
+    /// gateway keeps those settings but not Save password (the password was the old gateway's).
+    #[test]
+    fn reimport_keeps_settings_the_file_does_not_carry() {
+        let mut s = ProfileStore::in_memory().unwrap();
+        let rev = s.store_revision(501).unwrap();
+        s.import(501, rev, vec![spec("A", "a.example")], &[])
+            .unwrap();
+        let a = s.find(501, "A").unwrap();
+        let mut sp = a.spec.clone();
+        sp.username_hint = Some("alice".into());
+        sp.save_password = true;
+        sp.ip_policy = crate::IpPolicy::FullIpv4;
+        sp.dns_mode = crate::DnsMode::Local;
+        let a = s.update(501, &a.id, a.revision, sp).unwrap();
+
+        let rev = s.store_revision(501).unwrap();
+        let r = s
+            .import(501, rev, vec![spec("A", "a.example")], &[])
+            .unwrap();
+        assert_eq!(r[0].action, ImportAction::Unchanged);
+        assert_eq!(s.get(501, &a.id).unwrap(), a);
+
+        let r = s
+            .import(501, rev, vec![spec("A", "b.example")], &["A".into()])
+            .unwrap();
+        assert_eq!(r[0].action, ImportAction::Replaced);
+        let b = s.get(501, &a.id).unwrap().spec;
+        assert_eq!(b.endpoint.host, "b.example".parse().unwrap());
+        assert_eq!(b.username_hint.as_deref(), Some("alice"));
+        assert_eq!(b.ip_policy, crate::IpPolicy::FullIpv4);
+        assert_eq!(b.dns_mode, crate::DnsMode::Local);
+        assert!(!b.save_password, "a saved password stays with its gateway");
     }
 }

@@ -207,9 +207,12 @@ pub fn validate_realm(r: &str) -> Result<(), &'static str> {
     if r.len() > MAX_REALM_LEN {
         return Err("too_long");
     }
-    let ok = r
-        .bytes()
-        .all(|b| b.is_ascii_graphic() && !matches!(b, b'/' | b'?' | b'#' | b'%' | b'\\'));
+    // `@` and `;` too: a FortiClient file writes the realm into the server field
+    // (`host:port/realm`), where they mean a user and the next gateway, so such a realm could
+    // be exported but never imported again.
+    let ok = r.bytes().all(|b| {
+        b.is_ascii_graphic() && !matches!(b, b'/' | b'?' | b'#' | b'%' | b'\\' | b'@' | b';')
+    });
     if ok { Ok(()) } else { Err("invalid_realm") }
 }
 
@@ -315,9 +318,46 @@ pub struct ProfileSpec {
     /// this profile. Empty in normal use. Keys are SYSINFO
     /// keys (`[A-Z0-9_]`); this deliberately bypasses the truthful-posture guarantee, so it is a
     /// hand-entered expert escape hatch with no field picker, kept isolated for easy removal.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "unique_keys"
+    )]
     pub debug_ems_sysinfo: BTreeMap<String, String>,
 }
+
+/// Deserializes a map, refusing a key given twice: serde would keep the last one silently,
+/// and the protocol rejects duplicate keys.
+fn unique_keys<'de, D>(d: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = BTreeMap<String, String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a map of strings")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut m: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut out = BTreeMap::new();
+            while let Some((k, v)) = m.next_entry::<String, String>()? {
+                if out.contains_key(&k) {
+                    return Err(serde::de::Error::custom("duplicate key"));
+                }
+                out.insert(k, v);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_map(V)
+}
+
+/// Most bytes of debug SYSINFO overrides on one profile, so a list of profiles still fits one
+/// control message.
+pub const MAX_DEBUG_TOTAL: usize = 16 * 1024;
 
 /// Most debug SYSINFO overrides accepted on one profile.
 pub const MAX_DEBUG_OVERRIDES: usize = 64;
@@ -331,6 +371,9 @@ pub const MAX_DEBUG_VALUE_LEN: usize = 4096;
 fn validate_debug_overrides(m: &BTreeMap<String, String>) -> Result<(), FieldError> {
     if m.len() > MAX_DEBUG_OVERRIDES {
         return Err(FieldError::new("debugEmsSysinfo", "too_many"));
+    }
+    if m.iter().map(|(k, v)| k.len() + v.len()).sum::<usize>() > MAX_DEBUG_TOTAL {
+        return Err(FieldError::new("debugEmsSysinfo", "too_large"));
     }
     for (k, v) in m {
         let key_ok = !k.is_empty()
@@ -494,6 +537,18 @@ mod tests {
         let back: ProfileSpec = serde_json::from_value(json).unwrap();
         assert!(back.save_password);
         assert!(back.clone().validate().is_ok());
+    }
+
+    #[test]
+    fn debug_overrides_refuse_duplicate_keys_and_bulk() {
+        let dup = r#"{"name":"a","endpoint":{"host":"vpn.example.org"},"debugEmsSysinfo":{"OS_VER":"1","OS_VER":"2"}}"#;
+        assert!(serde_json::from_str::<ProfileSpec>(dup).is_err());
+        let mut s = ProfileSpec::new("a", "vpn.example.org".parse().unwrap());
+        for i in 0..8 {
+            s.debug_ems_sysinfo
+                .insert(format!("K{i}"), "v".repeat(4000));
+        }
+        assert_eq!(s.validate().unwrap_err().code, "too_large");
     }
 
     #[test]

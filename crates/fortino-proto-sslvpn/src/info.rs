@@ -98,6 +98,25 @@ mod tests {
         assert!(j.wants_fct_uid());
     }
 
+    proptest::proptest! {
+        #[test]
+        fn never_panics(body: String) {
+            let _ = parse(&body);
+        }
+
+        /// Shaped like the real answer, so the attribute handling is reached.
+        #[test]
+        fn never_panics_on_api_attributes(
+            attrs in proptest::collection::vec(
+                ("(encmethod|salt|remoteauthtimeout|sso_port|f|[a-z]{1,8})", "[^'<&]{0,24}"),
+                0..8,
+            )
+        ) {
+            let a: String = attrs.iter().map(|(k, v)| format!(" {k}='{v}'")).collect();
+            let _ = parse(&format!("<?xml version='1.0'?><info><api{a}/></info>"));
+        }
+    }
+
     #[test]
     fn missing_api() {
         assert_eq!(parse("<info/>"), Err(InfoError::NoApi));

@@ -9,6 +9,8 @@ final class ChallengePanelController {
     weak var model: AppModel?
     private var panel: NSPanel?
     private var shownId: String?
+    /// The challenge whose view the panel holds (it may be hidden by its close button).
+    private var presentedId: String?
 
     func update(status: Status) {
         guard let ch = status.challenge else {
@@ -40,6 +42,7 @@ final class ChallengePanelController {
                                  backing: .buffered, defer: false)
         p.title = "Sign in to \(status.profileName ?? "VPN")"
         p.contentViewController = host
+        presentedId = ch.id
         p.isReleasedWhenClosed = false
         // A menu-bar app is usually inactive; keep the prompt visible anyway.
         p.hidesOnDeactivate = false
@@ -53,7 +56,18 @@ final class ChallengePanelController {
 
     func close() {
         shownId = nil
+        presentedId = nil
         panel?.orderOut(nil)
+    }
+
+    /// Shows the panel again for the open prompt after the user closed it: closing hides it,
+    /// and the attempt keeps waiting for the answer. Nothing to show while the keychain is
+    /// still answering the prompt.
+    func reopen() {
+        guard let p = panel, let id = model?.status?.challenge?.id, id == presentedId else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        p.makeKeyAndOrderFront(nil)
+        p.orderFrontRegardless()
     }
 }
 
@@ -104,6 +118,11 @@ struct ChallengeView: View {
             .focused($focused)
             .onSubmit(submit)
             .accessibilityLabel(title)
+            if offersPush {
+                Text("Or send a push notification and approve the sign-in on your phone.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let error {
                 Text(error).foregroundStyle(.red).font(.callout)
             }
@@ -112,6 +131,11 @@ struct ChallengeView: View {
                 Spacer()
                 Button("Cancel Connection", role: .cancel) { model.disconnect() }
                     .keyboardShortcut(.cancelAction)
+                if offersPush {
+                    Button("Send Push", action: sendPush)
+                        .disabled(busy)
+                        .help("The gateway sends a notification to your authenticator app")
+                }
                 Button("Continue", action: submit)
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(.borderedProminent)
@@ -144,6 +168,8 @@ struct ChallengeView: View {
             notice("The gateway refused the saved password.")
         case .unavailable:
             notice("The saved password couldn't be read from your keychain.")
+        case .otherGateway:
+            notice("The saved password is for another gateway, so it wasn't sent.")
         case .willSave, nil:
             if passwordFromKeychain {
                 Label("Password filled in from your keychain.", systemImage: "key.fill")
@@ -168,10 +194,27 @@ struct ChallengeView: View {
         switch saved {
         case .willSave:
             Toggle("Save in Keychain after connecting", isOn: $remember)
-        case .rejected:
+        case .rejected, .otherGateway:
             Toggle("Replace the saved password after connecting", isOn: $remember)
         case .unavailable, nil:
             EmptyView()
+        }
+    }
+
+    /// The gateway offers FortiToken Mobile push for this code.
+    private var offersPush: Bool { challenge.kind == .otp && challenge.push == true }
+
+    /// An empty code asks the gateway for a push notification instead.
+    private func sendPush() {
+        busy = true
+        error = nil
+        Task {
+            if let e = await model.respond(challenge: challenge, value: "") {
+                error = e.code == "stale_challenge"
+                    ? "This prompt expired or was answered elsewhere."
+                    : e.message
+            }
+            busy = false
         }
     }
 
@@ -181,7 +224,7 @@ struct ChallengeView: View {
         let v = value
         value = ""
         model.noteTyped(challenge.kind, value: v,
-                        savePassword: remember && (saved == .willSave || saved == .rejected))
+                        savePassword: remember && [.willSave, .rejected, .otherGateway].contains(saved))
         Task {
             if let e = await model.respond(challenge: challenge, value: v) {
                 error = e.code == "stale_challenge"

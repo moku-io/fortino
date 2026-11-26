@@ -749,6 +749,109 @@ async fn restart_while_connected_waits_for_disconnect_and_cleanup() {
     assert_eq!(h.net.lock().unwrap().net_only(), before);
 }
 
+/// Stopping the service (SIGTERM from launchd on uninstall or bootout) while connected stops
+/// the tunnel and restores the network before the process exits.
+#[tokio::test]
+async fn shutdown_while_connected_restores_network() {
+    let h = start(fake(|_| {}), quick()).await;
+    let before = h.net.lock().unwrap().net_only();
+    let mut c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    c.connect_profile(&connect_params(&p, "k1")).await.unwrap();
+    answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
+    answer(&c, &mut rx, ChallengeKind::Otp, "123456").await;
+    wait_for(&mut rx, |s| s.state == State::Connected).await;
+    assert_ne!(h.net.lock().unwrap().net_only(), before);
+
+    tokio::time::timeout(Duration::from_secs(5), h.session.shutdown())
+        .await
+        .expect("shutdown waits for the rollback, within its timeout");
+    assert_eq!(h.net.lock().unwrap().net_only(), before);
+    let st = c.status().await.unwrap();
+    assert_eq!(st.state, State::Idle);
+    assert_eq!(
+        st.last_result.unwrap().code,
+        Some(ErrorCode::ServiceUnavailable)
+    );
+}
+
+/// Every client that subscribes and leaves gives its connection back: the per-user limit
+/// counts open connections, and an idle service sends no event that would close them.
+#[tokio::test]
+async fn clients_that_leave_free_their_connection() {
+    let h = start(fake(|_| {}), quick()).await;
+    for _ in 0..fortinod::server::MAX_CONNECTIONS_PER_UID + 8 {
+        let mut c = h.client().await;
+        c.subscribe().await.unwrap();
+        drop(c);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let ok = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(c) = Client::connect(&h.sock, "test").await
+                && c.status().await.is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(ok.is_ok(), "new connections refused after clients left");
+}
+
+/// An answer too large for one message is refused with `too_large`; the connection stays up.
+#[tokio::test]
+async fn oversized_answer_is_refused_not_dropped() {
+    let h = start(fake(|_| {}), quick()).await;
+    let c = h.client().await;
+    for n in 0..20 {
+        let mut spec = ProfileSpec::new(format!("P{n}"), "vpn.example.org".parse().unwrap());
+        for i in 0..4 {
+            spec.debug_ems_sysinfo
+                .insert(format!("K{i}"), "v".repeat(3900));
+        }
+        c.profile_create(spec).await.unwrap();
+    }
+    let e = c.profile_list().await.unwrap_err();
+    assert_eq!(e.code, ErrorCode::TooLarge);
+    assert!(c.status().await.is_ok(), "the connection survives");
+}
+
+/// Waiting for a push approval on the phone takes longer than a gateway request: the empty
+/// answer to a code prompt that offers a push gets the prompt's time, not the progress deadline.
+#[tokio::test]
+async fn push_approval_gets_the_prompts_time() {
+    let timeouts = Timeouts {
+        transport: Duration::from_secs(1),
+        challenge: Duration::from_secs(5),
+        shutdown: Duration::from_secs(2),
+    };
+    let h = start(fake(|f| f.push_approval_ms = Some(2500)), timeouts).await;
+    let mut c = h.client().await;
+    let p = h.profile(&c, "GATEWAY-2", Some("alice")).await;
+    let (_, mut rx) = c.subscribe().await.unwrap();
+    c.connect_profile(&connect_params(&p, "k1")).await.unwrap();
+    answer(&c, &mut rx, ChallengeKind::Password, "hunter2").await;
+    let st = wait_for(&mut rx, |s| {
+        s.challenge
+            .as_ref()
+            .is_some_and(|ch| ch.kind == ChallengeKind::Otp)
+    })
+    .await;
+    let ch = st.challenge.unwrap();
+    assert!(ch.push, "the code prompt says a push is offered");
+    c.respond(st.attempt_id.as_deref().unwrap(), &ch.id, "".into())
+        .await
+        .unwrap();
+    let st = wait_for(&mut rx, |s| {
+        matches!(s.state, State::Connected | State::Idle)
+    })
+    .await;
+    assert_eq!(st.state, State::Connected, "{:?}", st.last_result);
+}
+
 #[tokio::test]
 async fn connection_keys_follow_the_profiles_and_leaving_needs_none() {
     use fortino_ems::service::{EmsWorkers, ServerSettings, Settings};
@@ -779,6 +882,7 @@ async fn connection_keys_follow_the_profiles_and_leaving_needs_none() {
             .into(),
             settle: Duration::ZERO,
             min_ka_interval: Duration::ZERO,
+            retry: Duration::from_millis(100),
         },
         Arc::new(|| None),
     );

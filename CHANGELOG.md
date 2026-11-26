@@ -2,6 +2,19 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
+## 0.8.0
+
+- **Saved passwords are tied to their gateway.** After a profile moves to another gateway, Fortino asks for the password again instead of sending the saved one there, and replaces it once connected.
+- **Connecting after a restart.** A Mac restarted while connected no longer blocks new connections with "network settings could not be restored".
+- **Stopping the service while connected** (uninstalling Fortino, or `launchctl bootout`) now disconnects and restores DNS and IPv6 first.
+- **IPv6 is always blocked while connected**, also when the gateway assigns an IPv6 address: Fortino doesn't tunnel IPv6, so it no longer leaks.
+- **Full IPv4 with the gateway's DNS** is refused before anything changes, with a message to choose this Mac's DNS, instead of failing after sign-in.
+- **Push notifications.** When the gateway offers FortiToken Mobile push, the sign-in panel has **Send Push**: approve the sign-in on your phone instead of typing the code. In the terminal, press Return on an empty code.
+- **Sign In…** in the menu-bar panel and the Profiles window brings back a sign-in panel closed with its close button.
+- **Terminal and app together.** `fortino connect` notices a prompt answered in the app and carries on, instead of waiting at a dead prompt. An unusable `--password-fd` or `--otp-fd` frees the VPN at once.
+- **Re-importing from FortiClient** keeps your username, routing and DNS choices and the saved password; the password is removed only when the gateway changes.
+- **Fixes:** split-DNS domains listed twice by the gateway, EMS certificates trusted by macOS but not by Fortino's CA bundle, error details from export and saved passwords, connections left open by `fortino status --watch`, an EMS check-in that failed once after connecting.
+
 ## 0.7.1
 
 - **EMS connection key.** Some EMS servers register a Mac only with a connection key (also called the telemetry password) from your IT administrator. When the EMS refuses the registration, EMS Setup and the profile now say so, show the EMS's reason and offer **Enter Connection Key…**, which saves the key for that EMS and registers right away. Before, the app kept offering **Register Now**, which failed the same way. From the terminal: `fortino ems-key set <server>`; `fortino ems-status` shows the refusal.

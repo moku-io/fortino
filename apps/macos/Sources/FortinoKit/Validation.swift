@@ -58,13 +58,13 @@ public func parseEms(_ s: String) -> Result<EmsServer?, ProtoError> {
     return .success(EmsServer(host: host.lowercased(), port: port))
 }
 
-/// Checks a realm: one path segment of printable ASCII without `/?#%\`.
+/// Checks a realm: one path segment of printable ASCII without `/?#%\@;`.
 public func checkRealm(_ s: String) -> FieldCheck {
     if s.isEmpty { return .ok }
     if s.count > 128 { return .error("Realm is too long") }
-    let bad: Set<Character> = ["/", "?", "#", "%", "\\", " "]
+    let bad: Set<Character> = ["/", "?", "#", "%", "\\", " ", "@", ";"]
     let ok = s.allSatisfy { $0.isASCII && !$0.isWhitespace && !bad.contains($0) && ($0.asciiValue ?? 0) > 32 && ($0.asciiValue ?? 127) < 127 }
-    return ok ? .ok : .error("Realm must be a single word without / ? # %")
+    return ok ? .ok : .error("Realm must be a single word without / ? # % @ ;")
 }
 
 /// Checks a gateway port.

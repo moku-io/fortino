@@ -28,6 +28,11 @@ impl IpNet {
         Self { addr, prefix }
     }
 
+    /// Whether this is a single address (/32 or /128).
+    pub fn is_host(&self) -> bool {
+        self.prefix == if self.addr.is_ipv4() { 32 } else { 128 }
+    }
+
     /// Builds an IPv4 prefix from a dotted netmask. Returns `None` for a non-contiguous mask.
     pub fn from_v4_mask(addr: std::net::Ipv4Addr, mask: std::net::Ipv4Addr) -> Option<Self> {
         let m = u32::from(mask);
@@ -225,6 +230,12 @@ pub enum Undo {
     UnblockIpv6Pf {
         /// pf was disabled before the block and must be disabled again.
         disable_pf: bool,
+    },
+    /// Remove the IPv6 block's pf anchor and release the pf reference taken for it, so pf
+    /// stays on exactly as long as someone else holds a reference.
+    ReleasePf {
+        /// The reference token (`pfctl -E`); `None` until the reference is taken.
+        token: Option<String>,
     },
 }
 

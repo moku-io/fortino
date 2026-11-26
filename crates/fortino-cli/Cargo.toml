@@ -12,13 +12,12 @@ fortino-config.workspace = true
 fortino-core.workspace = true
 fortino-secret = { workspace = true, features = ["platform-store"] }
 clap = { workspace = true, features = ["env"] }
-rpassword.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["full"] }
 uuid.workspace = true
 zeroize.workspace = true
-nix = { workspace = true, features = ["term"] }
+nix = { workspace = true, features = ["poll", "term"] }
 quick-xml.workspace = true
 
 [dev-dependencies]

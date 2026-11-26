@@ -21,7 +21,11 @@ struct Daemon {
 }
 
 fn daemon() -> Daemon {
-    let dir = tempfile::tempdir().unwrap();
+    daemon_in(tempfile::tempdir().unwrap())
+}
+
+/// A daemon in `dir`, at `dir/d.sock`: a second one there is the first one restarted.
+fn daemon_in(dir: tempfile::TempDir) -> Daemon {
     let sock = dir.path().join("d.sock");
     let rt = tokio::runtime::Runtime::new().unwrap();
     let session = Session::new(
@@ -574,4 +578,262 @@ fn save_password_needs_the_profile_username() {
     assert!(stderr(&o).contains("Save password stays off"), "{o:?}");
     assert_eq!(creds(&d)[&profile_id(&d, "Third")]["username"], "carol");
     assert_eq!(code(&d.run("disconnect")), 0);
+}
+
+#[test]
+fn reimport_keeps_the_saved_password_until_the_gateway_changes() {
+    let d = daemon();
+    let x = d.write(
+        "x.xml",
+        "<forticlient_configuration><vpn><sslvpn><connections>\
+         <connection><name>Work</name><server>vpn.example.test:10443</server></connection>\
+         </connections></sslvpn></vpn></forticlient_configuration>",
+    );
+    assert_eq!(code(&d.run(&format!("profile import {}", x.display()))), 0);
+    assert_eq!(code(&d.run("profile edit Work --username alice")), 0);
+    let o = d.sh("printf 'pw\\n' | \"$FORTINO_CLI\" password save Work --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let id = profile_id(&d, "Work");
+
+    // The same file again: nothing to replace, the username and saved password stay.
+    let o = d.run(&format!("--json profile import {}", x.display()));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert_eq!(json(&o)["result"]["results"][0]["action"], "unchanged");
+    assert!(creds(&d).get(&id).is_some());
+
+    // The profile moves to another gateway: the old gateway's password goes.
+    let y = d.write(
+        "y.xml",
+        "<forticlient_configuration><vpn><sslvpn><connections>\
+         <connection><name>Work</name><server>vpn2.example.test:10443</server></connection>\
+         </connections></sslvpn></vpn></forticlient_configuration>",
+    );
+    let o = d.run(&format!("profile import {} --replace Work", y.display()));
+    assert_eq!(code(&o), 0, "{o:?}");
+    assert!(
+        stdout(&o).contains("Removed the saved password of Work"),
+        "{o:?}"
+    );
+    assert!(creds(&d).get(&id).is_none());
+    let v = json(&d.run("--json profile show Work"))["result"]["spec"].clone();
+    assert_eq!(v["usernameHint"], "alice");
+    assert!(v.get("savePassword").is_none());
+}
+
+#[test]
+fn removing_a_profile_forgets_a_password_saved_with_the_option_off() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let pw = d.write("pw", "hunter2\n");
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    // Saved while connected: the profile can't change, so the option stays off.
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    let id = profile_id(&d, "GW");
+    assert!(creds(&d).get(&id).is_some());
+    assert_eq!(code(&d.run("disconnect")), 0);
+    assert_eq!(code(&d.run("profile remove GW")), 0);
+    assert!(creds(&d).get(&id).is_none());
+}
+
+#[test]
+fn an_unusable_descriptor_ends_the_attempt() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let empty = d.write("empty", "");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" --json connect GW --password-fd 3 3<{}",
+        empty.display()
+    ));
+    assert_eq!(code(&o), 4, "{o:?}");
+    // The VPN is free again right away, not held until the prompt times out.
+    assert_eq!(json(&d.run("--json status"))["status"]["state"], "idle");
+    let pw = d.write("pw", "hunter2\n");
+    let otp = d.write("otp", "123456\n");
+    let o = d.sh(&format!(
+        "\"$FORTINO_CLI\" connect GW --password-fd 3 --otp-fd 4 3<{} 4<{}",
+        pw.display(),
+        otp.display()
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+}
+
+/// Runs `fortino` with a terminal of its own (a pseudo-terminal from `script`), its input left
+/// open and empty, as if nobody typed.
+fn spawn_on_terminal(d: &Daemon, args: &str) -> std::process::Child {
+    let cmd = format!("exec \"$FORTINO_CLI\" {args}");
+    let mut c = Command::new("script");
+    if cfg!(target_os = "macos") {
+        c.args(["-q", "/dev/null", "sh", "-c", &cmd]);
+    } else {
+        c.args(["-qec", &cmd, "/dev/null"]);
+    }
+    c.env("FORTINO_CLI", env!("CARGO_BIN_EXE_fortino"))
+        .env("FORTINO_SOCKET", &d.sock)
+        .env(
+            "FORTINO_CREDENTIAL_STORE",
+            format!("file:{}", d.dir.path().join("creds.json").display()),
+        )
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// The desktop app shows the same prompts as `fortino connect` and may answer first: the
+/// command then follows the attempt to its end instead of waiting at a dead prompt, and keeps
+/// nothing from it.
+#[test]
+fn prompt_answered_elsewhere_is_dropped() {
+    use fortino_core::proto::{ChallengeKind, State};
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice --save-password")),
+        0
+    );
+    let mut child = spawn_on_terminal(&d, "connect GW");
+    let finished = d.rt.block_on(async {
+        let c = fortino_core::client::Client::connect(&d.sock, "app")
+            .await
+            .unwrap();
+        // Answer each prompt once the command shows it, as a user at the app would.
+        let mut answered = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            let st = c.status().await.unwrap();
+            if st.state == State::Connected {
+                break;
+            }
+            if let (Some(a), Some(ch)) = (st.attempt_id.clone(), st.challenge.clone())
+                && !answered.contains(&ch.id)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                let v = if ch.kind == ChallengeKind::Password {
+                    "hunter2"
+                } else {
+                    "123456"
+                };
+                c.respond(&a, &ch.id, v.into()).await.unwrap();
+                answered.push(ch.id);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        for _ in 0..250 {
+            if let Some(s) = child.try_wait().unwrap() {
+                return Some(s);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        None
+    });
+    if finished.is_none() {
+        let _ = child.kill();
+    }
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(finished.is_some(), "still waiting at the prompt: {text}");
+    assert!(text.contains("Connected:"), "{text}");
+    assert_eq!(
+        json(&d.run("--json status"))["status"]["state"],
+        "connected"
+    );
+    // Nothing was typed in the terminal, so nothing was saved.
+    assert!(creds(&d).get(profile_id(&d, "GW")).is_none());
+}
+
+/// A saved password belongs to the gateway it was saved for. A program running as the user can
+/// point the profile at a server of its own over the service's socket; asked to answer, the CLI
+/// then sends nothing.
+#[test]
+fn saved_password_is_never_sent_to_another_gateway() {
+    let d = daemon();
+    assert_eq!(
+        code(&d.run("profile add GW --host tg2.example.org --username alice")),
+        0
+    );
+    let o = d.sh("printf 'hunter2\\n' | \"$FORTINO_CLI\" password save GW --stdin");
+    assert_eq!(code(&o), 0, "{o:?}");
+    // Changed behind the CLI's back, straight over the socket.
+    d.rt.block_on(async {
+        let c = fortino_core::client::Client::connect(&d.sock, "other")
+            .await
+            .unwrap();
+        let p = c.profile_get("GW").await.unwrap();
+        let mut spec = p.spec.clone();
+        spec.endpoint.host = "collector.example.net".parse().unwrap();
+        c.profile_update(p.id.clone(), p.revision, spec)
+            .await
+            .unwrap();
+    });
+    let st = json(&d.run("--json password status GW"));
+    assert_eq!(st["result"]["otherGateway"], true, "{st}");
+
+    let (c, attempt, ch) = start_attempt(&d, "GW");
+    let o = d.run(&format!(
+        "--json password answer GW --attempt {attempt} --challenge {ch}"
+    ));
+    assert_eq!(code(&o), 0, "{o:?}");
+    let r = &json(&o)["result"];
+    assert_eq!(
+        (r["answered"].as_bool(), r["reason"].as_str()),
+        (Some(false), Some("other-gateway"))
+    );
+    // Still waiting for a typed password.
+    let st = d.rt.block_on(c.status()).unwrap();
+    assert_eq!(st.challenge.map(|c| c.id), Some(ch));
+}
+
+/// `status --watch` follows the service across a restart (an update, launchd) instead of
+/// ending: the next status comes from the new instance.
+#[test]
+fn status_watch_follows_a_restarted_service() {
+    use std::io::BufRead;
+    let d = daemon();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fortino"))
+        .args(["--json", "status", "--watch"])
+        .env("FORTINO_SOCKET", &d.sock)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, lines) = std::sync::mpsc::channel();
+    let out = child.stdout.take().unwrap();
+    std::thread::spawn(move || {
+        for l in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            let _ = tx.send(l);
+        }
+    });
+    let instance = |l: String| -> String {
+        let v: serde_json::Value = serde_json::from_str(&l).unwrap();
+        v["status"]["daemonInstance"].as_str().unwrap().to_owned()
+    };
+    let wait = std::time::Duration::from_secs(10);
+    let first = instance(lines.recv_timeout(wait).unwrap());
+
+    // Restart: the old service goes away, a new one listens on the same socket.
+    let Daemon { dir, rt, .. } = d;
+    drop(rt);
+    let d2 = daemon_in(dir);
+    let second = instance(
+        lines
+            .recv_timeout(wait)
+            .expect("no status from the new service"),
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_ne!(first, second);
+    drop(d2);
 }

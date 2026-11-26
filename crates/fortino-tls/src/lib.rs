@@ -30,6 +30,9 @@ pub enum Failure {
     /// Local TLS configuration.
     #[error("{0}")]
     Backend(String),
+    /// The gateway wants something this client doesn't do (a client certificate).
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// How to verify the gateway.
@@ -219,6 +222,12 @@ const MAX_FETCHED: usize = 16;
 const MAX_TRIED: usize = 8;
 /// Handshake retries after fetching issuers, per connection.
 const MAX_FETCH_ROUNDS: usize = 3;
+/// Longest wait for one missing intermediate certificate.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Longest wait for all of them in one connect: a CA host that never answers must still end
+/// the attempt as a trust failure, well before the daemon's progress deadline would end it as
+/// a timeout.
+const FETCH_BUDGET: Duration = Duration::from_secs(12);
 
 /// The CA-bundle verifier, plus intermediate certificates fetched because the server left
 /// them out (see [`issuers`]).
@@ -423,6 +432,7 @@ impl TlsClient {
         what: &str,
     ) -> Result<TlsStream<TcpStream>, Failure> {
         let mut rounds = 0;
+        let fetch_until = tokio::time::Instant::now() + FETCH_BUDGET;
         loop {
             let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
                 .await
@@ -438,7 +448,10 @@ impl TlsClient {
             };
             let retry = match (&e, &self.completer) {
                 (Failure::Trust(_), Some(c)) if rounds < MAX_FETCH_ROUNDS => {
-                    c.fetch_missing(timeout, self.issuer_fetch_override).await
+                    let left = fetch_until.saturating_duration_since(tokio::time::Instant::now());
+                    let fetch =
+                        c.fetch_missing(left.min(FETCH_TIMEOUT), self.issuer_fetch_override);
+                    tokio::time::timeout(left, fetch).await.unwrap_or(false)
                 }
                 _ => false,
             };
@@ -462,8 +475,19 @@ pub fn classify(e: std::io::Error, what: &str) -> Failure {
                 rustls::Error::InvalidCertificate(_) | rustls::Error::NoCertificatesPresented
             )
         });
+    let client_cert = e
+        .get_ref()
+        .and_then(|i| i.downcast_ref::<rustls::Error>())
+        .is_some_and(|r| {
+            matches!(
+                r,
+                rustls::Error::AlertReceived(rustls::AlertDescription::CertificateRequired)
+            )
+        });
     if cert {
         Failure::Trust(format!("{what}: {e}"))
+    } else if client_cert {
+        Failure::Unsupported("the gateway requires a client certificate".into())
     } else {
         Failure::Transport(format!("TLS: {e}"))
     }

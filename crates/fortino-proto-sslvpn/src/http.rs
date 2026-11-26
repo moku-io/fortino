@@ -120,8 +120,22 @@ pub enum Parsed {
 }
 
 /// Parses one response from `buf`. `eof` says the peer has closed the connection, which ends a
-/// body that has neither `Content-Length` nor chunked encoding.
+/// body that has neither `Content-Length` nor chunked encoding. Interim answers (`1xx`, such as
+/// a `100 Continue` a front end sends unasked) are skipped: the final answer follows them.
 pub fn parse_response(buf: &[u8], eof: bool) -> Result<Parsed, HttpError> {
+    let mut skipped = 0;
+    loop {
+        match parse_one(&buf[skipped..], eof)? {
+            Parsed::Done(r, used) if (100..200).contains(&r.status) && r.status != 101 => {
+                skipped += used;
+            }
+            Parsed::Done(r, used) => return Ok(Parsed::Done(r, skipped + used)),
+            Parsed::Incomplete => return Ok(Parsed::Incomplete),
+        }
+    }
+}
+
+fn parse_one(buf: &[u8], eof: bool) -> Result<Parsed, HttpError> {
     let Some(head_end) = find(buf, b"\r\n\r\n") else {
         if buf.len() > MAX_HEADER {
             return Err(HttpError::TooLarge("header"));
@@ -230,9 +244,16 @@ fn dechunk(mut b: &[u8]) -> Result<Option<(Vec<u8>, usize)>, HttpError> {
             usize::from_str_radix(size_hex, 16).map_err(|_| HttpError::Malformed("chunk size"))?;
         b = &b[eol + 2..];
         if size == 0 {
-            // Skip trailers up to the blank line.
+            // Skip trailers up to the blank line; they are headers and get the same limit.
+            let trailers = b.len();
             loop {
+                if trailers - b.len() > MAX_HEADER {
+                    return Err(HttpError::TooLarge("trailer"));
+                }
                 let Some(e) = find(b, b"\r\n") else {
+                    if b.len() > MAX_HEADER {
+                        return Err(HttpError::TooLarge("trailer"));
+                    }
                     return Ok(None);
                 };
                 let blank = e == 0;
@@ -295,6 +316,38 @@ mod tests {
     }
 
     #[test]
+    fn interim_answers_are_skipped() {
+        let raw = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        let (r, n) = done(raw, false);
+        assert_eq!(
+            (r.status, r.body.as_slice(), n),
+            (200, &b"ok"[..], raw.len())
+        );
+        assert_eq!(
+            parse_response(b"HTTP/1.1 100 Continue\r\n\r\n", false),
+            Ok(Parsed::Incomplete)
+        );
+    }
+
+    #[test]
+    fn endless_trailers_are_refused() {
+        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+        for _ in 0..4096 {
+            raw.extend_from_slice(b"X-Trailer: aaaaaaaaaaaaaaaa\r\n");
+        }
+        assert!(matches!(
+            parse_response(&raw, false),
+            Err(HttpError::TooLarge(_))
+        ));
+        let mut open = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n".to_vec();
+        open.extend(std::iter::repeat_n(b'a', MAX_HEADER + 1));
+        assert!(matches!(
+            parse_response(&open, false),
+            Err(HttpError::TooLarge(_))
+        ));
+    }
+
+    #[test]
     fn chunked() {
         let raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n2;x=y\r\nde\r\n0\r\n\r\n";
         let (r, n) = done(raw, false);
@@ -346,6 +399,35 @@ mod tests {
         #[test]
         fn never_panics(data: Vec<u8>, eof: bool) {
             let _ = parse_response(&data, eof);
+        }
+
+        /// Shaped like a real answer, so the header, length, chunk and trailer handling run;
+        /// cut anywhere, as reads arrive.
+        #[test]
+        fn never_panics_on_shaped_answers(
+            status in 100u16..600,
+            headers in proptest::collection::vec(
+                ("(Content-Length|Transfer-Encoding|Set-Cookie|Location|[A-Za-z-]{1,12})",
+                 "(chunked|[0-9]{1,6}|[ -~]{0,20})"),
+                0..6,
+            ),
+            chunks in proptest::collection::vec(("[0-9a-fA-F]{1,4}", "[ -~]{0,40}"), 0..4),
+            trailer in "[ -~]{0,30}",
+            cut in 0usize..400,
+            eof: bool,
+        ) {
+            let mut raw = format!("HTTP/1.1 {status} X\r\n");
+            for (k, v) in &headers {
+                raw.push_str(&format!("{k}: {v}\r\n"));
+            }
+            raw.push_str("\r\n");
+            for (size, data) in &chunks {
+                raw.push_str(&format!("{size}\r\n{data}\r\n"));
+            }
+            raw.push_str(&format!("0\r\n{trailer}\r\n\r\n"));
+            let b = raw.as_bytes();
+            let _ = parse_response(&b[..cut.min(b.len())], eof);
+            let _ = parse_response(b, eof);
         }
     }
 }

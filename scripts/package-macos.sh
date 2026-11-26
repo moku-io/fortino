@@ -43,9 +43,14 @@ APP="$OUT/dmg/Fortino.app"
 cp -R "$BUILT" "$APP"
 xattr -cr "$APP"
 
-for bin in MacOS/Fortino MacOS/fortinod Helpers/fortino Frameworks/Sparkle.framework/Versions/B/Sparkle; do
+for bin in MacOS/Fortino MacOS/fortinod Helpers/fortino; do
     got=$(lipo -archs "$APP/Contents/$bin")
     [[ "$got" == "$ARCHS" ]] || { echo "error: $bin is built for '$got', expected '$ARCHS'" >&2; exit 1; }
+done
+# Sparkle comes prebuilt and universal: it only has to include ours.
+got=$(lipo -archs "$APP/Contents/Frameworks/Sparkle.framework/Versions/B/Sparkle")
+for a in $ARCHS; do
+    [[ " $got " == *" $a "* ]] || { echo "error: Sparkle lacks $a (has '$got')" >&2; exit 1; }
 done
 # Each binary is the one its name says, on every architecture (x86_64 runs under Rosetta here).
 for arch in $ARCHS; do

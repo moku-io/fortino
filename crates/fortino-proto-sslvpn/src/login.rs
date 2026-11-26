@@ -413,5 +413,24 @@ mod tests {
         fn classify_never_panics(body: String, status in 100u16..600) {
             let _ = classify(&resp(status, &["SVPNTMPCOOKIE=x"], &body));
         }
+
+        /// `ret=` answers with arbitrary fields and percent escapes, so the field parsing,
+        /// redirect checks and decoding run.
+        #[test]
+        fn classify_never_panics_on_ret_answers(
+            ret in "[0-9]{0,3}",
+            fields in proptest::collection::vec(
+                ("(reqid|polid|grp|portal|magic|chal_msg|tokeninfo|redir|peer|[a-z_]{1,8})",
+                 "[%0-9A-Za-z/+=&._-]{0,24}"),
+                0..8,
+            ),
+            status in 100u16..600,
+        ) {
+            let mut body = format!("ret={ret}");
+            for (k, v) in &fields {
+                body.push_str(&format!(",{k}={v}"));
+            }
+            let _ = classify(&resp(status, &["SVPNTMPCOOKIE=x"], &body));
+        }
     }
 }

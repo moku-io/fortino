@@ -250,6 +250,10 @@ pub struct Challenge {
     pub kind: ChallengeKind,
     /// Sanitized prompt text.
     pub prompt: String,
+    /// A one-time code prompt where an empty answer asks the gateway for a push notification
+    /// (FortiToken Mobile) instead of a typed code. Left out when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub push: bool,
     /// Seconds until expiry, at the time of the snapshot.
     pub expires_in_secs: u64,
 }

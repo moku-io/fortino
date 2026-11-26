@@ -16,7 +16,7 @@ use fortino_core::proto::{
     Challenge, ChallengeKind, ConnectParams, ConnectResult, LastResult, RestartWhen, State, Status,
 };
 use fortino_core::worker::{
-    Termination, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerStage,
+    Termination, TunnelConfig, WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory, WorkerStage,
 };
 use fortino_core::{ErrorCode, ProtoError};
 use fortino_secret::Secret;
@@ -37,6 +37,7 @@ struct PendingChallenge {
     id: String,
     kind: ChallengeKind,
     prompt: String,
+    push: bool,
     deadline: Instant,
 }
 
@@ -136,6 +137,7 @@ impl Snapshot {
                     id: c.id.clone(),
                     kind: c.kind,
                     prompt: c.prompt.clone(),
+                    push: c.push,
                     expires_in_secs: c
                         .deadline
                         .saturating_duration_since(Instant::now())
@@ -333,6 +335,34 @@ impl Session {
         let mut rx = self.exit.subscribe();
         // The sender lives as long as `self`, so this only ends when the flag is set.
         let _ = rx.wait_for(|exit| *exit).await;
+    }
+
+    /// Stops the active attempt, if any, and waits until it has ended and its network changes
+    /// are rolled back, for at most the shutdown timeout plus a little. Called when the service
+    /// is told to stop: an uninstall or `launchctl bootout` never restarts it, so recovery at the
+    /// next start would come too late (or never) for the user's DNS and IPv6.
+    pub async fn shutdown(&self) {
+        {
+            let mut g = lock(&self.inner);
+            if g.active.is_none() {
+                return;
+            }
+            self.request_stop(
+                &mut g,
+                StopCause {
+                    code: Some(ErrorCode::ServiceUnavailable),
+                    message: "the VPN service stopped".into(),
+                },
+            );
+        }
+        let deadline = Instant::now() + self.timeouts.shutdown + std::time::Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if lock(&self.inner).active.is_none() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tracing::warn!("the attempt did not end in time; its network changes stay journaled");
     }
 
     /// Daemon instance ID.
@@ -590,6 +620,7 @@ impl Session {
                 "answer too long",
             ));
         }
+        let empty = value.expose().is_empty();
         let sent = a.cmd.try_send(WorkerCommand::Respond {
             challenge_id: challenge_id.to_owned(),
             value,
@@ -607,9 +638,16 @@ impl Session {
                 "tunnel worker stopped accepting input",
             ));
         }
+        // The gateway must answer within the progress deadline; asked for a push, it answers
+        // once the user approved it on the phone, which gets a prompt's time.
+        let push = a.challenge.as_ref().is_some_and(|c| c.push);
         a.challenge = None;
-        // The gateway must answer within the progress deadline.
-        a.progress_deadline = Some(Instant::now() + self.timeouts.transport);
+        let wait = if push && empty {
+            self.timeouts.challenge
+        } else {
+            self.timeouts.transport
+        };
+        a.progress_deadline = Some(Instant::now() + wait);
         a.wake.notify_one();
         g.state = State::Authenticating;
         self.publish(&mut g);
@@ -694,7 +732,20 @@ impl Session {
                         self.finish(&attempt_id, t);
                         return;
                     }
-                    self.on_event(ev);
+                    if let Some((tc, policy)) = self.on_event(ev) {
+                        // Routes, resolvers and pf take a process each: apply them off the
+                        // session lock, so status, respond and disconnect stay answered.
+                        let me = self.clone();
+                        let applied = tokio::task::spawn_blocking(move || {
+                            let r = lock(&me.net).apply(&tc, policy);
+                            (tc, r)
+                        })
+                        .await;
+                        match applied {
+                            Ok((tc, r)) => self.applied(&attempt_id, &tc, r),
+                            Err(_) => self.applied_failed(&attempt_id),
+                        }
+                    }
                 }
                 () = wake.notified() => {}
                 () = sleep => {
@@ -756,13 +807,14 @@ impl Session {
     }
 
     /// Applies a worker event if it fits the current state; otherwise stops the attempt.
-    fn on_event(&self, ev: WorkerEvent) {
+    /// Returns the tunnel settings to apply when the tunnel came up.
+    fn on_event(&self, ev: WorkerEvent) -> Option<(TunnelConfig, IpPolicy)> {
         let mut g = lock(&self.inner);
         let state = g.state;
-        let Some(a) = g.active.as_mut() else { return };
+        let a = g.active.as_mut()?;
         if a.stop.is_some() {
             // Ignore progress after a stop request; wait for termination.
-            return;
+            return None;
         }
         let pre_connect = matches!(
             state,
@@ -784,7 +836,7 @@ impl Session {
                     message: "tunnel worker sent an unexpected event".into(),
                 },
             );
-            return;
+            return None;
         }
         let progress = Some(Instant::now() + self.timeouts.transport);
         match ev {
@@ -797,13 +849,19 @@ impl Session {
                 };
                 self.publish(&mut g);
             }
-            WorkerEvent::Challenge { id, kind, prompt } => {
+            WorkerEvent::Challenge {
+                id,
+                kind,
+                prompt,
+                push,
+            } => {
                 let id = id.chars().take(64).collect();
                 let prompt = sanitize_prompt(&prompt);
                 a.progress_deadline = None;
                 a.challenge = Some(PendingChallenge {
                     id,
                     kind,
+                    push,
                     prompt,
                     deadline: Instant::now() + self.timeouts.challenge,
                 });
@@ -816,39 +874,70 @@ impl Session {
                 let tc = crate::netctl::for_dns_mode(tc, a.profile.spec.dns_mode);
                 g.state = State::Configuring;
                 self.publish(&mut g);
-                let res = lock(&self.net).apply(&tc, policy);
-                let Some(a) = g.active.as_mut() else { return };
-                match res {
-                    Ok(()) => {
-                        a.network_applied = true;
-                        a.assigned_ip = Some(tc.assigned_ip.to_string());
-                        a.interface = Some(tc.interface.clone());
-                        a.connected_since = Some(now_unix());
-                        tracing::info!(attempt = %a.attempt_id, "connected");
-                        g.state = State::Connected;
-                        self.publish(&mut g);
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "tunnel settings not applied");
-                        if matches!(e, NetError::Cleanup(_)) {
-                            a.network_applied = true;
-                        }
-                        let code = match e {
-                            NetError::Unsupported(_) => ErrorCode::UnsupportedPolicy,
-                            _ => ErrorCode::NetworkConfigFailure,
-                        };
-                        self.request_stop(
-                            &mut g,
-                            StopCause {
-                                code: Some(code),
-                                message: e.to_string(),
-                            },
-                        );
-                    }
-                }
+                return Some((tc, policy));
             }
             WorkerEvent::Terminated(_) => {}
         }
+        None
+    }
+
+    /// The outcome of applying the tunnel settings of `attempt_id`.
+    fn applied(&self, attempt_id: &str, tc: &TunnelConfig, res: Result<(), NetError>) {
+        let mut g = lock(&self.inner);
+        let Some(a) = g.active.as_mut().filter(|a| a.attempt_id == attempt_id) else {
+            return;
+        };
+        if a.stop.is_some() {
+            // Stopped while applying: whatever went in is rolled back when the worker ends.
+            a.network_applied = res.is_ok() || matches!(res, Err(NetError::Cleanup(_)));
+            return;
+        }
+        match res {
+            Ok(()) => {
+                a.network_applied = true;
+                a.assigned_ip = Some(tc.assigned_ip.to_string());
+                a.interface = Some(tc.interface.clone());
+                a.connected_since = Some(now_unix());
+                tracing::info!(attempt = %a.attempt_id, "connected");
+                g.state = State::Connected;
+                self.publish(&mut g);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "tunnel settings not applied");
+                if matches!(e, NetError::Cleanup(_)) {
+                    a.network_applied = true;
+                }
+                let code = match e {
+                    NetError::Unsupported(_) | NetError::PlatformUnsupported(_) => {
+                        ErrorCode::UnsupportedPolicy
+                    }
+                    _ => ErrorCode::NetworkConfigFailure,
+                };
+                self.request_stop(
+                    &mut g,
+                    StopCause {
+                        code: Some(code),
+                        message: e.to_string(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// Applying panicked: nothing is known about the network, so a rollback is due.
+    fn applied_failed(&self, attempt_id: &str) {
+        let mut g = lock(&self.inner);
+        let Some(a) = g.active.as_mut().filter(|a| a.attempt_id == attempt_id) else {
+            return;
+        };
+        a.network_applied = true;
+        self.request_stop(
+            &mut g,
+            StopCause {
+                code: Some(ErrorCode::NetworkConfigFailure),
+                message: "network configuration failed".into(),
+            },
+        );
     }
 
     fn finish(&self, attempt_id: &str, t: Termination) {

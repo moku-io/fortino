@@ -530,7 +530,9 @@ async fn run() -> Result<(), String> {
         let t = started.elapsed().as_secs_f32();
         match ev {
             WorkerEvent::Stage(s) => println!("[{t:>5.1}s] stage {s:?}"),
-            WorkerEvent::Challenge { id, kind, prompt } => {
+            WorkerEvent::Challenge {
+                id, kind, prompt, ..
+            } => {
                 println!("[{t:>5.1}s] challenge {kind:?}: {prompt}");
                 let value = match kind {
                     ChallengeKind::Password => Secret::new(password.expose()),

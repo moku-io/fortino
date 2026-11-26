@@ -13,6 +13,8 @@ struct EmsSetupWindow: View {
     @State private var busy = false
     @State private var message: String?
     @State private var messageIsError = false
+    /// The last action failed verifying the EMS certificate: offer to review and pin it.
+    @State private var certificateFailed = false
     @State private var enteringKey = false
 
     private var profile: Profile? { model.emsSetupProfile }
@@ -94,6 +96,10 @@ struct EmsSetupWindow: View {
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        if certificateFailed {
+            Button("Review Certificate…") { reviewCertificate(server) }
+                .help("Shows the EMS server's certificate and lets you trust it on this Mac")
+        }
 
         HStack {
             Button("Copy Details for IT") { copyDetails(input, profile: profile) }
@@ -133,6 +139,7 @@ struct EmsSetupWindow: View {
 
     private func perform(_ action: EmsAction, profile: Profile, server: EmsServer) {
         message = nil
+        certificateFailed = false
         switch action {
         case .checkAgain:
             refresh()
@@ -216,7 +223,21 @@ struct EmsSetupWindow: View {
             } catch {
                 message = (error as? ProtoError)?.message ?? error.localizedDescription
                 messageIsError = true
+                certificateFailed = (error as? ProtoError)?.code == "trust_failure"
             }
+        }
+    }
+
+    /// After the service failed to verify the EMS certificate: show it and pin it if trusted.
+    private func reviewCertificate(_ server: EmsServer) {
+        message = nil
+        certificateFailed = false
+        run {
+            guard try await model.approveWithCertificateCheck(server, afterFailure: true) else {
+                return nil
+            }
+            await model.refreshEmsStatus()
+            return "Certificate trusted. Register again."
         }
     }
 

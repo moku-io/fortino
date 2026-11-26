@@ -111,6 +111,8 @@ pub struct EmsState {
     pub endpoints: HashMap<String, Endpoint>,
     /// Every request, in order.
     pub seen: Vec<Seen>,
+    /// Answer this many keepalives with a broken reply (tests of the client's retry).
+    pub fail_keepalives: u32,
 }
 
 /// A running mock EMS.
@@ -245,6 +247,10 @@ fn handle(sc: &EmsScenario, st: &mut EmsState, req: &Request) -> String {
                 sc.ka_interval,
                 pushed_rules(sc, None)
             )
+        }
+        "KA" if st.fail_keepalives > 0 => {
+            st.fail_keepalives -= 1;
+            format!("FCKARPLY: {tail}")
         }
         "KA" => {
             let info = sysinfo_of(req);

@@ -116,9 +116,14 @@ let j = #"{"daemonInstance":"i","seq":3,"state":"awaiting-input","attemptId":"a1
 if let s = try? JSONDecoder().decode(Status.self, from: Data(j.utf8)) {
     check(s.state == .awaitingInput, "state")
     check(s.challenge?.kind == .otp && s.challenge?.kind.isSecret == true, "challenge")
+    check(s.challenge?.push == nil, "no push hint from a service that doesn't send one")
 } else {
     check(false, "status decodes")
 }
+
+// A code prompt that offers a push (FortiToken Mobile): the panel offers Send Push.
+let pj = #"{"id":"c2","kind":"otp","prompt":"Token code","push":true,"expiresInSecs":119}"#
+check((try? JSONDecoder().decode(Challenge.self, from: Data(pj.utf8)))?.push == true, "push hint decodes")
 
 // EMS status decoding
 let ej = #"{"state":"registered","registeredAt":1,"lastKeepalive":2}"#
@@ -163,6 +168,14 @@ if let d0 = try? JSONEncoder().encode(spec),
 } else {
     check(false, "save password encodes")
 }
+
+// Errors of the bundled CLI: with --json they come on standard output, notes on standard error.
+let cliError = Data(#"{"v":1,"error":{"code":"internal","message":"the login keychain: locked"}}"#.utf8)
+check(cliFailure(stdout: cliError, stderr: "fortino: note: something\n") == "the login keychain: locked",
+      "CLI error read from the JSON envelope")
+check(cliFailure(stdout: Data(), stderr: "fortino was not found\n") == "fortino was not found",
+      "CLI error falls back to standard error")
+check(cliFailure(stdout: Data(), stderr: " ") == nil, "no CLI error text")
 
 // Live daemon round trip, when FORTINO_SOCKET points at a development daemon.
 if let path = ProcessInfo.processInfo.environment["FORTINO_SOCKET"] {

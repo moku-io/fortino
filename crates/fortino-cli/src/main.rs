@@ -386,7 +386,7 @@ async fn run(cli: Cli) -> CmdResult {
     match cli.cmd {
         Cmd::Profile(p) => profile(&client, p, json).await,
         Cmd::Connect(a) => connect(&mut client, a, json).await,
-        Cmd::Status { watch } => status(&mut client, watch, json).await,
+        Cmd::Status { watch } => status(&mut client, &cli.socket, watch, json).await,
         Cmd::Disconnect => disconnect(&mut client, json).await,
         Cmd::Password(p) => password(&mut client, p, json).await,
         Cmd::LogLevel { level } => log_level(&client, level.as_deref(), json).await,
@@ -428,10 +428,11 @@ async fn ems_key(c: &Client, cmd: EmsKeyCmd, json: bool) -> CmdResult {
                 read_stdin_line()?
             } else {
                 zeroize::Zeroizing::new(
-                    prompt::ask(
+                    ask_here(
                         ChallengeKind::Password,
                         &format!("Connection key for {server}"),
                     )
+                    .await?
                     .ok_or_else(|| {
                         Failure(ProtoError::new(
                             ErrorCode::InteractionRequired,
@@ -640,10 +641,13 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
         }
         ProfileCmd::Edit(e) => {
             let p = c.profile_get(&e.name).await?;
+            // A password can be saved while the option is off (`password save` on a connected
+            // profile), so --no-save-password removes it either way.
+            let no_save = e.no_save_password;
             let spec = apply_edit(&p, e)?;
             require_username_for_saved_password(&spec)?;
             let u = c.profile_update(p.id.clone(), p.revision, spec).await?;
-            let forgot = p.spec.save_password && !u.spec.save_password;
+            let forgot = no_save || (p.spec.save_password && !u.spec.save_password);
             let forgot = forgot && forget_saved(&u.id.0);
             if json {
                 print_json(&u);
@@ -657,9 +661,8 @@ async fn profile(c: &Client, cmd: ProfileCmd, json: bool) -> CmdResult {
         ProfileCmd::Remove { name } => {
             let p = c.profile_get(&name).await?;
             c.profile_delete(p.id.clone(), p.revision).await?;
-            if p.spec.save_password {
-                forget_saved(&p.id.0);
-            }
+            // Also when the option is off: a password can be saved without it.
+            forget_saved(&p.id.0);
             if json {
                 print_json(&serde_json::json!({"removed": p.id}));
             } else {
@@ -759,8 +762,14 @@ fn forget_saved(profile_id: &str) -> bool {
 }
 
 fn read_import_preview(file: &std::path::Path) -> Result<fortino_config::import::Preview, Failure> {
-    let bytes =
-        std::fs::read(file).map_err(|e| invalid(format!("cannot read {}: {e}", file.display())))?;
+    use std::io::Read;
+    // One byte over the importer's limit is enough for it to refuse the file; a huge file or a
+    // pipe is never read whole.
+    let limit = u64::try_from(fortino_config::import::MAX_INPUT).unwrap_or(u64::MAX);
+    let mut bytes = Vec::new();
+    std::fs::File::open(file)
+        .and_then(|f| f.take(limit.saturating_add(1)).read_to_end(&mut bytes))
+        .map_err(|e| invalid(format!("cannot read {}: {e}", file.display())))?;
     fortino_config::import::parse(&bytes)
         .map_err(|e| Failure(ProtoError::new(ErrorCode::InvalidProfile, e.to_string())))
 }
@@ -821,14 +830,31 @@ async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {
             "the preview has warnings; confirm interactively or name entries with --select",
         )));
     }
-    let rev = c.profile_list().await?.store_revision;
+    let before = c.profile_list().await?;
     let r = c
         .profile_import(&ProfileImportParams {
-            store_revision: rev,
+            store_revision: before.store_revision,
             entries: entries.into_iter().map(|e| e.spec).collect(),
             replace: a.replace,
         })
         .await?;
+    // A replacement that moved a profile to another gateway or realm turned Save password off:
+    // its saved password belongs to the old gateway.
+    let mut forgotten = Vec::new();
+    for x in r
+        .results
+        .iter()
+        .filter(|x| x.action == fortino_config::ImportAction::Replaced)
+    {
+        let was_saving = before
+            .profiles
+            .iter()
+            .any(|p| p.id == x.id && p.spec.save_password);
+        if was_saving && !c.profile_get(&x.id.0).await?.spec.save_password && forget_saved(&x.id.0)
+        {
+            forgotten.push(x.name.clone());
+        }
+    }
     if json {
         print_json(&r);
     } else {
@@ -838,6 +864,9 @@ async fn import(c: &Client, a: ImportArgs, json: bool) -> CmdResult {
                 format!("{:?}", x.action).to_lowercase(),
                 x.name
             );
+        }
+        for n in forgotten {
+            println!("Removed the saved password of {n}: its gateway changed.");
         }
     }
     Ok(())
@@ -864,7 +893,7 @@ fn build_mismatch(daemon: Option<&str>) -> Option<String> {
     }
 }
 
-async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
+async fn status(c: &mut Client, socket: &std::path::Path, watch: bool, json: bool) -> CmdResult {
     if !json {
         if let Some(note) = build_mismatch(c.hello.build.as_deref()) {
             eprintln!("fortino: note: {note}");
@@ -883,6 +912,7 @@ async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
     }
     let (st, mut rx) = c.subscribe().await?;
     show(&st);
+    let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
     loop {
         tokio::select! {
             ev = rx.recv() => match ev {
@@ -893,14 +923,45 @@ async fn status(c: &mut Client, watch: bool, json: bool) -> CmdResult {
                     show(&status);
                 }
                 Some(Event::ResyncRequired) => show(&c.status().await?),
+                // The service restarted (an update, launchd): follow the new one.
                 None => {
-                    return Err(Failure(ProtoError::new(
-                        ErrorCode::ServiceUnavailable,
-                        "lost connection to the VPN service",
-                    )));
+                    if !json {
+                        eprintln!("fortino: lost the VPN service; waiting for it to come back…");
+                    }
+                    loop {
+                        tokio::select! {
+                            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                            _ = &mut ctrl_c => return Ok(()),
+                        }
+                        let Ok(mut next) = Client::connect(socket, "fortino").await else {
+                            continue;
+                        };
+                        if let Ok((st, next_rx)) = next.subscribe().await {
+                            *c = next;
+                            rx = next_rx;
+                            if !json {
+                                println!();
+                            }
+                            show(&st);
+                            break;
+                        }
+                    }
                 }
             },
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+            _ = &mut ctrl_c => return Ok(()),
+        }
+    }
+}
+
+/// Asks on the terminal for a command that runs no attempt; Ctrl-C cancels, and the terminal
+/// mode is restored either way.
+async fn ask_here(kind: ChallengeKind, text: &str) -> Result<Option<String>, Failure> {
+    let _term = TermGuard::save();
+    tokio::select! {
+        v = prompt::Prompt::start(kind, text) => Ok(v),
+        _ = tokio::signal::ctrl_c() => {
+            eprintln!();
+            Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")))
         }
     }
 }
@@ -964,7 +1025,11 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
         store,
         &p.id.0,
         &p.spec.name,
-        p.spec.save_password && a.password_fd.is_none(),
+        p.spec
+            .username_hint
+            .as_deref()
+            .filter(|_| p.spec.save_password && a.password_fd.is_none()),
+        &saved::gateway(&p.spec),
     );
     // The daemon uses the same rule; a username prompt replaces it.
     let mut username = a.username.clone().or_else(|| p.spec.username_hint.clone());
@@ -993,24 +1058,16 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
     let attempt = r.attempt_id.clone();
     let mut answered: Option<String> = None;
     let mut ctrl_c = std::pin::pin!(tokio::signal::ctrl_c());
+    // A status that arrived while a terminal prompt was open, handled next.
+    let mut next: Option<Status> = None;
 
     loop {
-        let st = tokio::select! {
-            ev = rx.recv() => match ev {
-                Some(Event::Status { status }) => *status,
-                Some(Event::ResyncRequired) => c.status().await?,
-                None => return Err(Failure(ProtoError::new(
-                    ErrorCode::ServiceUnavailable,
-                    "lost connection to the VPN service",
-                ))),
+        let st = match next.take() {
+            Some(st) => st,
+            None => tokio::select! {
+                ev = rx.recv() => next_status(c, ev).await?,
+                _ = &mut ctrl_c => return cancel(c, &mut rx, &attempt).await,
             },
-            _ = &mut ctrl_c => {
-                eprintln!("\nCancelling…");
-                c.disconnect(&attempt).await?;
-                let st = wait_finished(c, &mut rx, &attempt).await?;
-                result_of(&st, &attempt)?;
-                return Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")));
-            }
         };
         if st.attempt_id.as_deref() != Some(attempt.as_str()) {
             continue;
@@ -1064,48 +1121,111 @@ async fn connect(c: &mut Client, a: ConnectArgs, json: bool) -> CmdResult {
             }),
             ChallengeKind::Otp => secrets.otp(),
         };
-        let value = match value {
-            Some(v) => v?,
+        let (value, typed) = match value {
+            Some(Ok(v)) => (v, false),
+            // An unreadable or empty descriptor ends this attempt now, instead of leaving it
+            // holding the VPN until the prompt times out.
+            Some(Err(e)) => {
+                give_up(c, &mut rx, &attempt).await;
+                return Err(e);
+            }
             None => {
-                // Prompt on the terminal, still honoring Ctrl-C and daemon-side changes.
-                let kind = ch.kind;
-                let text = ch.prompt.clone();
-                let prompt = tokio::task::spawn_blocking(move || prompt::ask(kind, &text));
-                tokio::select! {
-                    v = prompt => match v {
-                        Ok(Some(v)) => {
-                            match kind {
-                                ChallengeKind::Username => username = Some(v.clone()),
-                                ChallengeKind::Password => keeper.typed(username.as_deref(), &v),
-                                ChallengeKind::Otp => {}
+                // Prompt on the terminal while following the attempt: the desktop app shows the
+                // same prompt and may answer it, the attempt may end, and Ctrl-C cancels.
+                let mut prompt = std::pin::pin!(prompt::Prompt::start(ch.kind, &ch.prompt));
+                let outcome = loop {
+                    tokio::select! {
+                        v = &mut prompt => break Ok(v),
+                        ev = rx.recv() => {
+                            let s = next_status(c, ev).await?;
+                            let still_asked = s.attempt_id.as_deref() != Some(attempt.as_str())
+                                || s.challenge.as_ref().is_some_and(|x| x.id == ch.id);
+                            if !still_asked {
+                                break Err(s);
                             }
-                            v
                         }
-                        _ => {
-                            c.disconnect(&attempt).await?;
-                            let _ = wait_finished(c, &mut rx, &attempt).await;
-                            return Err(Failure(ProtoError::new(
-                                ErrorCode::InteractionRequired,
-                                format!("{} required but no terminal is available", kind_name(kind)),
-                            )));
+                        _ = &mut ctrl_c => return cancel(c, &mut rx, &attempt).await,
+                    }
+                };
+                match outcome {
+                    Ok(Some(v)) => (v, true),
+                    Ok(None) => {
+                        give_up(c, &mut rx, &attempt).await;
+                        return Err(Failure(ProtoError::new(
+                            ErrorCode::InteractionRequired,
+                            format!(
+                                "{} required but no terminal is available",
+                                kind_name(ch.kind)
+                            ),
+                        )));
+                    }
+                    // Answered elsewhere, timed out or cancelled: the prompt is gone.
+                    Err(s) => {
+                        if !json {
+                            eprintln!();
+                            if s.state.is_active() && s.state != State::Stopping {
+                                eprintln!("Answered elsewhere.");
+                            }
                         }
-                    },
-                    _ = &mut ctrl_c => {
-                        eprintln!("\nCancelling…");
-                        c.disconnect(&attempt).await?;
-                        let st = wait_finished(c, &mut rx, &attempt).await?;
-                        result_of(&st, &attempt)?;
-                        return Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")));
+                        next = Some(s);
+                        continue;
                     }
                 }
             }
         };
+        let remembered = typed.then(|| value.clone());
         match c.respond(&attempt, &ch.id, value).await {
-            Ok(()) => {}
+            Ok(()) => {
+                // Only an answer the service took counts: a username for the password that
+                // follows, a password to save once connected.
+                if let Some(v) = remembered {
+                    match ch.kind {
+                        ChallengeKind::Username => username = Some(v),
+                        ChallengeKind::Password => keeper.typed(username.as_deref(), &v),
+                        ChallengeKind::Otp => {}
+                    }
+                }
+            }
             // Expired or answered elsewhere (e.g. from the desktop app): keep following.
             Err(e) if e.code == ErrorCode::StaleChallenge => {}
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                give_up(c, &mut rx, &attempt).await;
+                return Err(e.into());
+            }
         }
+    }
+}
+
+/// The status an event carries; a gap is filled by asking for it.
+async fn next_status(c: &Client, ev: Option<Event>) -> Result<Status, Failure> {
+    match ev {
+        Some(Event::Status { status }) => Ok(*status),
+        Some(Event::ResyncRequired) => Ok(c.status().await?),
+        None => Err(Failure(ProtoError::new(
+            ErrorCode::ServiceUnavailable,
+            "lost connection to the VPN service",
+        ))),
+    }
+}
+
+/// Ctrl-C while connecting: cancels the attempt and waits for the cleanup.
+async fn cancel(
+    c: &Client,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+    attempt: &str,
+) -> CmdResult {
+    eprintln!("\nCancelling…");
+    c.disconnect(attempt).await?;
+    let st = wait_finished(c, rx, attempt).await?;
+    result_of(&st, attempt)?;
+    Err(Failure(ProtoError::new(ErrorCode::Cancelled, "cancelled")))
+}
+
+/// Ends an attempt this command can't carry on with, and waits for the cleanup, so the VPN is
+/// free again when the command exits.
+async fn give_up(c: &Client, rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>, attempt: &str) {
+    if c.disconnect(attempt).await.is_ok() {
+        let _ = wait_finished(c, rx, attempt).await;
     }
 }
 
@@ -1203,6 +1323,7 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
             stdin,
         } => {
             let p = c.profile_get(&name).await?;
+            let username = username.map(|u| u.trim().to_owned());
             // The password belongs to the profile's username. A profile without one gets it here,
             // before anything is saved, so a password is never kept for an account the profile
             // doesn't sign in as.
@@ -1222,14 +1343,14 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                 }
                 (Some(h), _) => h.clone(),
                 (None, Some(u)) => u,
-                (None, None) => {
-                    prompt::ask(ChallengeKind::Username, "Username").ok_or_else(|| {
+                (None, None) => ask_here(ChallengeKind::Username, "Username")
+                    .await?
+                    .ok_or_else(|| {
                         Failure(ProtoError::new(
                             ErrorCode::InteractionRequired,
                             "this profile has no username: pass --username",
                         ))
-                    })?
-                }
+                    })?,
             };
             let p = if p.spec.username_hint.is_none() {
                 let mut spec = p.spec.clone();
@@ -1251,11 +1372,15 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
             } else {
                 p
             };
+            // Saved under the username as the service stored it (trimmed, normalized), which is
+            // the one connections look the password up by.
+            let username = p.spec.username_hint.clone().unwrap_or(username);
             let pw = if stdin {
                 read_stdin_line()?
             } else {
                 zeroize::Zeroizing::new(
-                    prompt::ask(ChallengeKind::Password, &format!("Password for {username}"))
+                    ask_here(ChallengeKind::Password, &format!("Password for {username}"))
+                        .await?
                         .ok_or_else(|| {
                             Failure(ProtoError::new(
                                 ErrorCode::InteractionRequired,
@@ -1269,6 +1394,7 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                     &p.id.0,
                     &p.spec.name,
                     &username,
+                    &saved::gateway(&p.spec),
                     &fortino_secret::Secret::new(pw.as_str()),
                 )
                 .map_err(|e| store_failure(&e))?;
@@ -1316,17 +1442,28 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
         PasswordCmd::Status { name } => {
             let p = c.profile_get(&name).await?;
             let info = store.info(&p.id.0);
+            let gateway = saved::gateway(&p.spec);
+            // Saved for another gateway than the profile's: it is not used.
+            let elsewhere =
+                |i: &fortino_secret::SavedPassword| i.gateway.as_deref() != Some(gateway.as_str());
             if json {
-                let (saved, username, rejected, error) = match &info {
-                    Ok(Some(i)) => (true, Some(i.username.clone()), i.rejected, None),
-                    Ok(None) => (false, None, false, None),
-                    Err(e) => (false, None, false, Some(e.to_string())),
+                let (saved, username, rejected, other, error) = match &info {
+                    Ok(Some(i)) => (
+                        true,
+                        Some(i.username.clone()),
+                        i.rejected,
+                        elsewhere(i),
+                        None,
+                    ),
+                    Ok(None) => (false, None, false, false, None),
+                    Err(e) => (false, None, false, false, Some(e.to_string())),
                 };
                 print_json(&serde_json::json!({
                     "enabled": p.spec.save_password,
                     "saved": saved,
                     "username": username,
                     "rejected": rejected,
+                    "otherGateway": other,
                     "location": store.location(),
                     "error": error,
                 }));
@@ -1337,6 +1474,11 @@ async fn password(c: &mut Client, cmd: PasswordCmd, json: bool) -> CmdResult {
                 if p.spec.save_password { "on" } else { "off" }
             );
             match info {
+                Ok(Some(i)) if elsewhere(&i) => println!(
+                    "Saved:         for {} in {}, for another gateway, so it is not used",
+                    i.username,
+                    store.location()
+                ),
                 Ok(Some(i)) if i.rejected => println!(
                     "Saved:         for {} in {}; the gateway rejected it, so it is not used",
                     i.username,
@@ -1403,10 +1545,20 @@ async fn answer_saved(
         report(false, "missing");
         return Ok(());
     };
-    let mut keeper = Keeper::new(store, &p.id.0, &p.spec.name, true);
+    let gateway = saved::gateway(&p.spec);
+    let mut keeper = Keeper::new(
+        store,
+        &p.id.0,
+        &p.spec.name,
+        p.spec.username_hint.as_deref(),
+        &gateway,
+    );
     let mut quiet = |_: String| {};
     let Some(secret) = keeper.saved_answer(store, Some(&username), &mut quiet) else {
-        report(false, saved::lookup(store, &p.id.0, &username).reason());
+        report(
+            false,
+            saved::lookup(store, &p.id.0, &username, &gateway).reason(),
+        );
         return Ok(());
     };
     match c

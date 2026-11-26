@@ -208,6 +208,9 @@ pub enum WorkerMsg {
         kind: ChallengeKind,
         /// Prompt text from the gateway.
         prompt: String,
+        /// An empty answer asks for a push notification.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        push: bool,
     },
     /// PPP interface is up with these settings.
     #[serde(rename_all = "camelCase")]
@@ -324,7 +327,11 @@ impl WorkerMsg {
         Ok(match self {
             WorkerMsg::Stage { stage, .. } => WorkerEvent::Stage(stage),
             WorkerMsg::Challenge {
-                id, kind, prompt, ..
+                id,
+                kind,
+                prompt,
+                push,
+                ..
             } => {
                 if !short(&id) {
                     return Err(Violation("challenge id"));
@@ -334,7 +341,12 @@ impl WorkerMsg {
                     .filter(|c| !c.is_control())
                     .take(MAX_SHORT)
                     .collect();
-                WorkerEvent::Challenge { id, kind, prompt }
+                WorkerEvent::Challenge {
+                    id,
+                    kind,
+                    prompt,
+                    push: push && kind == ChallengeKind::Otp,
+                }
             }
             WorkerMsg::Up {
                 interface,

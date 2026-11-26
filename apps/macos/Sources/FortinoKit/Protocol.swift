@@ -141,6 +141,9 @@ public struct Challenge: Codable, Equatable {
     public var id: String
     public var kind: ChallengeKind
     public var prompt: String
+    /// A code prompt where an empty answer asks for a push notification (FortiToken Mobile).
+    /// Absent from services that don't say.
+    public var push: Bool?
     public var expiresInSecs: Int
 }
 

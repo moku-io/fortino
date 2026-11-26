@@ -79,6 +79,20 @@ sleep 1
 snapshot "$W/after-local"
 check "local DNS: network restored after disconnect" 'diff -u "$W/before" "$W/after-local"'
 
+# Stopping the service while connected (an uninstall, launchctl bootout): it disconnects and
+# restores the network before it exits, so nothing is left for a recovery that may never run.
+UTUNS_BEFORE=$(ifconfig -l | tr ' ' '\n' | grep '^utun' | sort)
+"$W/fortino" connect Lab --password-fd 3 --otp-fd 4 3< <(printf 'hunter2\n') 4< <(printf '123456\n')
+check "SIGTERM: connected first" '"$W/fortino" status | grep -qi connected'
+IF=$(comm -13 <(echo "$UTUNS_BEFORE") <(ifconfig -l | tr ' ' '\n' | grep '^utun' | sort) | head -1)
+kill -TERM $DAEMON
+for _ in $(seq 1 75); do kill -0 $DAEMON 2>/dev/null || break; sleep 0.2; done
+check "SIGTERM: the service exited" '! kill -0 $DAEMON 2>/dev/null'
+snapshot "$W/after-term"
+check "SIGTERM: network restored before exiting" 'diff -u "$W/before" "$W/after-term"'
+check "SIGTERM: no utun left" '! ifconfig "$IF" >/dev/null 2>&1'
+check "SIGTERM: nothing left in the journal" 'grep -q "\"entries\": \[\]" "$W/state/net-journal.json"'
+
 kill $DAEMON $MOCK 2>/dev/null
 if [[ $fail != 0 ]]; then
     echo "--- fortinod.log (tail)"; tail -30 "$W/fortinod.log"

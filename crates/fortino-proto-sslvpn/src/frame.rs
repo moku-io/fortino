@@ -132,5 +132,28 @@ mod tests {
             d.push(&data);
             while let Ok(Some(_)) = d.next_frame() {}
         }
+
+        /// Frames with the right magic and arbitrary lengths, fed in arbitrary pieces.
+        #[test]
+        fn never_panics_on_shaped_frames(
+            frames in proptest::collection::vec(
+                (proptest::num::u16::ANY, proptest::num::u16::ANY,
+                 proptest::collection::vec(proptest::num::u8::ANY, 0..64)),
+                0..8),
+            split in 1usize..32,
+        ) {
+            let mut bytes = Vec::new();
+            for (outer, inner, data) in &frames {
+                bytes.extend_from_slice(&outer.to_be_bytes());
+                bytes.extend_from_slice(&[0x50, 0x50]);
+                bytes.extend_from_slice(&inner.to_be_bytes());
+                bytes.extend_from_slice(data);
+            }
+            let mut d = Decoder::default();
+            for piece in bytes.chunks(split) {
+                d.push(piece);
+                while let Ok(Some(_)) = d.next_frame() {}
+            }
+        }
     }
 }

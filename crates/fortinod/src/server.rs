@@ -128,6 +128,10 @@ struct Conn {
     subscribed: bool,
     /// Releases the event forwarder once the subscribe response is queued.
     start_events: Option<oneshot::Sender<()>>,
+    /// The event forwarder, stopped when the client goes: it holds a sender of the outgoing
+    /// queue and would otherwise keep the connection, and its per-user slot, until the next
+    /// state change.
+    forwarder: Option<tokio::task::JoinHandle<()>>,
 }
 
 async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<Authorizer>) {
@@ -173,6 +177,7 @@ async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<A
         hello: false,
         subscribed: false,
         start_events: None,
+        forwarder: None,
     };
     loop {
         let read = read_frame(&mut rd, MAX_CONTROL_FRAME);
@@ -209,15 +214,27 @@ async fn handle(stream: UnixStream, uid: u32, session: Arc<Session>, auth: Arc<A
         let result = conn.dispatch(req).await;
         drop(frame);
         let fatal = matches!(&result, Err(e) if e.code == ErrorCode::UnsupportedVersion);
-        let Some(bytes) = encode(&response(&id, result)) else {
+        let Some(mut bytes) = encode(&response(&id, result)) else {
             break;
         };
+        // An answer the frame limit can't carry would make the writer drop the connection,
+        // which the client would report as a lost service. Say what happened instead.
+        if bytes.len() > MAX_CONTROL_FRAME {
+            let e = ProtoError::new(ErrorCode::TooLarge, "the answer is too large to send");
+            let Some(b) = encode(&response(&id, Err(e))) else {
+                break;
+            };
+            bytes = b;
+        }
         if conn.out.send(bytes).await.is_err() || fatal {
             break;
         }
         if let Some(go) = conn.start_events.take() {
             let _ = go.send(());
         }
+    }
+    if let Some(f) = conn.forwarder.take() {
+        f.abort();
     }
     drop(conn);
     let _ = writer.await;
@@ -278,13 +295,13 @@ impl Conn {
                 // precedes the first event.
                 let (go, started) = oneshot::channel();
                 self.start_events = Some(go);
-                tokio::spawn(forward_events(
+                self.forwarder = Some(tokio::spawn(forward_events(
                     rx,
                     self.out.clone(),
                     self.peer,
                     st.seq,
                     started,
-                ));
+                )));
                 to_value(st)
             }
             method::EMS_ENROLL => {

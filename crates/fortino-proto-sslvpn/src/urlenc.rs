@@ -51,6 +51,19 @@ pub(crate) fn decode(s: &str) -> String {
 mod tests {
     use super::*;
 
+    proptest::proptest! {
+        #[test]
+        fn decode_never_panics(s: String) {
+            let _ = decode(&s);
+        }
+
+        /// Any username, password or realm reaches the gateway exactly as typed.
+        #[test]
+        fn every_value_round_trips(s: String) {
+            proptest::prop_assert_eq!(decode(&encode(&s)), s);
+        }
+    }
+
     #[test]
     fn round_trip() {
         let s = "a b&c=d/é%";

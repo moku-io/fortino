@@ -426,7 +426,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fortino-cli"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "fortino-config",
@@ -436,7 +436,6 @@ dependencies = [
  "fortinod",
  "nix 0.30.1",
  "quick-xml",
- "rpassword",
  "serde",
  "serde_json",
  "tempfile",
@@ -447,8 +446,9 @@ dependencies = [
 
 [[package]]
 name = "fortino-config"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
+ "proptest",
  "quick-xml",
  "rusqlite",
  "serde",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-platform",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-ems"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "flate2",
  "fortino-config",
@@ -506,11 +506,11 @@ dependencies = [
 
 [[package]]
 name = "fortino-integration"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "fortino-mock"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-proto-ems",
  "fortino-proto-sslvpn",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-platform"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-proto-ems"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "base64",
  "flate2",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-proto-sslvpn"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
  "quick-xml",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-secret"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "security-framework",
  "tracing",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-sslvpn"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-core",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-tls"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "proptest",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "fortinod"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-core",
@@ -1314,33 +1314,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpassword"
-version = "7.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa2c5d9304b618df61ff17f3d3485c6e1854a3d94902a49abbb8d43dfbe0464"
-dependencies = [
- "libc",
- "rtoolbox",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "rsqlite-vfs"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "353b74f9810d5b085b6c42c9d86a5f0fdb795553235cdd48753b32e3809d18a7"
 dependencies = [
  "thiserror",
-]
-
-[[package]]
-name = "rtoolbox"
-version = "0.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a1efe12a1469752d0e6ff5ebec0b6ef4924cc5c4c71046b0ec730040535819d"
-dependencies = [
- "libc",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

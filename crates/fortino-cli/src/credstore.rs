@@ -4,8 +4,8 @@
 //! passwords off for one run. Development builds also accept `file:<path>`, a plain JSON file,
 //! so tests never touch the developer's own keychain; release builds ignore it.
 
+use fortino_secret::CredentialStore;
 use fortino_secret::store::{NoStore, platform_store};
-use fortino_secret::{CredentialStore, SavedPassword, Secret, StoreError};
 
 /// The store for this run.
 pub fn open() -> Box<dyn CredentialStore> {
@@ -28,12 +28,16 @@ mod file {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{CredentialStore, SavedPassword, Secret, StoreError};
+    use fortino_secret::{SavedPassword, Secret, StoreError};
+
+    use super::CredentialStore;
 
     #[derive(Debug, Default, Serialize, Deserialize)]
     struct Item {
         label: String,
         username: String,
+        #[serde(default)]
+        gateway: Option<String>,
         password: String,
         rejected: bool,
     }
@@ -72,6 +76,7 @@ mod file {
         fn info(&self, profile_id: &str) -> Result<Option<SavedPassword>, StoreError> {
             Ok(self.load()?.get(profile_id).map(|i| SavedPassword {
                 username: i.username.clone(),
+                gateway: i.gateway.clone(),
                 rejected: i.rejected,
             }))
         }
@@ -87,6 +92,7 @@ mod file {
             profile_id: &str,
             label: &str,
             username: &str,
+            gateway: &str,
             password: &Secret,
         ) -> Result<(), StoreError> {
             let mut m = self.load()?;
@@ -95,6 +101,7 @@ mod file {
                 Item {
                     label: label.to_owned(),
                     username: username.to_owned(),
+                    gateway: Some(gateway.to_owned()),
                     password: password.expose().to_owned(),
                     rejected: false,
                 },

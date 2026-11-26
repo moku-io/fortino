@@ -6,3 +6,4 @@
 .DS_Store
 /apps/macos/.build/
 /apps/macos/.swiftpm/
+.idea

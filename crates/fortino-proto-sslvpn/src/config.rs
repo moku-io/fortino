@@ -171,6 +171,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
     let mut r = Reader::from_str(body);
     let mut s = TunnelSettings::default();
     let mut seen_root = false;
+    // The root's end tag: a body cut short (a connection closed early) must not pass as
+    // settings with fewer routes or resolvers.
+    let mut closed_root = false;
     let mut family = Family::None;
     // Inside split-tunnel-info: Some(negate).
     let mut split: Option<bool> = None;
@@ -204,6 +207,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
             Event::Empty(e) => {
                 let name = e.name().as_ref().to_vec();
                 element(&e, &name, &mut s, &mut seen_root, family, split)?;
+                if name == b"sslvpn-tunnel" {
+                    closed_root = true;
+                }
                 if name == b"ipv6" {
                     s.has_ipv6 = true;
                 }
@@ -215,6 +221,7 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
                 }
             }
             Event::End(e) => match e.name().as_ref() {
+                b"sslvpn-tunnel" => closed_root = true,
                 b"ipv4" | b"ipv6" => family = Family::None,
                 b"split-tunnel-info" => split = None,
                 b"tunnel-method" => in_method = false,
@@ -226,6 +233,9 @@ pub fn parse(body: &str) -> Result<TunnelSettings, ConfigError> {
     }
     if !seen_root {
         return Err(ConfigError::NotSettings);
+    }
+    if !closed_root {
+        return Err(ConfigError::Xml("the tunnel settings end early".into()));
     }
     if s.dns_count() > MAX_DNS_SERVERS {
         s.rejected
@@ -298,7 +308,10 @@ fn element(
             for k in [&b"ip"[..], b"ipv6"] {
                 if let Some(v) = a(k)? {
                     match v.parse::<IpAddr>() {
-                        Ok(ip) if !s.dns.contains(&ip) => s.dns.push(ip),
+                        // One past the limit is kept, so the check after parsing rejects it.
+                        Ok(ip) if !s.dns.contains(&ip) && s.dns.len() <= MAX_DNS_SERVERS => {
+                            s.dns.push(ip)
+                        }
                         Ok(_) => {}
                         Err(_) => s.rejected.push("invalid DNS server".into()),
                     }
@@ -306,6 +319,11 @@ fn element(
             }
             if let Some(d) = a(b"domain")? {
                 for d in split_domains(&d) {
+                    // Bounded while parsing: every element may add more, and the check against
+                    // duplicates is linear.
+                    if s.dns_suffixes.len() > MAX_DNS_DOMAINS {
+                        break;
+                    }
                     if !s.dns_suffixes.contains(&d) {
                         s.dns_suffixes.push(d);
                     }
@@ -425,6 +443,45 @@ fn valid_domain(d: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Settings cut short (the connection closed mid-body) are refused, not read as settings
+    /// with fewer routes.
+    #[test]
+    fn settings_cut_short_are_refused() {
+        let full = "<sslvpn-tunnel><ipv4><split-tunnel-info>\
+                    <addr ip='10.0.0.0' mask='255.0.0.0'/><addr ip='172.16.0.0' mask='255.240.0.0'/>\
+                    </split-tunnel-info></ipv4></sslvpn-tunnel>";
+        assert_eq!(parse(full).unwrap().include_v4.len(), 2);
+        let cut = &full[..full.find("<addr ip='172").unwrap()];
+        assert!(parse(cut).is_err());
+        assert!(parse("<sslvpn-tunnel dtls='0'/>").is_ok());
+    }
+
+    /// A gateway can repeat `<dns>` elements without end; what is kept stays bounded and the
+    /// settings are refused.
+    #[test]
+    fn repeated_dns_elements_stay_bounded() {
+        let mut xml = String::from("<sslvpn-tunnel><ipv4>");
+        for i in 0..200 {
+            let domains: Vec<String> = (0..60).map(|j| format!("d{i}x{j}.example")).collect();
+            xml.push_str(&format!("<dns domain='{}'/>", domains.join(";")));
+            xml.push_str(&format!("<dns ip='10.0.{}.{}'/>", i / 250, i % 250 + 1));
+        }
+        xml.push_str("</ipv4></sslvpn-tunnel>");
+        let st = parse(&xml).unwrap();
+        assert!(st.dns_suffixes.len() <= MAX_DNS_DOMAINS + 1);
+        assert!(st.dns.len() <= MAX_DNS_SERVERS + 1);
+        assert!(
+            st.rejected.iter().any(|r| r.contains("DNS domains")),
+            "{:?}",
+            st.rejected
+        );
+        assert!(
+            st.rejected.iter().any(|r| r.contains("DNS servers")),
+            "{:?}",
+            st.rejected
+        );
+    }
+
     const SAMPLE: &str = r#"<?xml version='1.0' encoding='utf-8'?>
 <sslvpn-tunnel ver='2' dtls='1' patch='1'>
   <dtls-config heartbeat-interval='10' heartbeat-fail-count='10' heartbeat-idle-timeout='10' client-hello-timeout='10'/>
@@ -526,6 +583,31 @@ mod tests {
         #[test]
         fn never_panics(s: String) {
             let _ = parse(&s);
+        }
+
+        /// Real element and attribute names with arbitrary values, so routes, masks, domains
+        /// and resolvers are parsed and bounded.
+        #[test]
+        fn never_panics_on_shaped_settings(
+            elems in proptest::collection::vec(
+                ("(addr|dns|split-dns|assigned-addr|tunnel-method|idle-timeout|auth-ses|ipv4|ipv6|split-tunnel-info|[a-z-]{1,10})",
+                 proptest::collection::vec(
+                     ("(ip|mask|domain|domains|dnsserver1|dnsserver2|ipv6|prefix-len|value|negate|dtls|[a-z]{1,6})",
+                      "[0-9a-zA-Z.:;,* /_-]{0,30}"),
+                     0..4)),
+                0..24),
+        ) {
+            let mut xml = String::from("<?xml version='1.0'?><sslvpn-tunnel ver='2' dtls='0'><ipv4>");
+            for (name, attrs) in &elems {
+                xml.push('<');
+                xml.push_str(name);
+                for (k, v) in attrs {
+                    xml.push_str(&format!(" {k}='{v}'"));
+                }
+                xml.push_str("/>");
+            }
+            xml.push_str("</ipv4></sslvpn-tunnel>");
+            let _ = parse(&xml);
         }
     }
 }

@@ -21,7 +21,7 @@ use crate::fields::{FieldError, Fields};
 use crate::ids::{EmsSerial, Mac, Uid};
 use crate::sysinfo::SysInfo;
 
-/// `PROTO_VER` sent by FortiClient 7.4.
+/// `PROTO_VER` this client sends (wire identity).
 pub const PROTO_VER: &str = "1.0.1";
 
 /// Width of the `SIZE` value (decimal, space-padded to eight characters).
@@ -102,8 +102,7 @@ fn line(out: &mut Vec<u8>, name: &'static str, value: &str) -> Result<(), BuildE
     Ok(())
 }
 
-/// Like [`line`], but leaves the line out when the value is empty, as FortiClient does for
-/// string-valued header fields.
+/// Like [`line`], but leaves the line out when the value is empty.
 fn opt_line(out: &mut Vec<u8>, name: &'static str, value: &str) -> Result<(), BuildError> {
     if value.is_empty() {
         Ok(())

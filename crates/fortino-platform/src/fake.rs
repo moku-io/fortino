@@ -290,7 +290,9 @@ impl NetPlatform for FakeNet {
                     s.split_dns.remove(domain);
                 }
             },
-            Undo::UnblockIpv6 | Undo::UnblockIpv6Pf { .. } => s.ipv6_blocked = false,
+            Undo::UnblockIpv6 | Undo::UnblockIpv6Pf { .. } | Undo::ReleasePf { .. } => {
+                s.ipv6_blocked = false
+            }
         }
         Ok(())
     }

@@ -202,6 +202,7 @@ pub fn ems_settings(cfg: &DaemonConfig) -> Result<fortino_ems::service::Settings
         servers,
         settle: std::time::Duration::from_secs(cfg.ems.settle_secs.unwrap_or(2)),
         min_ka_interval: std::time::Duration::from_secs(10),
+        retry: std::time::Duration::from_secs(60),
     })
 }
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::device::DeviceFactory;
 use crate::{NativeWorker, Trust};
 use fortino_config::{Endpoint, IpPolicy};
-use fortino_core::framing::{read_frame, write_frame};
+use fortino_core::framing::{FrameReader, read_frame, write_frame};
 use fortino_core::worker::EmsIdentity;
 use fortino_core::worker::{WorkerCommand, WorkerConfig, WorkerEvent, WorkerFactory};
 use fortino_core::worker_wire::{
@@ -168,6 +168,9 @@ pub async fn run() -> io::Result<()> {
     };
 
     let mut h = worker.spawn(cfg);
+    // The read loses the select! whenever an event goes out first; a half-read frame must
+    // survive that.
+    let mut frames = FrameReader::new(MAX_WORKER_FRAME);
     loop {
         tokio::select! {
             ev = h.events.recv() => {
@@ -176,8 +179,8 @@ pub async fn run() -> io::Result<()> {
                 let a = attempt.clone();
                 let (msg, last) = match ev {
                     WorkerEvent::Stage(stage) => (WorkerMsg::Stage { v, attempt: a, seq, stage }, false),
-                    WorkerEvent::Challenge { id, kind, prompt } => {
-                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt }, false)
+                    WorkerEvent::Challenge { id, kind, prompt, push } => {
+                        (WorkerMsg::Challenge { v, attempt: a, seq, id, kind, prompt, push }, false)
                     }
                     WorkerEvent::Up(tc) => (
                         WorkerMsg::Up {
@@ -212,7 +215,7 @@ pub async fn run() -> io::Result<()> {
                     break;
                 }
             }
-            f = read_frame(&mut rd, MAX_WORKER_FRAME) => {
+            f = frames.next(&mut rd) => {
                 let cmd = match f {
                     // A daemon-side EOF or a broken channel cancels the attempt.
                     Ok(None) | Err(_) => WorkerCommand::Stop,

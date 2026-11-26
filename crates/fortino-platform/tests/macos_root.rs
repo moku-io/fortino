@@ -314,18 +314,78 @@ fn pf_left_enabled_when_it_was_enabled() {
         return;
     }
     let was = pf_enabled();
-    if !was {
-        must("pfctl", &["-E"]);
-    }
+    // Another program holds a reference of its own.
+    let theirs = sh("pfctl", &["-E"])
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("Token : ").map(str::to_owned))
+        .expect("pfctl -E prints a token");
     let dir = tempfile::tempdir().unwrap();
     let mut j = Journaled::open(MacNet::system(), dir.path().join("j.json")).unwrap();
     j.apply(&NetChange::BlockIpv6).unwrap();
     j.rollback_all().unwrap();
-    assert!(pf_enabled(), "pf was enabled before and must stay enabled");
+    assert!(pf_enabled(), "the other reference keeps pf on");
     assert_eq!(anchor_rules(), "");
-    if !was {
-        must("pfctl", &["-d"]);
+    // Releasing theirs returns pf to where it was: Fortino held no reference any more.
+    must("pfctl", &["-X", &theirs]);
+    assert_eq!(pf_enabled(), was);
+}
+
+/// A restart while connected: the next boot has no tunnel interface, pf off, no pin and no
+/// resolver keys, but the journal still lists them all. Recovery must find nothing left to
+/// undo instead of failing (which would refuse every connect).
+#[test]
+fn recovery_after_a_reboot_finds_nothing_left() {
+    if !enabled() {
+        return;
     }
+    let before = snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("j.json");
+    {
+        let ifs = Feth::create();
+        let mut j = Journaled::open(MacNet::system(), &path).unwrap();
+        j.apply_all(&tunnel_changes()).unwrap();
+        check_applied();
+        drop(ifs);
+    }
+    // What a reboot leaves: none of it.
+    let _ = run("route", &["-n", "delete", "-host", "198.51.100.77"], None);
+    let _ = run("pfctl", &["-a", PF_ANCHOR, "-F", "rules"], None);
+    if !before.pf {
+        let _ = run("pfctl", &["-d"], None);
+    }
+    let _ = run(
+        "scutil",
+        &[],
+        Some(&format!(
+            "remove {DNS_KEY_PREFIX}.split.intra.example/DNS\nquit\n"
+        )),
+    );
+    let mut j = Journaled::open(MacNet::system(), &path).unwrap();
+    assert_eq!(j.recover().unwrap(), tunnel_changes().len());
+    assert_eq!(j.pending(), 0);
+    assert_eq!(snapshot(), before);
+}
+
+/// A network whose address reads as a classful one (172.16.0.0/12 as 172.16/16) is still
+/// found and removed on rollback while its interface is up.
+#[test]
+fn classful_looking_routes_are_removed() {
+    if !enabled() {
+        return;
+    }
+    let _ifs = Feth::create();
+    let before = snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let mut j = Journaled::open(MacNet::system(), dir.path().join("j.json")).unwrap();
+    j.apply(&NetChange::AddRoute(Route {
+        dest: "172.16.0.0/12".parse().unwrap(),
+        via: RouteVia::Interface(IF_A.into()),
+    }))
+    .unwrap();
+    assert_eq!(route_if("172.20.1.1").as_deref(), Some(IF_A));
+    j.rollback_all().unwrap();
+    assert_eq!(snapshot(), before);
 }
 
 #[test]

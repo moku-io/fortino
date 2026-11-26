@@ -104,4 +104,10 @@ cp "$sparkle/LICENSE" "$app/Contents/Resources/Sparkle-LICENSE.txt"
 codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" \
     "$app/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" >&2
 codesign --force --sign - "$app/Contents/Frameworks/Sparkle.framework" >&2
+# Seal the whole bundle ad hoc too, so an unsigned build verifies as an app (its resources and
+# nested code). The linker signs only arm64 slices, so the Rust binaries are signed first: a
+# universal one has an unsigned x86_64 slice, which the seal refuses. package-macos.sh signs
+# everything again with the Developer ID.
+codesign --force --sign - "$app/Contents/MacOS/fortinod" "$app/Contents/Helpers/fortino" >&2
+codesign --force --sign - "$app" >&2
 echo "$app"

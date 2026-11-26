@@ -366,11 +366,27 @@ impl Ppp {
         let restart = self.cfg.restart;
         let cp = self.cp(proto);
         cp.id = cp.id.wrapping_add(1);
+        // A new request needs its own acknowledgement.
+        cp.ours_acked = false;
         cp.sent += 1;
         cp.deadline = Some(now + restart);
         let id = cp.id;
         let opts = encode_opts(&cp.want);
         self.send_ctl(proto, CONF_REQ, id, &opts);
+    }
+
+    /// Sends a changed Configure-Request after a Nak or Reject, counting it like a
+    /// retransmission: a gateway that keeps refusing must end the negotiation, not loop.
+    fn renegotiate(&mut self, proto: u16, now: Instant) {
+        if self.cp(proto).sent >= self.cfg.max_configure {
+            self.down(DownReason::NegotiationFailed(if proto == PROTO_LCP {
+                "LCP did not converge"
+            } else {
+                "IPCP did not converge"
+            }));
+            return;
+        }
+        self.send_conf_req(proto, now);
     }
 
     fn send_term_req(&mut self, now: Instant) {
@@ -436,8 +452,9 @@ impl Ppp {
                 }
             }
             CONF_ACK if id == self.lcp.id && self.phase == Phase::Establish => {
+                // The restart timer keeps running until the gateway's own request is acked
+                // too (RFC 1661): a gateway that never sends one is retried, then given up on.
                 self.lcp.ours_acked = true;
-                self.lcp.deadline = None;
                 self.lcp_maybe_open(now);
             }
             CONF_NAK | CONF_REJ if id == self.lcp.id && self.phase == Phase::Establish => {
@@ -458,7 +475,7 @@ impl Ppp {
                         }
                     }
                 }
-                self.send_conf_req(PROTO_LCP, now);
+                self.renegotiate(PROTO_LCP, now);
             }
             TERM_REQ => {
                 self.send_ctl(PROTO_LCP, TERM_ACK, id, &[]);
@@ -499,6 +516,7 @@ impl Ppp {
 
     fn lcp_maybe_open(&mut self, now: Instant) {
         if self.lcp.ours_acked && self.lcp.theirs_acked && self.phase == Phase::Establish {
+            self.lcp.deadline = None;
             self.phase = Phase::Network;
             self.next_echo = self.cfg.echo_interval.map(|i| now + i);
             let mut want = vec![(IPCP_ADDR, vec![0, 0, 0, 0])];
@@ -555,7 +573,6 @@ impl Ppp {
                     return;
                 }
                 self.ipcp.ours_acked = true;
-                self.ipcp.deadline = None;
                 self.ipcp_maybe_open();
             }
             CONF_NAK if id == self.ipcp.id && self.phase == Phase::Network => {
@@ -569,7 +586,7 @@ impl Ppp {
                         }
                     }
                 }
-                self.send_conf_req(PROTO_IPCP, now);
+                self.renegotiate(PROTO_IPCP, now);
             }
             CONF_REJ if id == self.ipcp.id && self.phase == Phase::Network => {
                 let Some(opts) = parse_opts(body) else {
@@ -582,7 +599,7 @@ impl Ppp {
                     }
                     self.ipcp.want.retain(|(w, _)| *w != t);
                 }
-                self.send_conf_req(PROTO_IPCP, now);
+                self.renegotiate(PROTO_IPCP, now);
             }
             TERM_REQ => {
                 self.send_ctl(PROTO_IPCP, TERM_ACK, id, &[]);
@@ -596,6 +613,7 @@ impl Ppp {
         if !(self.ipcp.ours_acked && self.ipcp.theirs_acked) || self.phase != Phase::Network {
             return;
         }
+        self.ipcp.deadline = None;
         let get = |t: u8| {
             self.ipcp
                 .want
@@ -761,6 +779,80 @@ mod tests {
             }
         }
         seen
+    }
+
+    /// A gateway that Naks every IPCP request ends the negotiation after `max_configure`
+    /// requests instead of looping until the daemon's deadline.
+    #[test]
+    fn endless_naks_end_the_negotiation() {
+        let t0 = Instant::now();
+        let mut cfg = PppConfig::new(1);
+        cfg.max_configure = 4;
+        let mut p = Ppp::new(cfg, t0);
+        let mut gw = Gw {
+            lcp_id: 0,
+            sent_ipcp_req: true,
+        };
+        let mut down = None;
+        'outer: for _ in 0..100 {
+            let Some(e) = p.poll_event() else { break };
+            match e {
+                PppEvent::Send(f) => {
+                    let g = f.strip_prefix(&[0xff, 0x03]).unwrap_or(&f);
+                    if u16::from_be_bytes([g[0], g[1]]) == PROTO_IPCP {
+                        let (_, id, _) = parse_ctl(&g[2..]).unwrap();
+                        // Always the same Nak: 0.0.0.0 stays 0.0.0.0.
+                        let nak = encode_opts(&[(IPCP_ADDR, vec![0, 0, 0, 0])]);
+                        p.input(&ctl(PROTO_IPCP, CONF_NAK, id, &nak, false), t0);
+                    } else {
+                        for r in gw.answer(&f) {
+                            p.input(&r, t0);
+                        }
+                    }
+                }
+                PppEvent::Down(why) => {
+                    down = Some(why);
+                    break 'outer;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            down,
+            Some(DownReason::NegotiationFailed("IPCP did not converge"))
+        );
+    }
+
+    /// A gateway that acks our LCP request but never sends its own: retried, then given up.
+    #[test]
+    fn a_gateway_that_never_sends_its_request_is_given_up_on() {
+        let t0 = Instant::now();
+        let mut cfg = PppConfig::new(1);
+        cfg.max_configure = 3;
+        cfg.echo_interval = None;
+        let mut p = Ppp::new(cfg, t0);
+        let mut now = t0;
+        for _ in 0..20 {
+            while let Some(e) = p.poll_event() {
+                if let PppEvent::Send(f) = &e {
+                    let g = f.strip_prefix(&[0xff, 0x03]).unwrap_or(f);
+                    let (code, id, body) = parse_ctl(&g[2..]).unwrap();
+                    if code == CONF_REQ {
+                        p.input(&ctl(PROTO_LCP, CONF_ACK, id, body, false), now);
+                    }
+                }
+                if let PppEvent::Down(why) = e {
+                    assert_eq!(why, DownReason::NegotiationFailed("LCP did not converge"));
+                    return;
+                }
+            }
+            let Some(t) = p.poll_timeout() else {
+                panic!("no timer left: the negotiation would wait forever")
+            };
+            now = t;
+            p.handle_timeout(now);
+        }
+        panic!("never gave up");
     }
 
     #[test]
@@ -946,6 +1038,36 @@ mod tests {
             for f in frames {
                 p.input(&f, t0);
                 while p.poll_event().is_some() {}
+            }
+        }
+
+        /// Well-formed control packets of every protocol and code, after the link is up (a
+        /// scripted gateway brings it there), interleaved with timeouts and a close: the states
+        /// random bytes never reach.
+        #[test]
+        fn shaped_packets_never_panic(
+            packets in proptest::collection::vec(
+                (proptest::sample::select(vec![PROTO_LCP, PROTO_IPCP, PROTO_IP, 0x8057, 0x80fd]),
+                 1u8..12, proptest::num::u8::ANY,
+                 proptest::collection::vec(proptest::num::u8::ANY, 0..24), proptest::bool::ANY),
+                0..32),
+            close_at in 0usize..40,
+        ) {
+            let mut now = Instant::now();
+            let mut p = Ppp::new(PppConfig::new(1), now);
+            let mut gw = Gw { lcp_id: 0, sent_ipcp_req: false };
+            run(&mut p, &mut gw, now);
+            for (i, (proto, code, id, data, tick)) in packets.into_iter().enumerate() {
+                if i == close_at {
+                    p.close(now);
+                }
+                p.input(&ctl(proto, code, id, &data, false), now);
+                while p.poll_event().is_some() {}
+                if tick {
+                    now += Duration::from_secs(5);
+                    p.handle_timeout(now);
+                    while p.poll_event().is_some() {}
+                }
             }
         }
     }

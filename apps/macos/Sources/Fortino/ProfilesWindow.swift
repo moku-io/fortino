@@ -85,7 +85,7 @@ struct ProfilesWindow: View {
                 .accessibilityLabel("New Profile")
             }
             ToolbarItem(placement: .primaryAction) {
-                ConnectButton(model: model)
+                ConnectButton(model: model, creating: creating)
             }
         }
         .frame(minWidth: 680, minHeight: 500)
@@ -97,6 +97,10 @@ struct ProfilesWindow: View {
             if id != nil { creating = false }
         }
         .onChange(of: model.newProfileRequested) { _ in takeNewProfileRequest() }
+        // Profiles changed from the terminal (`fortino profile edit`) show up on coming back.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshProfiles() }
+        }
         .onAppear { takeNewProfileRequest() }
     }
 
@@ -139,6 +143,8 @@ struct ContentUnavailableCompat<Actions: View>: View {
 /// The toolbar's primary action for the selected profile.
 struct ConnectButton: View {
     @ObservedObject var model: AppModel
+    /// The new-profile form is shown: Connect would act on another, hidden profile.
+    var creating = false
 
     /// The active attempt belongs to a profile other than the selected one.
     private var otherActive: Bool {
@@ -168,7 +174,8 @@ struct ConnectButton: View {
         case .idle, .recoveryRequired:
             Button("Connect") { model.connect(savingEdits: true) }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.selectedProfile == nil || model.serviceError != nil)
+                .disabled(creating || model.selectedProfile == nil || model.serviceError != nil)
+                .help(creating ? "Create the profile first" : "")
         }
     }
 }
@@ -187,13 +194,18 @@ struct ConnectionSection: View {
                 HStack(spacing: 6) {
                     StatusDot(color: dotColor)
                     Text(isCurrent && model.state.isActive ? model.state.label : "Not Connected")
+                    if isCurrent, model.state == .awaitingInput, model.status?.challenge != nil {
+                        Button("Sign In…") { model.showSignIn() }
+                            .controlSize(.small)
+                            .help("Shows the sign-in panel")
+                    }
                 }
             }
             if let ems = profile.spec.endpoint.ems {
                 EmsStatusRow(model: model, profileId: profile.id, server: ems,
                              status: model.emsStatus[ems.display])
                 if model.emsStatus[ems.display]?.checkedInWithoutRules == true {
-                    EmsNoRulesNote()
+                    EmsNoRulesNote(model: model, profileId: profile.id)
                 }
             }
             if isCurrent, model.state == .connected, let st = model.status {
@@ -262,6 +274,8 @@ struct StatusDot: View {
 /// The EMS accepted this Mac but assigned it nothing. Often harmless, but on gateways that admit
 /// devices by EMS tag it explains a VPN that connects while nothing loads.
 struct EmsNoRulesNote: View {
+    @ObservedObject var model: AppModel
+    let profileId: String
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -280,6 +294,8 @@ struct EmsNoRulesNote: View {
             HStack {
                 Spacer()
                 Button("Enroll with Package…") {
+                    // The package is checked against this profile's EMS.
+                    model.emsSetupProfileId = profileId
                     openWindow(id: "enrollment")
                     NSApp.activate(ignoringOtherApps: true)
                 }
@@ -329,9 +345,13 @@ struct EmsStatusRow: View {
         ["unconfigured", "not-registered", "held-by-forticlient", "quarantined", nil].contains(status?.state)
     }
 
+    /// The last attempt failed verifying this EMS server (its own profile's, or another
+    /// profile's with the same server).
     private var emsTrustFailed: Bool {
-        guard model.state == .idle, let r = model.status?.lastResult,
-              r.attemptId != model.reviewedEmsFailure else { return false }
+        guard model.state == .idle, let st = model.status, let r = st.lastResult,
+              r.attemptId != model.reviewedEmsFailure,
+              model.profiles.first(where: { $0.id == st.profileId })?.spec.endpoint.ems == server
+        else { return false }
         return r.code == "trust_failure" && r.message.hasPrefix("EMS:")
     }
 
@@ -436,6 +456,16 @@ struct Draft {
         }
     }
 
+    /// `spec` as the form writes it: defaults left out. The service sends some of them
+    /// (`dnsMode: gateway`), and an unchanged form must compare equal to what it shows.
+    static func normalized(_ spec: ProfileSpec) -> ProfileSpec {
+        var s = spec
+        if s.dnsMode == .gateway { s.dnsMode = nil }
+        if s.savePassword == false { s.savePassword = nil }
+        if s.debugEmsSysinfo?.isEmpty == true { s.debugEmsSysinfo = nil }
+        return s
+    }
+
     func spec(base: ProfileSpec?) -> ProfileSpec? {
         guard errors.isEmpty, let port = Int(port), case let .success(ems) = parseEms(ems) else { return nil }
         let t = { (s: String) -> String? in
@@ -478,7 +508,9 @@ struct ProfileEditor: View {
     /// What deleting `p` also removes, and the choice about its EMS.
     private func deleteNotes(_ p: Profile) -> String {
         var notes: [String] = []
-        if p.spec.savePassword == true {
+        // Deleting removes a saved password whether or not the option is on (one can be saved
+        // from the terminal), so the keychain is checked when the dialog opens.
+        if p.spec.savePassword == true || model.savedPasswords[p.id]?.saved == true {
             notes.append("Its saved password is also removed from your login keychain.")
         }
         if let ems = model.emsToLeave(with: p) {
@@ -621,7 +653,12 @@ struct ProfileEditor: View {
             }
             HStack {
                 if let p = profile {
-                    Button("Delete Profile…", role: .destructive) { confirmDelete = true }
+                    Button("Delete Profile…", role: .destructive) {
+                        Task {
+                            await model.refreshSavedPassword(p.id)
+                            confirmDelete = true
+                        }
+                    }
                         .disabled(isActiveProfile)
                         .confirmationDialog("Delete \(p.spec.name)?", isPresented: $confirmDelete) {
                             if let ems = model.emsToLeave(with: p) {
@@ -663,7 +700,7 @@ struct ProfileEditor: View {
         guard let p = profile else { return true }
         // Compare what would be saved, so edits that normalize away (case, spaces) don't count.
         // An invalid form yields no spec and so counts as changed.
-        return draft.spec(base: p.spec) != p.spec
+        return draft.spec(base: p.spec) != Draft.normalized(p.spec)
     }
 
     /// Lets the window's Connect button save this editor's changes before connecting.
@@ -754,6 +791,7 @@ struct SavedPasswordRow: View {
         if let u = s.username, let mine = profile.spec.usernameHint, u != mine {
             return "Saved for \(u), not \(mine); asked next time"
         }
+        if s.otherGateway == true { return "Saved for another gateway; asked next time" }
         if s.rejected { return "Refused by the gateway; asked next time" }
         return s.username.map { "Saved for \($0)" } ?? "Saved"
     }
