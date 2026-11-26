@@ -211,7 +211,7 @@ struct TroubleshootingSettings: View {
                 }
                 .disabled(model.serviceError != nil)
             } footer: {
-                Text("Applies to the VPN service until it restarts. Debug and Trace add protocol details such as status codes, cookie names and paths. Passwords, codes and cookie values are never logged.")
+                Text("Applies to the VPN service and is kept across restarts and updates. Debug and Trace add protocol details such as status codes, cookie names and paths. Passwords, codes and cookie values are never logged.")
                     .settingsFooter()
             }
             Section {

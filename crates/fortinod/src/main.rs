@@ -84,6 +84,10 @@ async fn daemon() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    fortinod::logctl::restore(
+        cfg.state_dir.join(fortinod::logctl::FILE_NAME),
+        env.is_some(),
+    );
     let run = async {
         let auth = fortinod::build_authorizer(&cfg)?;
         let session = fortinod::build_session(&cfg)?;

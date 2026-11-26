@@ -5,6 +5,7 @@ What changed in each release of Fortino. Each section is also the release's note
 ## 0.8.1
 
 - **EMS troubleshooting.** At the debug log level (`fortino log-level debug`, or Settings → Troubleshooting), the service log shows the system information sent to the EMS at each registration and check-in, such as the OS version and the reported client version. The connection key is never logged.
+- **The log level is kept** across restarts of the VPN service and updates of Fortino, instead of going back to Info. Choose Info again to stop debug logging.
 
 ## 0.8.0
 
