@@ -4,8 +4,8 @@
 //! passwords off for one run. Development builds also accept `file:<path>`, a plain JSON file,
 //! so tests never touch the developer's own keychain; release builds ignore it.
 
+use fortino_secret::CredentialStore;
 use fortino_secret::store::{NoStore, platform_store};
-use fortino_secret::{CredentialStore, SavedPassword, Secret, StoreError};
 
 /// The store for this run.
 pub fn open() -> Box<dyn CredentialStore> {
@@ -28,7 +28,9 @@ mod file {
 
     use serde::{Deserialize, Serialize};
 
-    use super::{CredentialStore, SavedPassword, Secret, StoreError};
+    use fortino_secret::{SavedPassword, Secret, StoreError};
+
+    use super::CredentialStore;
 
     #[derive(Debug, Default, Serialize, Deserialize)]
     struct Item {
