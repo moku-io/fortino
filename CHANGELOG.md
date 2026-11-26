@@ -2,6 +2,10 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
+## 0.8.3
+
+- **EMS testing.** Debug EMS parameters set on a profile now also apply when registering with **Register Now**, `fortino ems-register` or a deployment package, not only when connecting.
+
 ## 0.8.2
 
 - **EMS troubleshooting.** At the debug log level, the service log also shows a certificate revocation sent by the EMS, if any.
