@@ -317,7 +317,9 @@ struct EmsStatusRow: View {
                     .help("Guided EMS setup: allow the server, register this Mac, and see what is in the way")
                 }
             }
-            .help(status?.state == "not-registered"
+            .help(refused
+                  ? "The EMS refused to register this Mac. EMS Setup shows why and what to do."
+                  : status?.state == "not-registered"
                   ? "Fortino registers this Mac with the EMS the next time you connect, or now from EMS Setup."
                   : detail)
         }
@@ -333,7 +335,10 @@ struct EmsStatusRow: View {
         return r.code == "trust_failure" && r.message.hasPrefix("EMS:")
     }
 
+    private var refused: Bool { status?.state == "not-registered" && status?.refusal != nil }
+
     private var color: Color {
+        if refused { return .red }
         switch status?.state {
         case "registered": return .green
         // Keepalives run only while connected, so a quiet registration is normal when idle.
@@ -345,6 +350,7 @@ struct EmsStatusRow: View {
     }
 
     private var label: String {
+        if refused { return "Registration Refused" }
         switch status?.state {
         case "registered": return "Registered"
         case "stale": return "Registered"
@@ -468,6 +474,25 @@ struct ProfileEditor: View {
     @FocusState private var focus: Field?
 
     enum Field: Hashable { case name, host, port, ems, realm, username }
+
+    /// What deleting `p` also removes, and the choice about its EMS.
+    private func deleteNotes(_ p: Profile) -> String {
+        var notes: [String] = []
+        if p.spec.savePassword == true {
+            notes.append("Its saved password is also removed from your login keychain.")
+        }
+        if let ems = model.emsToLeave(with: p) {
+            let st = model.emsStatus[ems.display]
+            let registered = ["registered", "stale"].contains(st?.state)
+            notes.append(registered
+                ? "It's the only profile using the EMS \(ems.display). Leaving it also removes this Mac's device record there and the server's approval on this Mac; using it again needs an administrator password."
+                : "It's the only profile using the EMS \(ems.display). Leaving it also removes the server's approval on this Mac; using it again needs an administrator password.")
+            if st?.key == true {
+                notes.append("The saved connection key is removed either way.")
+            }
+        }
+        return notes.joined(separator: " ")
+    }
 
     private var isActiveProfile: Bool {
         guard let p = profile, let st = model.status else { return false }
@@ -599,13 +624,21 @@ struct ProfileEditor: View {
                     Button("Delete Profile…", role: .destructive) { confirmDelete = true }
                         .disabled(isActiveProfile)
                         .confirmationDialog("Delete \(p.spec.name)?", isPresented: $confirmDelete) {
-                            Button("Delete", role: .destructive) {
-                                Task { serverError = await model.delete(p) }
+                            if let ems = model.emsToLeave(with: p) {
+                                Button("Delete and Leave EMS", role: .destructive) {
+                                    Task { serverError = await model.delete(p, leaving: ems) }
+                                }
+                                Button("Delete Profile Only") {
+                                    Task { serverError = await model.delete(p) }
+                                }
+                            } else {
+                                Button("Delete", role: .destructive) {
+                                    Task { serverError = await model.delete(p) }
+                                }
                             }
                         } message: {
-                            if p.spec.savePassword == true {
-                                Text("Its saved password is also removed from your login keychain.")
-                            }
+                            let notes = deleteNotes(p)
+                            if !notes.isEmpty { Text(notes) }
                         }
                 }
                 Spacer()

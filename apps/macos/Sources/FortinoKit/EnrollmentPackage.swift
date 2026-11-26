@@ -104,12 +104,19 @@ public struct EmsStatus: Decodable, Equatable {
     public let lastKeepalive: Int?
     /// Whether the EMS sent host-verification rules; nil when not registered.
     public let rules: Bool?
+    /// Whether a connection key is saved for this server (never the key itself).
+    public let key: Bool?
+    /// Why the EMS refused the last registration, while this Mac isn't registered.
+    public let refusal: EmsRefusal?
 
-    public init(state: String, registeredAt: Int? = nil, lastKeepalive: Int? = nil, rules: Bool? = nil) {
+    public init(state: String, registeredAt: Int? = nil, lastKeepalive: Int? = nil, rules: Bool? = nil,
+                key: Bool? = nil, refusal: EmsRefusal? = nil) {
         self.state = state
         self.registeredAt = registeredAt
         self.lastKeepalive = lastKeepalive
         self.rules = rules
+        self.key = key
+        self.refusal = refusal
     }
 
     /// Registered and checked in, yet the EMS sent no rules: it likely doesn't recognize this
@@ -120,9 +127,46 @@ public struct EmsStatus: Decodable, Equatable {
     }
 }
 
+/// A registration the EMS refused.
+public struct EmsRefusal: Decodable, Equatable {
+    /// The reason, with the EMS's own message when it gave one.
+    public let reason: String
+    /// The EMS wants a connection key, or a different one.
+    public let key: Bool
+
+    public init(reason: String, key: Bool) {
+        self.reason = reason
+        self.key = key
+    }
+}
+
 extension DaemonClient {
     public func emsStatus(server: EmsServer) async throws -> EmsStatus {
         struct Params: Encodable { let server: String }
         return try await call("ems.status", Params(server: server.display))
+    }
+
+    /// What leaving an EMS did.
+    public struct LeaveReply: Decodable {
+        /// The EMS removed this Mac's device record.
+        public let deregistered: Bool
+        /// Why the record stayed on the EMS, when there was one.
+        public let kept: String?
+    }
+
+    /// Leaves `server`, which no profile may still use: the EMS removes this Mac's record, and
+    /// the service forgets the server's registration, connection key and approval.
+    public func leaveEms(server: EmsServer) async throws -> LeaveReply {
+        struct Params: Encodable { let server: String }
+        return try await call("ems.leave", Params(server: server.display))
+    }
+
+    /// Saves the connection key for `server` (nil removes it). Returns the service's outcome:
+    /// saved, removed, none, configured or approval-required.
+    public func setEmsKey(server: EmsServer, key: String?) async throws -> String {
+        struct Params: Encodable { let server: String; let key: String? }
+        struct Reply: Decodable { let status: String }
+        let r: Reply = try await call("ems.setKey", Params(server: server.display, key: key))
+        return r.status
     }
 }

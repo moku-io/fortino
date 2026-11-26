@@ -457,7 +457,20 @@ final class AppModel: ObservableObject {
 
     /// Registers this Mac with `server` now, without a deployment package.
     func registerEms(_ server: EmsServer) async throws -> EnrollmentReply {
-        let r = try await require().register(server: server)
+        do {
+            let r = try await require().register(server: server)
+            await refreshEmsStatus()
+            return r
+        } catch {
+            // A refusal is part of the status: EMS Setup shows the way out.
+            await refreshEmsStatus()
+            throw error
+        }
+    }
+
+    /// Saves (or with nil removes) the connection key for `server`.
+    func setEmsKey(_ server: EmsServer, key: String?) async throws -> String {
+        let r = try await require().setEmsKey(server: server, key: key)
         await refreshEmsStatus()
         return r
     }
@@ -466,7 +479,7 @@ final class AppModel: ObservableObject {
     func lastAttemptNeedsEms(_ profile: Profile) -> Bool {
         guard state == .idle, status?.profileId == profile.id,
               let r = status?.lastResult else { return false }
-        return r.message.contains(emsRegistrationRequiredPrefix)
+        return r.message.contains(emsRegistrationRequiredPrefix) || r.message.contains(emsRefusalMarker)
     }
 
     func enroll(_ package: EnrollmentPackage) async throws -> EnrollmentReply {
@@ -495,6 +508,33 @@ final class AppModel: ObservableObject {
         } catch {
             return ProtoError(code: "internal", message: error.localizedDescription)
         }
+    }
+
+    /// The EMS server deleting `p` would leave unused, when Fortino holds something for it on
+    /// this Mac (an approval, a registration or a connection key).
+    func emsToLeave(with p: Profile) -> EmsServer? {
+        guard let ems = p.spec.endpoint.ems,
+              !profiles.contains(where: { $0.id != p.id && $0.spec.endpoint.ems?.display == ems.display }),
+              let st = emsStatus[ems.display] else { return nil }
+        // FortiClient's agent owns those registrations; there is nothing of Fortino's to remove.
+        guard !["managed-by-forticlient", "held-by-forticlient"].contains(st.state) else { return nil }
+        return st.state != "unconfigured" || st.key == true ? ems : nil
+    }
+
+    /// Deletes `p`, then leaves `ems`: the EMS removes this Mac's record, and the service
+    /// forgets the server's registration, key and approval.
+    func delete(_ p: Profile, leaving ems: EmsServer) async -> ProtoError? {
+        if let e = await delete(p) { return e }
+        do {
+            let r = try await require().leaveEms(server: ems)
+            if let kept = r.kept {
+                actionError = "Profile deleted, and Fortino forgot \(ems.display) on this Mac. The EMS kept this Mac's device record (\(kept)); your IT administrator can delete it."
+            }
+        } catch {
+            actionError = "Profile deleted, but leaving \(ems.display) failed: \((error as? ProtoError)?.message ?? error.localizedDescription)"
+        }
+        await refreshEmsStatus()
+        return nil
     }
 
     func delete(_ p: Profile) async -> ProtoError? {

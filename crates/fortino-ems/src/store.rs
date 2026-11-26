@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use crate::Error;
 
@@ -71,6 +72,13 @@ pub struct Registration {
     pub last_keepalive: Option<u64>,
 }
 
+/// A connection key on disk, with the server it belongs to.
+#[derive(Serialize, Deserialize, zeroize::ZeroizeOnDrop)]
+struct StoredKey {
+    server: String,
+    key: String,
+}
+
 /// A directory of registrations. Files are written atomically with mode 0600.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -127,6 +135,70 @@ impl Store {
             .map_err(|e| Error::Store(format!("remove registration: {e}")))
     }
 
+    fn key_path(&self, server: &str) -> PathBuf {
+        let h = hex::encode(&Sha256::digest(server.as_bytes())[..12]);
+        self.dir.join("keys").join(format!("{h}.json"))
+    }
+
+    /// The connection key the user gave for `server`, if any.
+    pub fn load_key(&self, server: &str) -> Result<Option<Zeroizing<String>>, Error> {
+        let text = match std::fs::read_to_string(self.key_path(server)) {
+            Ok(t) => Zeroizing::new(t),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(Error::Store(format!("read connection key: {e}"))),
+        };
+        let k: StoredKey = serde_json::from_str(&text)
+            .map_err(|_| Error::Store("parse connection key file".into()))?;
+        // As for registrations: never hand one server's key to another.
+        Ok((k.server == server).then(|| Zeroizing::new(k.key.clone())))
+    }
+
+    /// Saves the connection key for `server`, replacing any earlier one.
+    pub fn save_key(&self, server: &str, key: &str) -> Result<(), Error> {
+        let dir = self.dir.join("keys");
+        create_private_dir(&dir)?;
+        let k = StoredKey {
+            server: server.to_owned(),
+            key: key.to_owned(),
+        };
+        let text = Zeroizing::new(
+            serde_json::to_string(&k)
+                .map_err(|e| Error::Store(format!("encode connection key: {e}")))?,
+        );
+        write_private(&self.key_path(server), text.as_bytes())
+    }
+
+    /// Removes the connection key for `server`. Returns whether there was one.
+    pub fn remove_key(&self, server: &str) -> Result<bool, Error> {
+        match std::fs::remove_file(self.key_path(server)) {
+            Ok(()) => Ok(true),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(Error::Store(format!("remove connection key: {e}"))),
+        }
+    }
+
+    /// The servers that have a saved connection key.
+    pub fn key_servers(&self) -> Result<Vec<String>, Error> {
+        let rd = match std::fs::read_dir(self.dir.join("keys")) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(Error::Store(format!("list connection keys: {e}"))),
+        };
+        let mut out = Vec::new();
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "json") {
+                if let Ok(t) = std::fs::read_to_string(&p).map(Zeroizing::new) {
+                    if let Ok(k) = serde_json::from_str::<StoredKey>(&t) {
+                        out.push(k.server.clone());
+                    }
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
     /// Every registration.
     pub fn list(&self) -> Result<Vec<Registration>, Error> {
         let mut out = Vec::new();
@@ -146,6 +218,18 @@ impl Store {
     }
 }
 
+fn create_private_dir(dir: &Path) -> Result<(), Error> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(dir)
+        .map_err(|e| Error::Store(format!("create {}: {e}", dir.display())))
+}
+
 fn write_private(path: &Path, data: &[u8]) -> Result<(), Error> {
     use std::io::Write;
     let tmp = path.with_extension("tmp");
@@ -158,11 +242,11 @@ fn write_private(path: &Path, data: &[u8]) -> Result<(), Error> {
     }
     let mut f = opts
         .open(&tmp)
-        .map_err(|e| Error::Store(format!("write registration: {e}")))?;
+        .map_err(|e| Error::Store(format!("write {}: {e}", path.display())))?;
     f.write_all(data)
         .and_then(|()| f.sync_all())
-        .map_err(|e| Error::Store(format!("write registration: {e}")))?;
-    std::fs::rename(&tmp, path).map_err(|e| Error::Store(format!("write registration: {e}")))
+        .map_err(|e| Error::Store(format!("write {}: {e}", path.display())))?;
+    std::fs::rename(&tmp, path).map_err(|e| Error::Store(format!("write {}: {e}", path.display())))
 }
 
 #[cfg(test)]
@@ -213,6 +297,50 @@ mod tests {
         assert!(s.remove("ems-a.test:8013").unwrap());
         assert!(s.load("ems-a.test:8013").unwrap().is_none());
         assert!(s.load("ems-b.test:9016").unwrap().is_some());
+    }
+
+    #[test]
+    fn keys_are_per_server() {
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::open(d.path()).unwrap();
+        assert!(s.load_key("ems-a.test:8013").unwrap().is_none());
+        s.save_key("ems-a.test:8013", "k3y").unwrap();
+        s.save(&reg("ems-a.test:8013")).unwrap();
+        assert_eq!(
+            s.load_key("ems-a.test:8013").unwrap().unwrap().as_str(),
+            "k3y"
+        );
+        assert!(s.load_key("ems-b.test:9016").unwrap().is_none());
+        // A key file is not a registration.
+        assert_eq!(s.list().unwrap().len(), 1);
+        s.save_key("ems-a.test:8013", "other").unwrap();
+        assert_eq!(
+            s.load_key("ems-a.test:8013").unwrap().unwrap().as_str(),
+            "other"
+        );
+        assert!(s.remove_key("ems-a.test:8013").unwrap());
+        assert!(!s.remove_key("ems-a.test:8013").unwrap());
+        assert!(s.load_key("ems-a.test:8013").unwrap().is_none());
+        assert!(s.load("ems-a.test:8013").unwrap().is_some());
+        assert!(s.key_servers().unwrap().is_empty());
+        s.save_key("ems-b.test:9016", "k").unwrap();
+        s.save_key("ems-a.test:8013", "k").unwrap();
+        assert_eq!(
+            s.key_servers().unwrap(),
+            ["ems-a.test:8013", "ems-b.test:9016"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn key_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let s = Store::open(d.path()).unwrap();
+        s.save_key("ems-a.test:8013", "k3y").unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&d.path().join("keys")), 0o700);
+        assert_eq!(mode(&s.key_path("ems-a.test:8013")), 0o600);
     }
 
     #[cfg(unix)]

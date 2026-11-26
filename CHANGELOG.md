@@ -2,7 +2,10 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
-## Unreleased
+## 0.7.1
+
+- **EMS connection key.** Some EMS servers register a Mac only with a connection key (also called the telemetry password) from your IT administrator. When the EMS refuses the registration, EMS Setup and the profile now say so, show the EMS's reason and offer **Enter Connection Key…**, which saves the key for that EMS and registers right away. Before, the app kept offering **Register Now**, which failed the same way. From the terminal: `fortino ems-key set <server>`; `fortino ems-status` shows the refusal.
+- **Leaving an EMS.** Deleting the last profile that uses an EMS now offers **Delete and Leave EMS**: the EMS removes this Mac's device record, and Fortino forgets the server's approval and registration on this Mac. **Delete Profile Only** keeps them. A saved connection key is removed as soon as no profile uses its EMS. From the terminal: `fortino ems-leave <server>`.
 
 - **Save password.** Turn on **Save password in Keychain** for a profile and Fortino saves the password in your login keychain once it connects, then fills it in next time. One-time codes are always asked for. If the gateway rejects a saved password, Fortino asks you again instead of retrying it, and offers to replace it. Turning the option off or deleting the profile removes the saved password. A password is saved for the profile's username, so the option needs one. From the terminal: `fortino profile edit <name> --save-password`, and `fortino password save | status | forget <name>`.
 

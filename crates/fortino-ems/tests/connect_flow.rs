@@ -756,3 +756,139 @@ async fn dropped_while_forticlient_is_on_the_ems_is_left_to_it() {
     assert_eq!(seen(&r, "REGISTER"), 1);
     stop(&mut r).await;
 }
+
+#[tokio::test]
+async fn a_saved_connection_key_gets_a_refused_registration_through() {
+    use fortino_core::worker::{FakeWorker, FakeWorkerConfig};
+    use fortino_ems::Error;
+    use fortino_ems::service::EmsState;
+
+    let mock = ems::start(&ems_scenario()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let mut workers = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: FakeWorkerConfig::default(),
+        }),
+        Settings {
+            state_dir: dir.path().into(),
+            package_approvals: None,
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::from([(
+                "ems.test:8013".into(),
+                ServerSettings {
+                    trust: Trust::Roots(vec![mock.handle.cert_der.clone()]),
+                    register: true,
+                    key_file: None,
+                },
+            )]),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    workers.connect_override = Some(mock.handle.addr);
+
+    // No key: the EMS refuses, and the status says why.
+    assert!(matches!(
+        workers.enroll(server.clone(), None).await,
+        Err(Error::KeyRefused(_))
+    ));
+    let st = workers.status(&server).unwrap();
+    assert_eq!(st.state, EmsState::NotRegistered);
+    assert!(!st.key);
+    assert!(st.refusal.as_ref().is_some_and(|f| f.key), "{st:?}");
+
+    // A wrong key is refused the same way.
+    assert_eq!(workers.set_key(&server, Some("wrong")).unwrap(), "saved");
+    assert!(workers.status(&server).unwrap().refusal.is_none());
+    assert!(matches!(
+        workers.enroll(server.clone(), None).await,
+        Err(Error::KeyRefused(_))
+    ));
+    assert!(workers.status(&server).unwrap().refusal.is_some());
+
+    // Invalid keys and unknown servers are turned away before anything is saved.
+    assert!(workers.set_key(&server, Some("a|b")).is_err());
+    assert_eq!(
+        workers
+            .set_key(&"other.test:8013".parse().unwrap(), Some("k3y"))
+            .unwrap(),
+        "approval-required"
+    );
+
+    // The right key registers, and nothing about the key is left in the status.
+    assert_eq!(workers.set_key(&server, Some("k3y")).unwrap(), "saved");
+    assert_eq!(
+        workers.enroll(server.clone(), None).await.unwrap().0,
+        "registered"
+    );
+    let st = workers.status(&server).unwrap();
+    assert!(st.key && st.refusal.is_none(), "{st:?}");
+    {
+        let state = mock.state.lock().unwrap();
+        assert_eq!(
+            state.seen.iter().filter(|r| r.kind == "REGISTER").count(),
+            3
+        );
+    }
+
+    assert_eq!(workers.set_key(&server, None).unwrap(), "removed");
+    assert_eq!(workers.set_key(&server, None).unwrap(), "none");
+    assert!(!workers.status(&server).unwrap().key);
+}
+
+#[tokio::test]
+async fn leaving_removes_the_record_and_everything_local() {
+    use fortino_core::worker::{FakeWorker, FakeWorkerConfig};
+    use fortino_ems::service::EmsState;
+
+    let mock = ems::start(&ems_scenario()).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let server: fortino_config::EmsServer = "ems.test:8013".parse().unwrap();
+    let mut workers = EmsWorkers::new(
+        Arc::new(FakeWorker {
+            config: FakeWorkerConfig::default(),
+        }),
+        Settings {
+            state_dir: dir.path().into(),
+            package_approvals: None,
+            uid: None,
+            compat: Default::default(),
+            servers: HashMap::from([(
+                "ems.test:8013".into(),
+                ServerSettings {
+                    trust: Trust::Roots(vec![mock.handle.cert_der.clone()]),
+                    register: true,
+                    key_file: None,
+                },
+            )]),
+            settle: Duration::ZERO,
+            min_ka_interval: Duration::ZERO,
+        },
+        Arc::new(|| Some(base_facts())),
+    );
+    workers.connect_override = Some(mock.handle.addr);
+    workers.set_key(&server, Some("k3y")).unwrap();
+    assert_eq!(
+        workers.enroll(server.clone(), None).await.unwrap().0,
+        "registered"
+    );
+    assert_eq!(mock.state.lock().unwrap().endpoints.len(), 1);
+
+    let left = workers.leave(&server).await.unwrap();
+    assert!(left.deregistered && left.kept.is_none(), "{left:?}");
+    assert!(mock.state.lock().unwrap().endpoints.is_empty());
+    let st = workers.status(&server).unwrap();
+    assert_eq!(st.state, EmsState::NotRegistered);
+    assert!(!st.key);
+
+    // Keys of servers no profile names go; the others stay.
+    workers.set_key(&server, Some("k3y")).unwrap();
+    let in_use = std::collections::HashSet::from(["ems.test:8013".to_owned()]);
+    assert_eq!(workers.forget_unused_keys(&in_use).unwrap(), 0);
+    assert!(workers.status(&server).unwrap().key);
+    assert_eq!(workers.forget_unused_keys(&Default::default()).unwrap(), 1);
+    assert!(!workers.status(&server).unwrap().key);
+}
