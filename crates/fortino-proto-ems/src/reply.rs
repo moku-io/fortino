@@ -3,7 +3,7 @@
 //!
 //! Every typed view sorts keys into three groups: understood, refused (remote commands,
 //! upgrades, forensics and AV control are never acted on) and unknown. The agent logs the names
-//! of the last two; values are never logged.
+//! of the last two; values are never logged, except `CERT_REVOKE` at debug level.
 
 use crate::fields::{Fields, ParseError};
 use crate::ids::{EmsSerial, Tenant};

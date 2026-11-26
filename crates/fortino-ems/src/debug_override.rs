@@ -8,13 +8,33 @@
 //! fills in by hand;
 //! there is no friendly field picker, and it is empty in normal use.
 //!
+//! An `OSVER` override also applies to host verification ([`host_facts`]), so the rule results
+//! describe the same OS the EMS was told about.
+//!
 //! Everything debug lives here and behind the `debug_ems_sysinfo` profile field, so removing the
-//! feature is a clean delete: this module, that field, and the two [`apply`] call sites in
-//! [`crate::agent`].
+//! feature is a clean delete: this module, that field, the two [`apply`] call sites and the
+//! [`host_facts`] call site in [`crate::agent`].
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
+use fortino_platform::facts::Facts;
 use fortino_proto_ems::sysinfo::SysInfo;
+
+/// The facts host verification evaluates: `facts` with an `OSVER` override as the OS version,
+/// or `facts` unchanged when there is none. No other key feeds host verification.
+pub fn host_facts<'a>(facts: &'a Facts, overrides: &BTreeMap<String, String>) -> Cow<'a, Facts> {
+    let Some(os) = overrides.get("OSVER") else {
+        return Cow::Borrowed(facts);
+    };
+    tracing::warn!(
+        "DEBUG EMS overrides active: host verification evaluates the overridden OSVER, not this Mac's OS"
+    );
+    Cow::Owned(Facts {
+        os_version: os.clone(),
+        ..facts.clone()
+    })
+}
 
 /// Returns `sysinfo` with `overrides` applied: an entry whose key already exists replaces that
 /// value (keeping the original wire order); a new key is appended. Entries the SYSINFO framing
@@ -87,6 +107,23 @@ mod tests {
         ov.insert("OSVER".to_string(), "line\nbreak".to_string()); // value rejected by framing
         let out = apply(base, &ov);
         assert_eq!(out.get("OSVER"), Some("macOS 15.7.7"));
+    }
+
+    #[test]
+    fn host_facts_take_only_the_osver_override() {
+        let f = Facts {
+            os_version: "macOS 26.1.0".into(),
+            hostname: "h".into(),
+            ..Facts::default()
+        };
+        assert!(matches!(host_facts(&f, &BTreeMap::new()), Cow::Borrowed(_)));
+        let mut ov = BTreeMap::new();
+        ov.insert("HOSTNAME".to_string(), "other".to_string());
+        assert!(matches!(host_facts(&f, &ov), Cow::Borrowed(_)));
+        ov.insert("OSVER".to_string(), "macOS 15.8.3".to_string());
+        let h = host_facts(&f, &ov);
+        assert_eq!(h.os_version, "macOS 15.8.3");
+        assert_eq!(h.hostname, "h");
     }
 
     #[test]

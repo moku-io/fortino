@@ -8,7 +8,7 @@ use fortino_proto_ems::blob;
 use fortino_proto_ems::ids::{EmsSerial, Mac, Tenant, Uid};
 use fortino_proto_ems::message::{self, Header, Kind, TagRequest, User};
 use fortino_proto_ems::reply::{
-    KeepaliveReply, KeyNotes, ProbeReply, Pushed, RegStatus, RegisterReply, TagReply,
+    KeepaliveReply, KeyNotes, ProbeReply, Pushed, RegStatus, RegisterReply, Reply, TagReply,
 };
 use fortino_proto_ems::sysinfo::SysInfo;
 use fortino_proto_ems::tags::Bits;
@@ -55,6 +55,25 @@ fn log_notes(what: &str, notes: &KeyNotes) {
     }
     if !notes.unknown.is_empty() {
         tracing::debug!(reply = what, keys = ?notes.unknown, "EMS sent unknown fields");
+    }
+}
+
+/// Longest `CERT_REVOKE` value logged.
+const CERT_REVOKE_LOGGED: usize = 512;
+
+/// Logs the value of `CERT_REVOKE` at debug level. Fortino holds no certificate issued by the
+/// EMS and does not act on the field. A gateway that sent it on every keepalive also withheld
+/// host-verification rules from that endpoint, so its value is kept for diagnosis.
+// UNVERIFIED: what the value designates.
+fn log_cert_revoke(what: &str, reply: &Reply) {
+    if let Some(v) = reply.fields.get("CERT_REVOKE") {
+        let shown: String = v.chars().take(CERT_REVOKE_LOGGED).collect();
+        tracing::debug!(
+            reply = what,
+            value = ?shown,
+            len = v.len(),
+            "EMS sent CERT_REVOKE"
+        );
     }
 }
 
@@ -186,6 +205,7 @@ impl Agent {
             "EMS registration policy fields"
         );
         log_notes("register", &rr.notes);
+        log_cert_revoke("register", &reply);
         let r = match rr.outcome {
             Ok(r) => r,
             Err(status) => {
@@ -280,6 +300,7 @@ impl Agent {
             .await?;
         let ka = KeepaliveReply::from_reply(&reply)?;
         log_notes("keepalive", &ka.notes);
+        log_cert_revoke("keepalive", &reply);
         if !ka.keep {
             self.store.remove(&reg.server)?;
             return Ok(Keepalive::Dropped);
@@ -340,6 +361,7 @@ impl Agent {
             .await?;
         let t = TagReply::from_reply(&reply)?;
         log_notes("tag", &t.notes);
+        log_cert_revoke("tag", &reply);
         if let Some(e) = t.error {
             return Err(Error::Refused(e));
         }
@@ -360,7 +382,8 @@ impl Agent {
         };
         let rules =
             fortino_proto_ems::hv::parse(xml).map_err(|e| Error::Protocol(e.to_string()))?;
-        let bits = crate::hostcheck::evaluate(&rules, &self.facts);
+        let facts = crate::debug_override::host_facts(&self.facts, &self.overrides);
+        let bits = crate::hostcheck::evaluate(&rules, &facts);
         if bits.to_string() == reg.rules_sent {
             return Ok(None);
         }
