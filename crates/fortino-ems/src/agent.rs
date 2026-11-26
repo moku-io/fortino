@@ -10,6 +10,7 @@ use fortino_proto_ems::message::{self, Header, Kind, TagRequest, User};
 use fortino_proto_ems::reply::{
     KeepaliveReply, KeyNotes, ProbeReply, Pushed, RegStatus, RegisterReply, TagReply,
 };
+use fortino_proto_ems::sysinfo::SysInfo;
 use fortino_proto_ems::tags::Bits;
 
 use crate::report::{self, Compat};
@@ -55,6 +56,21 @@ fn log_notes(what: &str, notes: &KeyNotes) {
     if !notes.unknown.is_empty() {
         tracing::debug!(reply = what, keys = ?notes.unknown, "EMS sent unknown fields");
     }
+}
+
+/// Logs, at debug level, the SYSINFO about to be sent (after any debug overrides), so the log
+/// shows what the EMS was told. The connection key is added later, by the REGISTER body, and is
+/// never in here.
+fn log_sysinfo(request: &str, sysinfo: &SysInfo) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    let text = sysinfo
+        .iter()
+        .map(|(k, v)| format!("{k}={v:?}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tracing::debug!(request, sysinfo = %text, "EMS SYSINFO sent");
 }
 
 fn received(slot: &mut Received, pushed: Option<&(String, String)>, compressed: bool) {
@@ -156,6 +172,7 @@ impl Agent {
         let probe = self.probe(conn).await?;
         let sysinfo = report::full(&self.facts, &self.compat, None)?;
         let sysinfo = crate::debug_override::apply(sysinfo, &self.overrides);
+        log_sysinfo("register", &sysinfo);
         let body = message::register(&sysinfo, key)?;
         let reply = conn
             .exchange(|ip| {
@@ -247,6 +264,14 @@ impl Agent {
             report::mini(&self.facts, Some(&reg))?
         };
         let sysinfo = crate::debug_override::apply(sysinfo, &self.overrides);
+        log_sysinfo(
+            if full {
+                "keepalive (full)"
+            } else {
+                "keepalive"
+            },
+            &sysinfo,
+        );
         let body = message::keepalive(&sysinfo, &User::default())?;
         let reply = conn
             .exchange(|ip| {

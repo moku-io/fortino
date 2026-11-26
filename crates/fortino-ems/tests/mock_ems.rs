@@ -218,3 +218,66 @@ async fn wrong_certificate_sends_nothing() {
     assert!(matches!(a.probe(&c).await, Err(Error::Trust(_))));
     assert!(m.state.lock().unwrap().seen.is_empty());
 }
+
+/// Captures formatted log output for one test.
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Self;
+    fn make_writer(&'a self) -> Self {
+        self.clone()
+    }
+}
+
+#[tokio::test]
+async fn sysinfo_is_logged_at_debug_without_the_connection_key() {
+    let out = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_ansi(false)
+        .with_writer(out.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let sc = EmsScenario {
+        key: Some("k3y-secret".into()),
+        ..EmsScenario::default()
+    };
+    let m = ems::start(&sc).await.unwrap();
+    let d = tempfile::tempdir().unwrap();
+    let a = agent(d.path());
+    let c = conn(&m, "ems.test");
+    a.register(&c, Some("k3y-secret")).await.unwrap();
+    a.keepalive(&c, true).await.unwrap();
+    a.keepalive(&c, false).await.unwrap();
+
+    let log = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+    let lines: Vec<&str> = log
+        .lines()
+        .filter(|l| l.contains("EMS SYSINFO sent"))
+        .collect();
+    assert_eq!(lines.len(), 3, "{log}");
+    assert!(lines[0].contains("request=\"register\""), "{}", lines[0]);
+    assert!(lines[0].contains(r#"OSVER="macOS 15.6""#), "{}", lines[0]);
+    assert!(lines[0].contains("AVSIG_VER="), "{}", lines[0]);
+    assert!(lines[1].contains("keepalive (full)"), "{}", lines[1]);
+    assert!(lines[1].contains("FCTVER="), "{}", lines[1]);
+    assert!(lines[2].contains("FCTOS="), "{}", lines[2]);
+    assert!(!lines[2].contains("FCTVER="), "{}", lines[2]);
+    assert!(
+        !log.contains("k3y-secret"),
+        "the connection key must not be logged"
+    );
+    assert!(!log.contains("REG_KEY"), "{log}");
+}
