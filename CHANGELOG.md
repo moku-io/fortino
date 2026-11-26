@@ -2,7 +2,7 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
-## Unreleased
+## 0.8.0
 
 - **Saved passwords are tied to their gateway.** After a profile moves to another gateway, Fortino asks for the password again instead of sending the saved one there, and replaces it once connected.
 - **Connecting after a restart.** A Mac restarted while connected no longer blocks new connections with "network settings could not be restored".

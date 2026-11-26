@@ -426,7 +426,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "fortino-cli"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "clap",
  "fortino-config",
@@ -446,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-config"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
  "quick-xml",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-platform",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-ems"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "flate2",
  "fortino-config",
@@ -506,11 +506,11 @@ dependencies = [
 
 [[package]]
 name = "fortino-integration"
-version = "0.7.1"
+version = "0.8.0"
 
 [[package]]
 name = "fortino-mock"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-proto-ems",
  "fortino-proto-sslvpn",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-platform"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-proto-ems"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "base64",
  "flate2",
@@ -553,7 +553,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-proto-sslvpn"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "proptest",
  "quick-xml",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-secret"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "security-framework",
  "tracing",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-sslvpn"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-core",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "fortino-tls"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "proptest",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "fortinod"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "fortino-config",
  "fortino-core",
