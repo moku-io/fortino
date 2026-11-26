@@ -2,6 +2,10 @@
 
 What changed in each release of Fortino. Each section is also the release's notes on GitHub and in the app's update window.
 
+## 0.8.2
+
+- **EMS troubleshooting.** At the debug log level, the service log also shows a certificate revocation sent by the EMS, if any.
+
 ## 0.8.1
 
 - **EMS troubleshooting.** At the debug log level (`fortino log-level debug`, or Settings → Troubleshooting), the service log shows the system information sent to the EMS at each registration and check-in, such as the OS version and the reported client version. The connection key is never logged.
