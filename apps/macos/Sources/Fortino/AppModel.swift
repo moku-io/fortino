@@ -99,6 +99,11 @@ final class AppModel: ObservableObject {
             if ticks % 15 == 0 && state == .connected {
                 await refreshEmsStatus()
             }
+            // The service sends no event when a profile changes, so changes made elsewhere (the
+            // terminal, another window) show up within 30 s.
+            if ticks % 15 == 0, client != nil {
+                await refreshProfiles()
+            }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }

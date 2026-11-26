@@ -97,6 +97,10 @@ struct ProfilesWindow: View {
             if id != nil { creating = false }
         }
         .onChange(of: model.newProfileRequested) { _ in takeNewProfileRequest() }
+        // Profiles changed from the terminal (`fortino profile edit`) show up on coming back.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await model.refreshProfiles() }
+        }
         .onAppear { takeNewProfileRequest() }
     }
 
@@ -446,6 +450,16 @@ struct Draft {
         }
     }
 
+    /// `spec` as the form writes it: defaults left out. The service sends some of them
+    /// (`dnsMode: gateway`), and an unchanged form must compare equal to what it shows.
+    static func normalized(_ spec: ProfileSpec) -> ProfileSpec {
+        var s = spec
+        if s.dnsMode == .gateway { s.dnsMode = nil }
+        if s.savePassword == false { s.savePassword = nil }
+        if s.debugEmsSysinfo?.isEmpty == true { s.debugEmsSysinfo = nil }
+        return s
+    }
+
     func spec(base: ProfileSpec?) -> ProfileSpec? {
         guard errors.isEmpty, let port = Int(port), case let .success(ems) = parseEms(ems) else { return nil }
         let t = { (s: String) -> String? in
@@ -646,7 +660,7 @@ struct ProfileEditor: View {
         guard let p = profile else { return true }
         // Compare what would be saved, so edits that normalize away (case, spaces) don't count.
         // An invalid form yields no spec and so counts as changed.
-        return draft.spec(base: p.spec) != p.spec
+        return draft.spec(base: p.spec) != Draft.normalized(p.spec)
     }
 
     /// Lets the window's Connect button save this editor's changes before connecting.
